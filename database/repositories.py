@@ -1,0 +1,1736 @@
+"""
+Репозитории для CRUD операций с базой данных.
+"""
+from datetime import datetime, timedelta
+from typing import Optional, List
+from sqlalchemy import select, update, delete, func, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from database.models import (
+    Account, AccountStatus,
+    Client, ClientStatus,
+    Group,
+    Mailing, MailingStatus,
+    MailingLog,
+    NeuroActionLog,
+    NeuroChatMessage,
+    NeuroStopList,
+    ProxyGroup,
+    WarmupProfile,
+    WarmupLog,
+    Proxy, ProxyType,
+    account_groups,
+)
+
+
+# ==================== Proxy Repository ====================
+
+class ProxyRepository:
+    """Репозиторий для работы с прокси."""
+    
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        name: str,
+        host: str,
+        port: int,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        group_id: Optional[int] = None,
+        proxy_type: ProxyType = ProxyType.SOCKS5,
+    ) -> Proxy:
+        """Создание нового прокси."""
+        proxy = Proxy(
+            name=name,
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            group_id=group_id,
+            proxy_type=proxy_type,
+        )
+        session.add(proxy)
+        await session.commit()
+        await session.refresh(proxy)
+        return proxy
+    
+    @staticmethod
+    async def get_by_id(session: AsyncSession, proxy_id: int) -> Optional[Proxy]:
+        """Получение прокси по ID."""
+        result = await session.execute(
+            select(Proxy).where(Proxy.id == proxy_id)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def get_by_name(session: AsyncSession, name: str) -> Optional[Proxy]:
+        """Получение прокси по имени."""
+        result = await session.execute(
+            select(Proxy).where(Proxy.name == name)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def get_all(session: AsyncSession) -> List[Proxy]:
+        """Получение всех прокси."""
+        result = await session.execute(
+            select(Proxy).options(selectinload(Proxy.group)).order_by(Proxy.id)
+        )
+        return list(result.scalars().all())
+    
+    @staticmethod
+    async def get_active(session: AsyncSession) -> List[Proxy]:
+        """Получение активных рабочих прокси."""
+        result = await session.execute(
+            select(Proxy)
+            .options(selectinload(Proxy.group))
+            .where(Proxy.is_active == True, Proxy.is_working == True)
+            .order_by(Proxy.id)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_free_by_group(session: AsyncSession, group_id: int) -> List[Proxy]:
+        """Свободные прокси группы (не назначены аккаунтам)."""
+        assigned_subq = select(Account.proxy_id).where(Account.proxy_id.isnot(None))
+        result = await session.execute(
+            select(Proxy)
+            .where(
+                Proxy.group_id == group_id,
+                Proxy.is_active == True,
+                Proxy.id.not_in(assigned_subq),
+            )
+            .order_by(Proxy.id)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_group(session: AsyncSession, group_id: int) -> List[Proxy]:
+        result = await session.execute(
+            select(Proxy).where(Proxy.group_id == group_id).order_by(Proxy.id)
+        )
+        return list(result.scalars().all())
+    
+    @staticmethod
+    async def update_status(
+        session: AsyncSession,
+        proxy_id: int,
+        is_working: bool,
+        last_checked: datetime = None,
+    ) -> bool:
+        """Обновление статуса прокси."""
+        if not last_checked:
+            last_checked = datetime.utcnow()
+        await session.execute(
+            update(Proxy)
+            .where(Proxy.id == proxy_id)
+            .values(
+                is_working=is_working,
+                last_checked=last_checked,
+            )
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def update(
+        session: AsyncSession,
+        proxy_id: int,
+        name: Optional[str] = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> bool:
+        """Обновление данных прокси."""
+        update_data = {}
+        if name is not None:
+            update_data["name"] = name
+        if host is not None:
+            update_data["host"] = host
+        if port is not None:
+            update_data["port"] = port
+        if username is not None:
+            update_data["username"] = username
+        if password is not None:
+            update_data["password"] = password
+
+        if update_data:
+            await session.execute(
+                update(Proxy)
+                .where(Proxy.id == proxy_id)
+                .values(**update_data)
+            )
+            await session.commit()
+        return True
+
+    @staticmethod
+    async def delete(session: AsyncSession, proxy_id: int) -> bool:
+        """Удаление прокси."""
+        await session.execute(delete(Proxy).where(Proxy.id == proxy_id))
+        await session.commit()
+        return True
+
+
+# ==================== Account Repository ====================
+
+class AccountRepository:
+    """Репозиторий для работы с аккаунтами."""
+
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        phone: str,
+        session_name: str,
+        username: Optional[str] = None,
+        proxy_id: Optional[int] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        bio: Optional[str] = None,
+        avatar_path: Optional[str] = None,
+        membership: "Membership" = None,
+        status: AccountStatus = AccountStatus.INACTIVE,
+        list_label: Optional[str] = None,
+        **kwargs
+    ) -> Account:
+        """Создание нового аккаунта."""
+        from database.models import Membership
+        
+        account = Account(
+            phone=phone,
+            session_name=session_name,
+            username=username,
+            proxy_id=proxy_id,
+            first_name=first_name,
+            last_name=last_name,
+            bio=bio,
+            avatar_path=avatar_path,
+            membership=membership if membership else Membership.READY,
+            status=status,
+            list_label=list_label,
+        )
+        session.add(account)
+        await session.commit()
+        await session.refresh(account)
+        return account
+    
+    @staticmethod
+    async def get_by_id(session: AsyncSession, account_id: int) -> Optional[Account]:
+        """Получение аккаунта по ID."""
+        result = await session.execute(
+            select(Account)
+            .options(selectinload(Account.proxy))
+            .where(Account.id == account_id)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def get_by_phone(session: AsyncSession, phone: str) -> Optional[Account]:
+        """Получение аккаунта по номеру телефона."""
+        result = await session.execute(
+            select(Account).where(Account.phone == phone)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def get_by_session_name(session: AsyncSession, session_name: str) -> Optional[Account]:
+        """Получение аккаунта по имени сессии."""
+        result = await session.execute(
+            select(Account).where(Account.session_name == session_name)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def get_all(session: AsyncSession) -> List[Account]:
+        """Получение всех аккаунтов."""
+        result = await session.execute(
+            select(Account)
+            .options(selectinload(Account.proxy))
+            .order_by(Account.id)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_all_in_group(session: AsyncSession, group_id: int) -> List[Account]:
+        """Все аккаунты, входящие в группу (для загрузки воркеров под рассылку)."""
+        result = await session.execute(
+            select(Account)
+            .options(selectinload(Account.proxy))
+            .where(
+                Account.id.in_(
+                    select(account_groups.c.account_id).where(
+                        account_groups.c.group_id == group_id
+                    )
+                )
+            )
+            .order_by(Account.id)
+        )
+        return list(result.scalars().all())
+    
+    @staticmethod
+    async def get_active(session: AsyncSession) -> List[Account]:
+        """Получение активных аккаунтов (готовых к работе)."""
+        result = await session.execute(
+            select(Account)
+            .options(selectinload(Account.proxy))
+            .where(Account.status == AccountStatus.ACTIVE)
+            .order_by(Account.last_activity)
+        )
+        return list(result.scalars().all())
+    
+    @staticmethod
+    async def set_tags(
+        session: AsyncSession,
+        account_id: int,
+        tags_str: str,
+    ) -> bool:
+        """
+        Установка тегов аккаунту с нормализацией.
+        Формат хранения: ",USA,Warmup,Main," (с запятыми по краям для точного LIKE).
+
+        Args:
+            session: DB-сессия
+            account_id: ID аккаунта
+            tags_str: Строка тегов через запятую (например "USA, Warmup, Main")
+
+        Returns:
+            bool: True если успешно
+        """
+        # Нормализация: split → strip → unique (с сохранением порядка) → wrap
+        raw_tags = [t.strip() for t in tags_str.split(",") if t.strip()]
+        seen = set()
+        unique_tags = []
+        for tag in raw_tags:
+            tag_upper = tag.upper()
+            if tag_upper not in seen:
+                seen.add(tag_upper)
+                unique_tags.append(tag)
+
+        # Оборачиваем запятыми: ",USA,Warmup,Main,"
+        normalized = "," + ",".join(unique_tags) + "," if unique_tags else ""
+
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(tags=normalized)
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def get_all_tags(session: AsyncSession) -> List[str]:
+        """
+        Получить все уникальные теги из всех аккаунтов.
+
+        Returns:
+            list[str]: Отсортированный список уникальных тегов
+        """
+        result = await session.execute(
+            select(Account.tags).where(
+                Account.tags.isnot(None),
+                Account.tags != "",
+            )
+        )
+        rows = result.scalars().all()
+
+        all_tags = set()
+        for tags_str in rows:
+            # Разбираем: ",USA,Warmup," → ["USA", "Warmup"]
+            parts = tags_str.strip(",").split(",")
+            for part in parts:
+                part = part.strip()
+                if part:
+                    all_tags.add(part)
+
+        return sorted(all_tags)
+
+    @staticmethod
+    async def get_available_for_mailing(
+        session: AsyncSession,
+        tags_filter: Optional[List[str]] = None,
+        group_id: Optional[int] = None,
+    ) -> List[Account]:
+        """
+        Получение аккаунтов доступных для рассылки.
+
+        Args:
+            session: DB-сессия
+            tags_filter: Список тегов (OR). Учитывается только если group_id is None.
+            group_id: Если задан — только аккаунты из этой группы (account_groups).
+
+        Returns:
+            list[Account]: Доступные аккаунты
+        """
+        now = datetime.utcnow()
+
+        query = (
+            select(Account)
+            .options(selectinload(Account.proxy))
+            .where(
+                Account.status == AccountStatus.ACTIVE,
+                Account.is_spam_blocked == False,
+                # FloodWait истёк или отсутствует
+                (Account.flood_wait_until == None) | (Account.flood_wait_until < now),
+                # Лимит не превышен
+                Account.messages_today < Account.daily_limit,
+            )
+        )
+
+        if group_id is not None:
+            query = query.where(
+                Account.id.in_(
+                    select(account_groups.c.account_id).where(
+                        account_groups.c.group_id == group_id
+                    )
+                )
+            )
+        elif tags_filter:
+            tag_conditions = [
+                Account.tags.like(f"%,{tag},%") for tag in tags_filter
+            ]
+            query = query.where(or_(*tag_conditions))
+
+        query = query.order_by(Account.last_activity)
+        result = await session.execute(query)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def update_status(
+        session: AsyncSession,
+        account_id: int,
+        status: AccountStatus,
+    ) -> bool:
+        """Обновление статуса аккаунта."""
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(status=status, updated_at=datetime.utcnow())
+        )
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def set_proxy(
+        session: AsyncSession,
+        account_id: int,
+        proxy_id: Optional[int],
+    ) -> bool:
+        """Привязка прокси к аккаунту."""
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(proxy_id=proxy_id, updated_at=datetime.utcnow())
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def update_warmup_settings(
+        session: AsyncSession,
+        account_id: int,
+        *,
+        enabled: Optional[bool] = None,
+        profile: Optional[str] = None,
+        pause_reason: Optional[str] = None,
+    ) -> bool:
+        data: dict = {"updated_at": datetime.utcnow()}
+        if enabled is not None:
+            data["warmup_enabled"] = enabled
+            if enabled:
+                data["warmup_pause_reason"] = None
+                data["warmup_paused_until"] = None
+        if profile is not None:
+            data["warmup_profile"] = profile
+        if pause_reason is not None:
+            data["warmup_pause_reason"] = pause_reason
+        await session.execute(
+            update(Account).where(Account.id == account_id).values(**data)
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def update_warmup_for_accounts(
+        session: AsyncSession,
+        account_ids: List[int],
+        *,
+        enabled: bool,
+        profile: Optional[str] = None,
+    ) -> int:
+        if not account_ids:
+            return 0
+        data: dict = {
+            "warmup_enabled": enabled,
+            "updated_at": datetime.utcnow(),
+        }
+        if profile is not None:
+            data["warmup_profile"] = profile
+        result = await session.execute(
+            update(Account).where(Account.id.in_(account_ids)).values(**data)
+        )
+        await session.commit()
+        return int(result.rowcount or 0)
+
+    @staticmethod
+    async def update_warmup_for_group(
+        session: AsyncSession,
+        group_id: int,
+        *,
+        enabled: bool,
+        profile: Optional[str] = None,
+    ) -> int:
+        result_ids = await session.execute(
+            select(account_groups.c.account_id).where(account_groups.c.group_id == group_id)
+        )
+        ids = [int(x) for x in result_ids.scalars().all()]
+        return await AccountRepository.update_warmup_for_accounts(
+            session, ids, enabled=enabled, profile=profile
+        )
+
+    @staticmethod
+    async def list_warmup_candidates(session: AsyncSession, limit: int = 50) -> List[Account]:
+        now = datetime.utcnow()
+        result = await session.execute(
+            select(Account)
+            .options(selectinload(Account.proxy))
+            .where(
+                Account.warmup_enabled == True,
+                Account.status == AccountStatus.ACTIVE,
+                (Account.warmup_paused_until == None) | (Account.warmup_paused_until < now),
+                (Account.warmup_next_run_at == None) | (Account.warmup_next_run_at < now),
+            )
+            .order_by(Account.warmup_next_run_at.asc().nullsfirst(), Account.id.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def mark_warmup_action(
+        session: AsyncSession,
+        account_id: int,
+        next_run_at: datetime,
+    ) -> bool:
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(
+                warmup_actions_today=Account.warmup_actions_today + 1,
+                warmup_last_action_at=datetime.utcnow(),
+                warmup_next_run_at=next_run_at,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def set_warmup_pause(
+        session: AsyncSession,
+        account_id: int,
+        until: Optional[datetime],
+        reason: Optional[str],
+    ) -> bool:
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(
+                warmup_paused_until=until,
+                warmup_pause_reason=reason,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def reset_warmup_daily(session: AsyncSession) -> int:
+        cutoff = datetime.utcnow() - timedelta(days=1)
+        result = await session.execute(
+            update(Account)
+            .where((Account.last_reset == None) | (Account.last_reset < cutoff))
+            .values(
+                warmup_actions_today=0,
+            )
+        )
+        await session.commit()
+        return int(result.rowcount or 0)
+
+    @staticmethod
+    async def count_by_proxy_id(session: AsyncSession, proxy_id: int) -> int:
+        result = await session.execute(
+            select(func.count(Account.id)).where(Account.proxy_id == proxy_id)
+        )
+        return int(result.scalar() or 0)
+
+    @staticmethod
+    async def count_using_proxy_group(session: AsyncSession, group_id: int) -> int:
+        """Сколько аккаунтов привязано к прокси из группы."""
+        result = await session.execute(
+            select(func.count(Account.id))
+            .select_from(Account)
+            .join(Proxy, Proxy.id == Account.proxy_id)
+            .where(Proxy.group_id == group_id)
+        )
+        return int(result.scalar() or 0)
+
+    @staticmethod
+    async def sample_labels_using_proxy_group(
+        session: AsyncSession, group_id: int, limit: int = 5
+    ) -> List[str]:
+        """Краткие подписи аккаунтов (для предупреждения при удалении группы)."""
+        result = await session.execute(
+            select(Account.username, Account.phone)
+            .join(Proxy, Proxy.id == Account.proxy_id)
+            .where(Proxy.group_id == group_id)
+            .limit(limit)
+        )
+        labels: List[str] = []
+        for username, phone in result.all():
+            if username:
+                labels.append(f"@{username}")
+            else:
+                labels.append(phone or "?")
+        return labels
+    
+    @staticmethod
+    async def increment_stats(
+        session: AsyncSession,
+        account_id: int,
+        sent: int = 0,
+        failed: int = 0,
+    ) -> bool:
+        """Обновление статистики аккаунта."""
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(
+                messages_sent=Account.messages_sent + sent,
+                messages_failed=Account.messages_failed + failed,
+                messages_today=Account.messages_today + sent,
+                last_activity=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def set_flood_wait(
+        session: AsyncSession,
+        account_id: int,
+        until: datetime,
+    ) -> bool:
+        """Установка статуса FloodWait."""
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(
+                status=AccountStatus.FLOOD_WAIT,
+                flood_wait_until=until,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def clear_flood_wait(
+        session: AsyncSession,
+        account_id: int,
+    ) -> bool:
+        """Сброс FloodWait статуса."""
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(
+                status=AccountStatus.ACTIVE,
+                flood_wait_until=None,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def set_spam_block(
+        session: AsyncSession,
+        account_id: int,
+        is_blocked: bool,
+    ) -> bool:
+        """Установка статуса спам-блока."""
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(
+                is_spam_blocked=is_blocked,
+                spam_check_date=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def reset_daily_stats(
+        session: AsyncSession,
+        account_id: int,
+    ) -> bool:
+        """Сброс дневной статистики."""
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(
+                messages_today=0,
+                last_reset=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def check_and_reset_daily_limit(
+        session: AsyncSession,
+        account: Account,
+    ) -> bool:
+        """Проверка и сброс дневного лимита если прошли сутки."""
+        now = datetime.utcnow()
+        if account.last_reset:
+            if now - account.last_reset > timedelta(days=1):
+                await AccountRepository.reset_daily_stats(session, account.id)
+                return True
+        return False
+    
+    @staticmethod
+    async def update_profile(
+        session: AsyncSession,
+        account_id: int,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        bio: Optional[str] = None,
+    ) -> bool:
+        """Обновление профиля аккаунта (имя, фамилия, bio)."""
+        update_data = {"updated_at": datetime.utcnow()}
+        if first_name is not None:
+            update_data["first_name"] = first_name
+        if last_name is not None:
+            update_data["last_name"] = last_name
+        if bio is not None:
+            update_data["bio"] = bio
+
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(**update_data)
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def update_username(
+        session: AsyncSession,
+        account_id: int,
+        username: str,
+    ) -> bool:
+        """Обновление username аккаунта."""
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(username=username, updated_at=datetime.utcnow())
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def update_list_label(
+        session: AsyncSession,
+        account_id: int,
+        list_label: Optional[str],
+    ) -> bool:
+        """Локальная подпись аккаунта в списке бота (None — сброс)."""
+        val = (list_label or "").strip() or None
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(list_label=val, updated_at=datetime.utcnow())
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def set_membership(
+        session: AsyncSession,
+        account_id: int,
+        membership: "Membership",
+    ) -> bool:
+        """Смена принадлежности аккаунта."""
+        from database.models import Membership
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(membership=membership, updated_at=datetime.utcnow())
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def set_avatar(
+        session: AsyncSession,
+        account_id: int,
+        avatar_path: Optional[str],
+    ) -> bool:
+        """
+        Установка пути к локальной копии главной аватарки или сброс (None).
+        None — нет актуального локального файла (аватар только в Telegram).
+        """
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(avatar_path=avatar_path, updated_at=datetime.utcnow())
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def delete(session: AsyncSession, account_id: int) -> bool:
+        """Удаление аккаунта."""
+        await session.execute(delete(Account).where(Account.id == account_id))
+        await session.commit()
+        return True
+
+
+# ==================== Group Repository ====================
+
+class GroupRepository:
+    """Группы аккаунтов (many-to-many с Account)."""
+
+    @staticmethod
+    async def create(session: AsyncSession, name: str) -> Group:
+        g = Group(name=name.strip())
+        session.add(g)
+        await session.commit()
+        await session.refresh(g)
+        return g
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, group_id: int) -> Optional[Group]:
+        result = await session.execute(
+            select(Group)
+            .options(
+                selectinload(Group.accounts).selectinload(Account.proxy),
+            )
+            .where(Group.id == group_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_all(session: AsyncSession) -> List[Group]:
+        result = await session.execute(select(Group).order_by(Group.name))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_member_account_ids(session: AsyncSession, group_id: int) -> set[int]:
+        """ID аккаунтов, входящих в группу (таблица account_groups)."""
+        result = await session.execute(
+            select(account_groups.c.account_id).where(account_groups.c.group_id == group_id)
+        )
+        return {row[0] for row in result.all()}
+
+    @staticmethod
+    async def delete(session: AsyncSession, group_id: int) -> bool:
+        g = await GroupRepository.get_by_id(session, group_id)
+        if not g:
+            return False
+        await session.delete(g)
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def add_account(session: AsyncSession, group_id: int, account_id: int) -> bool:
+        g = await GroupRepository.get_by_id(session, group_id)
+        a = await AccountRepository.get_by_id(session, account_id)
+        if not g or not a:
+            return False
+        if a in g.accounts:
+            return True
+        g.accounts.append(a)
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def remove_account(session: AsyncSession, group_id: int, account_id: int) -> bool:
+        g = await GroupRepository.get_by_id(session, group_id)
+        if not g:
+            return False
+        a = await AccountRepository.get_by_id(session, account_id)
+        if not a or a not in g.accounts:
+            return False
+        g.accounts.remove(a)
+        await session.commit()
+        return True
+
+
+class ProxyGroupRepository:
+    """Группы прокси и автораздача свободных прокси."""
+
+    @staticmethod
+    async def create(session: AsyncSession, name: str) -> ProxyGroup:
+        row = ProxyGroup(name=name.strip())
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, group_id: int) -> Optional[ProxyGroup]:
+        result = await session.execute(
+            select(ProxyGroup).where(ProxyGroup.id == group_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_name(session: AsyncSession, name: str) -> Optional[ProxyGroup]:
+        result = await session.execute(
+            select(ProxyGroup).where(ProxyGroup.name == name.strip())
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_or_create(session: AsyncSession, name: str) -> ProxyGroup:
+        existing = await ProxyGroupRepository.get_by_name(session, name)
+        if existing:
+            return existing
+        return await ProxyGroupRepository.create(session, name)
+
+    @staticmethod
+    async def get_all(session: AsyncSession) -> List[ProxyGroup]:
+        result = await session.execute(select(ProxyGroup).order_by(ProxyGroup.name))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_with_usage(session: AsyncSession) -> List[tuple[ProxyGroup, int, int]]:
+        groups = await ProxyGroupRepository.get_all(session)
+        out: List[tuple[ProxyGroup, int, int]] = []
+        for g in groups:
+            total_res = await session.execute(
+                select(func.count(Proxy.id)).where(Proxy.group_id == g.id)
+            )
+            used_res = await session.execute(
+                select(func.count(Account.id))
+                .join(Proxy, Proxy.id == Account.proxy_id)
+                .where(Proxy.group_id == g.id)
+            )
+            total = int(total_res.scalar() or 0)
+            used = int(used_res.scalar() or 0)
+            out.append((g, used, total))
+        return out
+
+    @staticmethod
+    async def acquire_next_free_proxy(session: AsyncSession, group_id: int) -> Optional[Proxy]:
+        """Round-robin по свободным прокси группы."""
+        group = await ProxyGroupRepository.get_by_id(session, group_id)
+        if not group:
+            return None
+        free = await ProxyRepository.get_free_by_group(session, group_id)
+        if not free:
+            return None
+
+        cursor = int(group.rr_cursor or 0)
+        idx = cursor % len(free)
+        selected = free[idx]
+
+        await session.execute(
+            update(ProxyGroup)
+            .where(ProxyGroup.id == group_id)
+            .values(rr_cursor=cursor + 1)
+        )
+        await session.commit()
+        return selected
+
+    @staticmethod
+    async def delete_with_proxies(session: AsyncSession, group_id: int) -> bool:
+        """
+        Удалить все прокси группы и саму группу.
+        Вызывать только если ни один аккаунт не использует прокси этой группы.
+        """
+        g = await ProxyGroupRepository.get_by_id(session, group_id)
+        if not g:
+            return False
+        await session.execute(delete(Proxy).where(Proxy.group_id == group_id))
+        await session.execute(delete(ProxyGroup).where(ProxyGroup.id == group_id))
+        await session.commit()
+        return True
+
+
+class WarmupProfileRepository:
+    @staticmethod
+    async def get_all(session: AsyncSession) -> List[WarmupProfile]:
+        result = await session.execute(
+            select(WarmupProfile).order_by(WarmupProfile.name.asc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_name(session: AsyncSession, name: str) -> Optional[WarmupProfile]:
+        result = await session.execute(
+            select(WarmupProfile).where(WarmupProfile.name == name)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_effective_for_account(session: AsyncSession, account: Account) -> Optional[WarmupProfile]:
+        profile_name = (account.warmup_profile or "safe").strip() or "safe"
+        row = await WarmupProfileRepository.get_by_name(session, profile_name)
+        if row:
+            return row
+        return await WarmupProfileRepository.get_by_name(session, "safe")
+
+    @staticmethod
+    async def update_profile_settings(
+        session: AsyncSession,
+        name: str,
+        *,
+        base_delay_sec: Optional[float] = None,
+        jitter_sec: Optional[float] = None,
+        daily_action_limit: Optional[int] = None,
+        target_chats_text: Optional[str] = None,
+    ) -> bool:
+        row = await WarmupProfileRepository.get_by_name(session, name)
+        if not row:
+            return False
+        data: dict = {"updated_at": datetime.utcnow()}
+        if base_delay_sec is not None:
+            data["base_delay_sec"] = float(base_delay_sec)
+        if jitter_sec is not None:
+            data["jitter_sec"] = float(jitter_sec)
+        if daily_action_limit is not None:
+            data["daily_action_limit"] = int(daily_action_limit)
+        if target_chats_text is not None:
+            data["target_chats_text"] = target_chats_text
+        await session.execute(
+            update(WarmupProfile).where(WarmupProfile.name == name).values(**data)
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def generate_unique_profile_name(session: AsyncSession, base_name: str) -> str:
+        cleaned = (base_name or "").strip()
+        if not cleaned:
+            cleaned = "profile_copy"
+        cleaned = cleaned.replace(" ", "_")
+        candidate = cleaned
+        idx = 1
+        while True:
+            row = await WarmupProfileRepository.get_by_name(session, candidate)
+            if not row:
+                return candidate
+            candidate = f"{cleaned}_copy_{idx}"
+            idx += 1
+
+    @staticmethod
+    async def create_profile_from_template(
+        session: AsyncSession,
+        source_name: str,
+        new_name: str,
+    ) -> Optional[WarmupProfile]:
+        src = await WarmupProfileRepository.get_by_name(session, source_name)
+        if not src:
+            return None
+        unique_name = await WarmupProfileRepository.generate_unique_profile_name(session, new_name)
+        row = WarmupProfile(
+            name=unique_name,
+            base_delay_sec=src.base_delay_sec,
+            jitter_sec=src.jitter_sec,
+            daily_action_limit=src.daily_action_limit,
+            target_chats_text=src.target_chats_text,
+            enabled=src.enabled,
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row
+
+    @staticmethod
+    async def overwrite_profile_from_template(
+        session: AsyncSession,
+        source_name: str,
+        target_name: str,
+    ) -> bool:
+        src = await WarmupProfileRepository.get_by_name(session, source_name)
+        if not src:
+            return False
+        target_norm = (target_name or "").strip().lower()
+        if target_norm == "safe":
+            return False
+        target = await WarmupProfileRepository.get_by_name(session, target_name)
+        if not target:
+            return False
+        await session.execute(
+            update(WarmupProfile)
+            .where(WarmupProfile.name == target.name)
+            .values(
+                base_delay_sec=src.base_delay_sec,
+                jitter_sec=src.jitter_sec,
+                daily_action_limit=src.daily_action_limit,
+                target_chats_text=src.target_chats_text,
+                enabled=src.enabled,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return True
+
+
+class WarmupLogRepository:
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        account_id: int,
+        action: str,
+        status: str = "ok",
+        details: Optional[str] = None,
+    ) -> None:
+        session.add(
+            WarmupLog(
+                account_id=account_id,
+                action=action,
+                status=status,
+                details=details,
+            )
+        )
+        await session.commit()
+
+    @staticmethod
+    async def summary(session: AsyncSession) -> dict:
+        total_enabled = await session.execute(
+            select(func.count(Account.id)).where(Account.warmup_enabled == True)
+        )
+        paused = await session.execute(
+            select(func.count(Account.id)).where(
+                Account.warmup_enabled == True,
+                Account.warmup_pause_reason.isnot(None),
+            )
+        )
+        logs_today = await session.execute(
+            select(func.count(WarmupLog.id)).where(
+                WarmupLog.created_at >= datetime.utcnow() - timedelta(days=1)
+            )
+        )
+        return {
+            "enabled": int(total_enabled.scalar() or 0),
+            "paused": int(paused.scalar() or 0),
+            "actions_24h": int(logs_today.scalar() or 0),
+        }
+
+
+# ==================== Client Repository ====================
+
+class ClientRepository:
+    """Репозиторий для работы с клиентами."""
+    
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        username: str,
+        status: ClientStatus = ClientStatus.NEW,
+    ) -> Client:
+        """Создание нового клиента."""
+        client = Client(username=username, status=status)
+        session.add(client)
+        await session.commit()
+        await session.refresh(client)
+        return client
+    
+    @staticmethod
+    async def create_many(
+        session: AsyncSession,
+        usernames: List[str],
+    ) -> int:
+        """Массовое создание клиентов. Возвращает количество добавленных."""
+        existing = await ClientRepository.get_all_usernames(session)
+        new_usernames = [u for u in usernames if u not in existing]
+        
+        clients = [Client(username=u) for u in new_usernames]
+        session.add_all(clients)
+        await session.commit()
+        return len(new_usernames)
+    
+    @staticmethod
+    async def get_by_id(session: AsyncSession, client_id: int) -> Optional[Client]:
+        """Получение клиента по ID."""
+        result = await session.execute(
+            select(Client).where(Client.id == client_id)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def get_by_username(session: AsyncSession, username: str) -> Optional[Client]:
+        """Получение клиента по username."""
+        result = await session.execute(
+            select(Client).where(Client.username == username)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_telegram_user_id(
+        session: AsyncSession, telegram_user_id: int
+    ) -> Optional[Client]:
+        """Поиск клиента по Telegram user id."""
+        result = await session.execute(
+            select(Client).where(Client.telegram_user_id == telegram_user_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def set_telegram_user_id(
+        session: AsyncSession,
+        client_id: int,
+        telegram_user_id: int,
+    ) -> bool:
+        """Сохраняет peer id в Telegram для изоляции диалогов нейрочата."""
+        await session.execute(
+            update(Client)
+            .where(Client.id == client_id)
+            .values(telegram_user_id=telegram_user_id)
+        )
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def get_all(session: AsyncSession) -> List[Client]:
+        """Получение всех клиентов."""
+        result = await session.execute(select(Client).order_by(Client.id))
+        return list(result.scalars().all())
+    
+    @staticmethod
+    async def get_all_usernames(session: AsyncSession) -> List[str]:
+        """Получение всех username."""
+        result = await session.execute(select(Client.username))
+        return list(result.scalars().all())
+    
+    @staticmethod
+    async def get_new(session: AsyncSession, limit: Optional[int] = None) -> List[Client]:
+        """Получение новых клиентов (которым ещё не отправляли)."""
+        query = select(Client).where(Client.status == ClientStatus.NEW).order_by(Client.id)
+        if limit:
+            query = query.limit(limit)
+        result = await session.execute(query)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def count_new(session: AsyncSession) -> int:
+        """Сколько клиентов со статусом NEW (для оценки очереди рассылки)."""
+        result = await session.execute(
+            select(func.count()).select_from(Client).where(Client.status == ClientStatus.NEW)
+        )
+        return int(result.scalar_one() or 0)
+    
+    @staticmethod
+    async def update_status(
+        session: AsyncSession,
+        client_id: int,
+        status: ClientStatus,
+    ) -> bool:
+        """Обновление статуса клиента."""
+        update_data = {"status": status}
+        if status == ClientStatus.CONTACTED:
+            update_data["last_contacted_at"] = datetime.utcnow()
+        
+        await session.execute(
+            update(Client)
+            .where(Client.id == client_id)
+            .values(**update_data)
+        )
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def count(session: AsyncSession) -> dict:
+        """Получение статистики по клиентам."""
+        result = await session.execute(
+            select(Client.status, func.count(Client.id))
+            .group_by(Client.status)
+        )
+        return {row[0].value: row[1] for row in result.all()}
+    
+    @staticmethod
+    async def delete(session: AsyncSession, client_id: int) -> bool:
+        """Удаление клиента."""
+        await session.execute(delete(Client).where(Client.id == client_id))
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def clear_all(session: AsyncSession) -> bool:
+        """Очистка всей таблицы клиентов."""
+        await session.execute(delete(Client))
+        await session.commit()
+        return True
+
+
+# ==================== Mailing Repository ====================
+
+class MailingRepository:
+    """Репозиторий для работы с рассылками."""
+    
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        message_text: str,
+        name: Optional[str] = None,
+        delay_between_messages: float = 5.0,
+        delay_between_accounts: float = 10.0,
+        use_typing: bool = True,
+        typing_delay: float = 3.0,
+    ) -> Mailing:
+        """Создание новой рассылки."""
+        mailing = Mailing(
+            name=name,
+            message_text=message_text,
+            delay_between_messages=delay_between_messages,
+            delay_between_accounts=delay_between_accounts,
+            status=MailingStatus.DRAFT,
+        )
+        session.add(mailing)
+        await session.commit()
+        await session.refresh(mailing)
+        return mailing
+    
+    @staticmethod
+    async def get_by_id(session: AsyncSession, mailing_id: int) -> Optional[Mailing]:
+        """Получение рассылки по ID."""
+        result = await session.execute(
+            select(Mailing)
+            .options(
+                selectinload(Mailing.logs),
+                selectinload(Mailing.target_group),
+            )
+            .where(Mailing.id == mailing_id)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def get_all(session: AsyncSession) -> List[Mailing]:
+        """Получение всех рассылок."""
+        result = await session.execute(
+            select(Mailing).order_by(Mailing.created_at.desc())
+        )
+        return list(result.scalars().all())
+    
+    @staticmethod
+    async def get_running(session: AsyncSession) -> Optional[Mailing]:
+        """Получение активной рассылки."""
+        result = await session.execute(
+            select(Mailing).where(Mailing.status == MailingStatus.RUNNING)
+        )
+        return result.scalar_one_or_none()
+    
+    @staticmethod
+    async def update_status(
+        session: AsyncSession,
+        mailing_id: int,
+        status: MailingStatus,
+    ) -> bool:
+        """Обновление статуса рассылки."""
+        update_data = {"status": status, "updated_at": datetime.utcnow()}
+        
+        if status == MailingStatus.RUNNING:
+            update_data["started_at"] = datetime.utcnow()
+        elif status in (MailingStatus.COMPLETED, MailingStatus.CANCELLED):
+            update_data["completed_at"] = datetime.utcnow()
+        
+        await session.execute(
+            update(Mailing)
+            .where(Mailing.id == mailing_id)
+            .values(**update_data)
+        )
+        await session.commit()
+        return True
+    
+    @staticmethod
+    async def increment_stats(
+        session: AsyncSession,
+        mailing_id: int,
+        sent: int = 0,
+        failed: int = 0,
+    ) -> bool:
+        """Обновление статистики рассылки."""
+        await session.execute(
+            update(Mailing)
+            .where(Mailing.id == mailing_id)
+            .values(
+                messages_sent=Mailing.messages_sent + sent,
+                messages_failed=Mailing.messages_failed + failed,
+            )
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def reset_stats_for_new_run(session: AsyncSession, mailing_id: int) -> bool:
+        """Обнулить счётчики на старте запуска (накопление ведётся в логах / мониторинге)."""
+        await session.execute(
+            update(Mailing)
+            .where(Mailing.id == mailing_id)
+            .values(
+                messages_sent=0,
+                messages_failed=0,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def update_neuro(
+        session: AsyncSession,
+        mailing_id: int,
+        neurochat_enabled: Optional[bool] = None,
+        neuro_model: Optional[str] = None,
+    ) -> bool:
+        """Обновление настроек нейрочата."""
+        if neurochat_enabled is None and neuro_model is None:
+            return False
+        data: dict = {"updated_at": datetime.utcnow()}
+        if neurochat_enabled is not None:
+            data["neurochat_enabled"] = neurochat_enabled
+        if neuro_model is not None:
+            data["neuro_model"] = neuro_model
+        await session.execute(
+            update(Mailing).where(Mailing.id == mailing_id).values(**data)
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def delete(session: AsyncSession, mailing_id: int) -> bool:
+        """Удаление рассылки."""
+        await session.execute(delete(Mailing).where(Mailing.id == mailing_id))
+        await session.commit()
+        return True
+
+
+# ==================== MailingLog Repository ====================
+
+class MailingLogRepository:
+    """Репозиторий для работы с логами рассылок."""
+    
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        mailing_id: int,
+        account_id: int,
+        client_id: int,
+        success: bool,
+        error_message: Optional[str] = None,
+        message_id: Optional[int] = None,
+    ) -> MailingLog:
+        """Создание записи лога."""
+        log_entry = MailingLog(
+            mailing_id=mailing_id,
+            account_id=account_id,
+            client_id=client_id,
+            success=success,
+            error_message=error_message,
+            message_id=message_id,
+        )
+        session.add(log_entry)
+        await session.commit()
+        await session.refresh(log_entry)
+        return log_entry
+    
+    @staticmethod
+    async def get_by_mailing(
+        session: AsyncSession,
+        mailing_id: int,
+        limit: Optional[int] = None,
+    ) -> List[MailingLog]:
+        """Получение логов по рассылке."""
+        query = select(MailingLog).where(MailingLog.mailing_id == mailing_id)
+        if limit:
+            query = query.limit(limit)
+        result = await session.execute(query)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def success_counts_by_account(
+        session: AsyncSession,
+        mailing_id: int,
+    ) -> dict[int, int]:
+        """Число успешных отправок по account_id для рассылки (первая фаза)."""
+        result = await session.execute(
+            select(MailingLog.account_id, func.count())
+            .where(MailingLog.mailing_id == mailing_id, MailingLog.success == True)
+            .group_by(MailingLog.account_id)
+        )
+        return {int(row[0]): int(row[1]) for row in result.all()}
+    
+    @staticmethod
+    async def get_errors(
+        session: AsyncSession,
+        mailing_id: int,
+    ) -> List[MailingLog]:
+        """Получение ошибок по рассылке."""
+        result = await session.execute(
+            select(MailingLog)
+            .where(MailingLog.mailing_id == mailing_id, MailingLog.success == False)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_send_stats_by_account(
+        session: AsyncSession,
+        mailing_id: int,
+    ) -> List[tuple[int, int, int, str]]:
+        """
+        Статистика отправок по аккаунтам для рассылки.
+
+        Returns:
+            Список (account_id, успешных, ошибок, подпись @username или телефон)
+        """
+        from collections import defaultdict
+
+        logs = await MailingLogRepository.get_by_mailing(session, mailing_id)
+        agg: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+        for log in logs:
+            if log.success:
+                agg[log.account_id][0] += 1
+            else:
+                agg[log.account_id][1] += 1
+
+        out: List[tuple[int, int, int, str]] = []
+        for aid in sorted(agg.keys()):
+            ok, fail = agg[aid]
+            acc = await AccountRepository.get_by_id(session, aid)
+            if acc:
+                label = acc.list_row_caption
+            else:
+                label = f"id{aid}"
+            out.append((aid, ok, fail, label))
+        return out
+
+    @staticmethod
+    async def get_mailing_for_neuro_reply(
+        session: AsyncSession,
+        account_id: int,
+        client_id: int,
+    ) -> Optional[Mailing]:
+        """
+        Последняя рассылка с включённым нейрочатом, где был успешный контакт
+        этой пары аккаунт–клиент.
+        """
+        result = await session.execute(
+            select(Mailing)
+            .join(MailingLog, MailingLog.mailing_id == Mailing.id)
+            .where(
+                MailingLog.account_id == account_id,
+                MailingLog.client_id == client_id,
+                MailingLog.success == True,
+                Mailing.neurochat_enabled == True,
+            )
+            .order_by(MailingLog.sent_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+
+# ==================== Neuro chat history ====================
+
+
+class NeuroChatRepository:
+    """История нейрочата: ключ (account_id, peer_user_id), не смешивать диалоги."""
+
+    @staticmethod
+    async def append(
+        session: AsyncSession,
+        account_id: int,
+        peer_user_id: int,
+        role: str,
+        content: str,
+    ) -> None:
+        session.add(
+            NeuroChatMessage(
+                account_id=account_id,
+                peer_user_id=peer_user_id,
+                role=role,
+                content=content,
+            )
+        )
+        await session.commit()
+        await NeuroChatRepository._trim(session, account_id, peer_user_id)
+
+    @staticmethod
+    async def _trim(
+        session: AsyncSession,
+        account_id: int,
+        peer_user_id: int,
+    ) -> None:
+        from bot.config import NEURO_HISTORY_LIMIT
+
+        limit = NEURO_HISTORY_LIMIT
+        result = await session.execute(
+            select(NeuroChatMessage.id)
+            .where(
+                NeuroChatMessage.account_id == account_id,
+                NeuroChatMessage.peer_user_id == peer_user_id,
+            )
+            .order_by(NeuroChatMessage.created_at.asc())
+        )
+        ids = list(result.scalars().all())
+        if len(ids) <= limit:
+            return
+        to_delete = ids[: len(ids) - limit]
+        await session.execute(
+            delete(NeuroChatMessage).where(NeuroChatMessage.id.in_(to_delete))
+        )
+        await session.commit()
+
+    @staticmethod
+    async def get_messages_for_llm(
+        session: AsyncSession,
+        account_id: int,
+        peer_user_id: int,
+    ) -> list[dict[str, str]]:
+        """Последние N сообщений в хронологическом порядке для OpenRouter."""
+        from bot.config import NEURO_HISTORY_LIMIT
+
+        result = await session.execute(
+            select(NeuroChatMessage)
+            .where(
+                NeuroChatMessage.account_id == account_id,
+                NeuroChatMessage.peer_user_id == peer_user_id,
+            )
+            .order_by(NeuroChatMessage.created_at.desc())
+            .limit(NEURO_HISTORY_LIMIT)
+        )
+        rows = list(reversed(list(result.scalars().all())))
+        out: list[dict[str, str]] = []
+        for r in rows:
+            role = r.role if r.role in ("user", "assistant") else "user"
+            out.append({"role": role, "content": r.content})
+        return out
+
+
+class NeuroActionRepository:
+    """События команд нейрочата: [SEND_LINK], [STOP]."""
+
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        mailing_id: int,
+        account_id: int,
+        client_id: int,
+        action: str,
+    ) -> None:
+        session.add(
+            NeuroActionLog(
+                mailing_id=mailing_id,
+                account_id=account_id,
+                client_id=client_id,
+                action=action,
+            )
+        )
+        await session.commit()
+
+    @staticmethod
+    async def count_by_action(
+        session: AsyncSession,
+        mailing_id: int,
+    ) -> dict[str, int]:
+        result = await session.execute(
+            select(NeuroActionLog.action, func.count(NeuroActionLog.id))
+            .where(NeuroActionLog.mailing_id == mailing_id)
+            .group_by(NeuroActionLog.action)
+        )
+        return {str(row[0]): int(row[1]) for row in result.all()}
+
+
+class NeuroStopRepository:
+    """STOP-лист нейрочата: блокировка диалога по account_id + client_id."""
+
+    @staticmethod
+    async def is_blocked(
+        session: AsyncSession,
+        account_id: int,
+        client_id: int,
+    ) -> bool:
+        result = await session.execute(
+            select(NeuroStopList.id).where(
+                NeuroStopList.account_id == account_id,
+                NeuroStopList.client_id == client_id,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def add(
+        session: AsyncSession,
+        mailing_id: int,
+        account_id: int,
+        client_id: int,
+    ) -> None:
+        result = await session.execute(
+            select(NeuroStopList).where(
+                NeuroStopList.account_id == account_id,
+                NeuroStopList.client_id == client_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            await session.execute(
+                update(NeuroStopList)
+                .where(NeuroStopList.id == row.id)
+                .values(mailing_id=mailing_id, created_at=datetime.utcnow())
+            )
+        else:
+            session.add(
+                NeuroStopList(
+                    mailing_id=mailing_id,
+                    account_id=account_id,
+                    client_id=client_id,
+                )
+            )
+        await session.commit()
+
+    @staticmethod
+    async def remove(
+        session: AsyncSession,
+        account_id: int,
+        client_id: int,
+    ) -> bool:
+        result = await session.execute(
+            delete(NeuroStopList).where(
+                NeuroStopList.account_id == account_id,
+                NeuroStopList.client_id == client_id,
+            )
+        )
+        await session.commit()
+        return bool(result.rowcount and result.rowcount > 0)
+
+    @staticmethod
+    async def list_for_mailing(
+        session: AsyncSession,
+        mailing_id: int,
+        limit: int = 20,
+    ) -> list[tuple[int, int, str, str]]:
+        """
+        Возвращает список: (account_id, client_id, username, created_at_iso).
+        """
+        result = await session.execute(
+            select(NeuroStopList, Client)
+            .join(Client, Client.id == NeuroStopList.client_id)
+            .where(NeuroStopList.mailing_id == mailing_id)
+            .order_by(NeuroStopList.created_at.desc())
+            .limit(limit)
+        )
+        out: list[tuple[int, int, str, str]] = []
+        for stop_row, client in result.all():
+            out.append(
+                (
+                    int(stop_row.account_id),
+                    int(stop_row.client_id),
+                    str(client.username or ""),
+                    stop_row.created_at.isoformat() if stop_row.created_at else "",
+                )
+            )
+        return out

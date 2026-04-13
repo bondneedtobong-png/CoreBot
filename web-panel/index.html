@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CoreBot Control Panel</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>CoreBot Control Panel</h1>
+
+    <section id="loginBox" class="card">
+      <h2>Login</h2>
+      <input id="username" placeholder="username" />
+      <input id="password" placeholder="password" type="password" />
+      <button id="loginBtn">Sign in</button>
+      <p id="loginMsg"></p>
+    </section>
+
+    <section id="dashboardBox" class="card hidden">
+      <h2>Dashboard</h2>
+      <div id="summary"></div>
+      <button id="refreshBtn">Refresh</button>
+    </section>
+
+    <section id="agentsBox" class="card hidden">
+      <h2>Agents</h2>
+      <ul id="agents"></ul>
+    </section>
+
+    <section id="logsBox" class="card hidden">
+      <h2>Recent Logs</h2>
+      <ul id="logs"></ul>
+    </section>
+    <section id="alertsBox" class="card hidden">
+      <h2>Alerts</h2>
+      <ul id="alerts"></ul>
+    </section>
+  </main>
+  <script src="./main.js"></script>
+</body>
+</html>

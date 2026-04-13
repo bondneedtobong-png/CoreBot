@@ -1,0 +1,1690 @@
+"""
+Хендлеры для управления рассылками.
+Новая система: создание, список, настройки по модулям, запуск по клику.
+"""
+import asyncio
+import html
+import json
+
+from aiogram import F, Router
+from aiogram.enums import ParseMode
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from sqlalchemy import update
+
+from bot.config import DEFAULT_NEURO_MODEL, OWNER_ID
+from bot.keyboards.main import (
+    get_mailing_keyboard,
+    get_mailing_list_keyboard,
+    get_mailing_view_keyboard,
+    get_mailing_settings_keyboard,
+    get_mailing_modules_keyboard,
+    get_mailing_security_keyboard,
+    get_mailing_neuro_keyboard,
+    get_mailing_neuro_stoplist_keyboard,
+    get_mailing_first_message_keyboard,
+    get_mailing_target_group_keyboard,
+    get_context_back_keyboard,
+    get_cancel_with_back_keyboard,
+    mailing_target_group_button_label,
+)
+from database.session import session_scope
+from database.models import Mailing, MailingStatus
+from database.repositories import (
+    ClientRepository,
+    GroupRepository,
+    MailingLogRepository,
+    MailingRepository,
+    NeuroActionRepository,
+    NeuroStopRepository,
+)
+from utils.links import normalize_public_link
+from utils.logger import log
+from utils.neuro_prompts import neuro_prompt_file_path, prompt_file_exists, load_system_prompt
+
+router = Router()
+
+
+def mailing_security_screen_html(mailing: Mailing) -> str:
+    """Текст экрана «Настройка безопасности»: что делают переключатели и откуда берутся паузы."""
+    name = html.escape(
+        (mailing.name or f"Рассылка #{mailing.id}").strip() or f"#{mailing.id}"
+    )
+    dba = float(getattr(mailing, "delay_between_accounts", None) or 10.0)
+    return (
+        "🛡 <b>Настройка безопасности</b>\n\n"
+        f"📋 {name}\n\n"
+        "<b>Переключатели</b>\n"
+        "• <b>Имитация набора</b> — перед отправкой клиенту показывается «печатает…», "
+        "затем пауза <b>случайная от 5 до 10 секунд</b> (каждое сообщение — своё значение). "
+        "Если выключено — сообщение уходит сразу.\n\n"
+        "• <b>Умная задержка</b> — к паузам после каждой отправки и к паузе при смене аккаунта "
+        "добавляется случайный разброс (~±30%) от заданного времени, чтобы интервалы не были одинаковыми.\n\n"
+        "• <b>Автостоп</b> — кнопка «🕒» ниже: через сколько часов рассылка завершится сама; "
+        "<code>0</code> — только ручная остановка.\n\n"
+        f"<i>Пауза между аккаунтами</i> складывается из <code>{dba:g}</code> с (поле в данных рассылки) "
+        "и «задержки между пакетами», которую задаёте кнопкой ниже.\n\n"
+        "<b>Числовые параметры</b> — нажмите кнопку: перед вводом будет краткое пояснение."
+    )
+
+
+def _format_mailing_detail_text(
+    mailing: Mailing,
+    account_stats: list[tuple[int, int, int, str]],
+    neuro_actions: dict[str, int],
+    *,
+    accounts_hidden_from_stats: int = 0,
+    new_clients_count: int = 0,
+    mailing_is_running_here: bool = False,
+) -> str:
+    """Текст карточки рассылки: статус кампании, счётчики из БД, без разбивки по аккаунтам."""
+    status_emoji = {
+        "draft": "📝",
+        "pending": "⏳",
+        "running": "🚀",
+        "paused": "⏸",
+        "completed": "✅",
+        "cancelled": "🛑",
+        "error": "⚠️",
+    }.get(mailing.status.value, "⚪")
+
+    sent = int(getattr(mailing, "messages_sent", None) or 0)
+    fail = int(getattr(mailing, "messages_failed", None) or 0)
+    mpa = max(1, int(getattr(mailing, "messages_per_batch", None) or 10))
+    auto_stop = getattr(mailing, "auto_stop_hours", None)
+    stop_mode = f"{float(auto_stop):g} ч" if auto_stop and float(auto_stop) > 0 else "до ручной остановки"
+
+    neuro_on = getattr(mailing, "neurochat_enabled", False)
+    lines = [
+        f"{status_emoji} <b>{mailing.name or f'Рассылка #{mailing.id}'}</b>",
+        "",
+        f"🆔 ID: {mailing.id}",
+        f"📊 Статус: <code>{mailing.status.value}</code>",
+        mailing_target_group_button_label(mailing),
+        "",
+        "📈 <b>За текущий запуск</b>",
+        f"✅ Успешно: <b>{sent}</b>",
+        f"❌ Ошибок: <b>{fail}</b>",
+        "<i>При новом запуске счётчики обнуляются; подробные логи, стоп-листы и история — в «Мониторинге».</i>",
+        f"🆕 Клиентов NEW в очереди: <b>{new_clients_count}</b>",
+    ]
+    if mailing_is_running_here:
+        lines.append("<i>▶️ Идёт отправка… Обновите «🔄 Обновить».</i>")
+    if accounts_hidden_from_stats > 0:
+        lines.append(
+            f"<i>Скрыто аккаунтов с логами вне группы: {accounts_hidden_from_stats}</i>",
+        )
+    lines += [
+        "",
+        f"🕒 Режим остановки: <b>{stop_mode}</b>",
+        f"🔮 Нейрочат: <b>{'вкл' if neuro_on else 'выкл'}</b> (после рассылки — ответы на входящие; OPENROUTER_API_KEY)",
+        f"🤖 Нейро-команды: [SEND_LINK]={neuro_actions.get('SEND_LINK', 0)} · [STOP]={neuro_actions.get('STOP', 0)}",
+        "",
+        f"⏱ Задержка: {mailing.delay_between_messages} сек",
+        f"⌨️ Имитация набора: {'✅ (5–10 с случайно)' if mailing.use_typing else '❌'}",
+        "",
+        f"<i>Смена аккаунта в этом запуске:</i> после <b>{mpa}</b> успешных подряд с одного аккаунта — следующий "
+        "(«На аккаунт» в безопасности; лимит не накапливается между запусками).",
+    ]
+    return "\n".join(lines)
+
+
+def _mailing_show_neuro_stop(mailing, show_stop: bool) -> bool:
+    """Показать кнопку выключения нейрочата, когда рассылка не в процессе, а нейрочат включён."""
+    return bool(getattr(mailing, "neurochat_enabled", False)) and not show_stop
+
+
+async def _render_mailing_screen(callback: CallbackQuery, mailing_id: int) -> None:
+    """Обновляет сообщение: актуальные данные из БД и кнопки Старт/Стоп."""
+    from bot.main import safe_edit_message
+    from workers.manager import worker_manager
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if not mailing:
+            await callback.answer("Рассылка не найдена", show_alert=True)
+            return
+        account_stats = await MailingLogRepository.get_send_stats_by_account(session, mailing_id)
+        neuro_actions = await NeuroActionRepository.count_by_action(session, mailing_id)
+        hidden = 0
+        tg_id = getattr(mailing, "target_group_id", None)
+        if tg_id:
+            in_group = await GroupRepository.get_member_account_ids(session, tg_id)
+            before = len(account_stats)
+            account_stats = [s for s in account_stats if s[0] in in_group]
+            hidden = before - len(account_stats)
+        new_clients_count = await ClientRepository.count_new(session)
+
+    show_stop = (
+        mailing.status == MailingStatus.RUNNING
+        and worker_manager.is_running
+        and worker_manager.current_mailing_id == mailing_id
+    )
+    show_neuro_stop = _mailing_show_neuro_stop(mailing, show_stop)
+    text = _format_mailing_detail_text(
+        mailing,
+        account_stats,
+        neuro_actions,
+        accounts_hidden_from_stats=hidden,
+        new_clients_count=new_clients_count,
+        mailing_is_running_here=show_stop,
+    )
+    kb = get_mailing_view_keyboard(
+        mailing, show_stop=show_stop, show_neuro_stop=show_neuro_stop
+    )
+    await safe_edit_message(callback, text, kb, parse_mode=ParseMode.HTML)
+
+
+class MailingCreateFSM(StatesGroup):
+    """Состояния для создания рассылки."""
+    waiting_for_name = State()
+    waiting_for_suffix = State()
+
+
+class MailingEditFSM(StatesGroup):
+    """Состояния для редактирования настроек рассылки."""
+    waiting_for_delay = State()
+    waiting_for_batch_size = State()
+    waiting_for_batch_delay = State()
+    waiting_for_runtime_hours = State()
+    waiting_for_text = State()
+    waiting_for_variant_add = State()
+
+
+class MailingNeuroFSM(StatesGroup):
+    """Нейрочат: модель OpenRouter и загрузка system.txt."""
+    waiting_for_model = State()
+    waiting_for_prompt_file = State()
+    waiting_for_link = State()
+
+
+def _extra_variants(mailing) -> list:
+    try:
+        raw = json.loads(mailing.message_variants_json or "[]")
+        return raw if isinstance(raw, list) else []
+    except Exception:
+        return []
+
+
+def mailing_has_launchable_text(mailing) -> bool:
+    """Есть основной текст или непустые доп. варианты."""
+    if mailing.message_text and str(mailing.message_text).strip():
+        return True
+    for x in _extra_variants(mailing):
+        if str(x).strip():
+            return True
+    return False
+
+
+# ==================== Главное меню рассылок ====================
+
+@router.callback_query(F.data == "menu_mailing")
+async def cb_mailing_menu(callback: CallbackQuery, state: FSMContext):
+    """Главное меню раздела Рассылка."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.message.edit_text(
+        "📬 <b>Рассылка</b>\n\n"
+        "Управление рассылками:\n"
+        "• Создание новых рассылок\n"
+        "• Просмотр и настройка\n"
+        "• Запуск и мониторинг",
+        reply_markup=get_mailing_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+# ==================== Создание рассылки ====================
+
+@router.callback_query(F.data == "mailing_create")
+async def cb_mailing_create(callback: CallbackQuery, state: FSMContext):
+    """Начало создания рассылки."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    await state.set_state(MailingCreateFSM.waiting_for_name)
+
+    await callback.message.edit_text(
+        "➕ <b>Создание рассылки</b>\n\n"
+        "Введите <b>название рассылки</b>:\n"
+        "(например: test1)\n\n"
+        "❌ Отмена: /start",
+        reply_markup=get_cancel_with_back_keyboard("cancel_mailing", "menu_mailing"),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.message(MailingCreateFSM.waiting_for_name)
+async def process_name(message: Message, state: FSMContext):
+    """Обработка названия рассылки."""
+    if message.from_user.id != OWNER_ID:
+        return
+
+    # Проверка на отмену
+    if message.text.strip().lower() in ('/start', 'отмена', 'cancel'):
+        await state.clear()
+        await message.answer("❌ Создание рассылки отменено.", reply_markup=get_mailing_keyboard())
+        return
+
+    name = message.text.strip()
+    await state.update_data(name=name)
+    await state.set_state(MailingCreateFSM.waiting_for_suffix)
+
+    await message.answer(
+        "➕ <b>Создание рассылки</b>\n\n"
+        "Введите <b>суффикс</b>:\n"
+        "(например: usa)\n\n"
+        "Итоговое имя: [{suffix}] {name}\n\n"
+        "❌ Отмена: /start или кнопка ниже",
+        reply_markup=get_cancel_with_back_keyboard("cancel_mailing", "menu_mailing"),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(MailingCreateFSM.waiting_for_suffix)
+async def process_suffix(message: Message, state: FSMContext):
+    """Обработка суффикса и создание рассылки."""
+    if message.from_user.id != OWNER_ID:
+        return
+
+    # Проверка на отмену
+    if message.text.strip().lower() in ('/start', 'отмена', 'cancel'):
+        await state.clear()
+        await message.answer("❌ Создание рассылки отменено.")
+        return
+
+    suffix = message.text.strip()
+    data = await state.get_data()
+    name = data.get('name', 'unnamed')
+
+    # Формируем итоговое имя
+    final_name = f"[{suffix}] {name}"
+
+    # Создаём рассылку в БД
+    async with session_scope() as session:
+        mailing = await MailingRepository.create(
+            session=session,
+            name=final_name,
+            message_text="",
+            delay_between_messages=10.0,
+            delay_between_accounts=10.0,
+        )
+
+    await state.clear()
+
+    log.info(f"Создана рассылка: {final_name} (ID={mailing.id})")
+
+    await message.answer(
+        f"✅ <b>Рассылка создана!</b>\n\n"
+        f"📋 Название: {final_name}\n"
+        f"🆔 ID: {mailing.id}\n\n"
+        "Теперь вы можете настроить рассылку:",
+        reply_markup=get_mailing_view_keyboard(
+            mailing,
+            show_stop=False,
+            show_neuro_stop=_mailing_show_neuro_stop(mailing, False),
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# ==================== Список рассылок ====================
+
+@router.callback_query(F.data == "mailing_list")
+async def cb_mailing_list(callback: CallbackQuery):
+    """Показать список всех рассылок."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    async with session_scope() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(Mailing).order_by(Mailing.created_at.desc())
+        )
+        mailings = list(result.scalars().all())
+
+    if not mailings:
+        await callback.message.answer(
+            "📋 <b>Мои рассылки</b>\n\n"
+            "У вас пока нет рассылок.\n"
+            "Создайте первую рассылку!",
+            reply_markup=get_context_back_keyboard("menu_mailing"),
+            parse_mode=ParseMode.HTML,
+        )
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        "📋 <b>Мои рассылки</b>\n\n"
+        f"Всего: {len(mailings)}",
+        reply_markup=get_mailing_list_keyboard(mailings),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+# ==================== Просмотр конкретной рассылки ====================
+
+@router.callback_query(F.data.regexp(r"^mailing_view_\d+$"))
+async def cb_mailing_view(callback: CallbackQuery):
+    """Открыть карточку рассылки (редактирует текущее сообщение, без дублей)."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await _render_mailing_screen(callback, mailing_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^mailing_refresh_\d+$"))
+async def cb_mailing_refresh(callback: CallbackQuery):
+    """Обновить статистику и кнопки с карточки рассылки."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await _render_mailing_screen(callback, mailing_id)
+    await callback.answer("Обновлено")
+
+
+@router.callback_query(F.data.regexp(r"^mailing_stop_\d+$"))
+async def cb_mailing_stop(callback: CallbackQuery):
+    """Остановить текущую рассылку (воркер в фоне)."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    from workers.manager import worker_manager
+
+    mailing_id = int(callback.data.split("_")[-1])
+    if not worker_manager.is_running or worker_manager.current_mailing_id != mailing_id:
+        await callback.answer("Эта рассылка сейчас не выполняется", show_alert=True)
+        await _render_mailing_screen(callback, mailing_id)
+        return
+
+    worker_manager.stop_mailing()
+    await callback.answer("Остановка запрошена…")
+    await _render_mailing_screen(callback, mailing_id)
+
+
+@router.callback_query(F.data.regexp(r"^mailing_neuro_stop_view_\d+$"))
+async def cb_mailing_neuro_stop_from_view(callback: CallbackQuery):
+    """Выключить нейрочат с карточки рассылки (после завершения кампании и т.п.)."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if not mailing:
+            await callback.answer("Рассылка не найдена", show_alert=True)
+            return
+        await MailingRepository.update_neuro(session, mailing_id, neurochat_enabled=False)
+
+    await callback.answer("Нейрочат выключен")
+    await _render_mailing_screen(callback, mailing_id)
+
+
+# ==================== Настройки рассылки ====================
+
+@router.callback_query(F.data.startswith("mailing_settings_"))
+async def cb_mailing_settings(callback: CallbackQuery, state: FSMContext):
+    """Настройки рассылки."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    await state.clear()
+    mailing_id = int(callback.data.split("_")[-1])
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    if not mailing:
+        await callback.message.answer("❌ Рассылка не найдена.")
+        await callback.answer()
+        return
+
+    text = (
+        f"⚙️ <b>Настройки рассылки</b>\n\n"
+        f"📋 {mailing.name or f'Рассылка #{mailing.id}'}\n\n"
+        "Выберите модуль:"
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_mailing_modules_keyboard(mailing),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+# ==================== Модули настроек ====================
+
+@router.callback_query(F.data.startswith("mailing_mod_security_"))
+async def cb_mailing_mod_security(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    await state.clear()
+    mailing_id = int(callback.data.split("_")[-1])
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+    if not mailing:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        mailing_security_screen_html(mailing),
+        reply_markup=get_mailing_security_keyboard(mailing),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing_mod_neuro_"))
+async def cb_mailing_mod_neuro(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    await state.clear()
+    mailing_id = int(callback.data.split("_")[-1])
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+    if not mailing:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+
+    model = (mailing.neuro_model or "").strip() or DEFAULT_NEURO_MODEL
+    link = normalize_public_link((getattr(mailing, "community_link", None) or "").strip())
+    has_prompt = prompt_file_exists(mailing_id)
+    prompt_preview = ""
+    if has_prompt:
+        full = load_system_prompt(mailing_id)
+        prompt_preview = full[:200] + ("…" if len(full) > 200 else "")
+
+    txt = (
+        "🔮 <b>Нейрочат (OpenRouter)</b>\n\n"
+        f"📋 {mailing.name or mailing_id}\n\n"
+        f"• Включено: <b>{'да' if mailing.neurochat_enabled else 'нет'}</b>\n"
+        f"• Модель: <code>{model}</code>\n"
+        f"• Ссылка {{link}}: <code>{link or 'не задана'}</code>\n"
+        f"• Файл промпта: <code>data/neuro/mailings/{mailing_id}/system.txt</code>\n"
+        f"  — {'загружен' if has_prompt else 'нет (используется дефолт из кода)'}\n"
+    )
+    if prompt_preview:
+        txt += f"\n<i>Превью:</i>\n<pre>{prompt_preview}</pre>\n"
+    txt += (
+        "\nКлюч API: переменная <code>OPENROUTER_API_KEY</code> в .env.\n\n"
+        "После завершения рассылки (если нейрочат включён) входящие в личку "
+        "отвечаются с того же аккаунта. Контекст — последние сообщения в паре "
+        "«аккаунт ↔ собеседник», без смешивания диалогов."
+    )
+
+    await callback.message.edit_text(
+        txt,
+        reply_markup=get_mailing_neuro_keyboard(mailing),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing_neuro_toggle_"))
+async def cb_mailing_neuro_toggle(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if not mailing:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+        await MailingRepository.update_neuro(
+            session,
+            mailing_id,
+            neurochat_enabled=not mailing.neurochat_enabled,
+        )
+    await cb_mailing_mod_neuro(callback, state)
+
+
+@router.callback_query(F.data.startswith("mailing_neuro_model_"))
+async def cb_mailing_neuro_model(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await state.set_state(MailingNeuroFSM.waiting_for_model)
+    await state.update_data(mailing_neuro_id=mailing_id)
+
+    await callback.message.edit_text(
+        "🧠 <b>Модель OpenRouter</b>\n\n"
+        "Отправьте одним сообщением идентификатор модели "
+        "(как на openrouter.ai), например:\n"
+        f"<code>{DEFAULT_NEURO_MODEL}</code>\n\n"
+        "❌ Отмена: <code>/cancel</code>",
+        reply_markup=get_cancel_with_back_keyboard(
+            "cancel_mailing_neuro", f"mailing_mod_neuro_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_mailing_neuro")
+async def cb_cancel_mailing_neuro(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    data = await state.get_data()
+    await state.clear()
+    mailing_id = data.get("mailing_neuro_id")
+    if mailing_id:
+        async with session_scope() as session:
+            mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if mailing:
+            await callback.message.edit_text(
+                "🔮 <b>Нейрочат</b> — отмена.",
+                reply_markup=get_mailing_neuro_keyboard(mailing),
+                parse_mode=ParseMode.HTML,
+            )
+            await callback.answer()
+            return
+    await callback.message.edit_text("Отменено.")
+    await callback.answer()
+
+
+@router.message(MailingNeuroFSM.waiting_for_model)
+async def process_neuro_model(message: Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+
+    if (message.text or "").strip().lower() in ("/cancel", "отмена"):
+        await state.clear()
+        await message.answer("Отменено.")
+        return
+
+    model = (message.text or "").strip()
+    if not model:
+        await message.answer("Пустая строка — повторите или /cancel")
+        return
+
+    data = await state.get_data()
+    mailing_id = data.get("mailing_neuro_id")
+    await state.clear()
+
+    if not mailing_id:
+        await message.answer("Сессия устарела.")
+        return
+
+    async with session_scope() as session:
+        await MailingRepository.update_neuro(session, mailing_id, neuro_model=model)
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    await message.answer(
+        f"✅ Модель сохранена: <code>{model}</code>",
+        parse_mode=ParseMode.HTML,
+    )
+    if mailing:
+        await message.answer(
+            "🔮 Нейрочат",
+            reply_markup=get_mailing_neuro_keyboard(mailing),
+            parse_mode=ParseMode.HTML,
+        )
+
+
+@router.callback_query(F.data.startswith("mailing_neuro_prompt_"))
+async def cb_mailing_neuro_prompt(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await state.set_state(MailingNeuroFSM.waiting_for_prompt_file)
+    await state.update_data(mailing_neuro_id=mailing_id)
+
+    await callback.message.edit_text(
+        "📄 <b>System-промпт</b>\n\n"
+        "Пришлите <b>.txt</b> файл (документом, не как текст). "
+        "Он будет сохранён как\n"
+        f"<code>data/neuro/mailings/{mailing_id}/system.txt</code>\n\n"
+        "❌ Отмена: кнопка ниже или <code>/cancel</code>",
+        reply_markup=get_cancel_with_back_keyboard(
+            "cancel_mailing_neuro", f"mailing_mod_neuro_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing_neuro_link_"))
+async def cb_mailing_neuro_link(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await state.set_state(MailingNeuroFSM.waiting_for_link)
+    await state.update_data(mailing_neuro_id=mailing_id)
+
+    await callback.message.edit_text(
+        "🔗 <b>Ссылка для плейсхолдера {link}</b>\n\n"
+        "Отправьте действующую ссылку (https://...).\n"
+        "Она будет подставляться в первое сообщение и в нейропромпт/ответы вместо <code>{link}</code>.\n"
+        "Чтобы очистить, отправьте: <code>off</code>\n\n"
+        "❌ Отмена: /cancel",
+        reply_markup=get_cancel_with_back_keyboard(
+            "cancel_mailing_neuro", f"mailing_mod_neuro_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing_neuro_stoplist_"))
+async def cb_mailing_neuro_stoplist(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        rows = await NeuroStopRepository.list_for_mailing(session, mailing_id, limit=30)
+    if not mailing:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+
+    if not rows:
+        text = (
+            "🚫 <b>STOP-лист нейрочата</b>\n\n"
+            "Список пуст. Никто не заблокирован по [STOP]."
+        )
+    else:
+        lines = [
+            "🚫 <b>STOP-лист нейрочата</b>",
+            "",
+            f"📋 {mailing.name or mailing_id}",
+            "",
+            "Последние пользователи со статусом [STOP]:",
+        ]
+        for account_id, client_id, username, _created in rows:
+            user_label = f"@{username}" if username else f"client#{client_id}"
+            lines.append(f"• {user_label} (acc#{account_id})")
+        text = "\n".join(lines)
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_mailing_neuro_stoplist_keyboard(mailing_id, rows),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing_neuro_unstop_"))
+async def cb_mailing_neuro_unstop(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    parts = callback.data.split("_")
+    if len(parts) < 6:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    mailing_id = int(parts[3])
+    account_id = int(parts[4])
+    client_id = int(parts[5])
+
+    async with session_scope() as session:
+        ok = await NeuroStopRepository.remove(session, account_id, client_id)
+        client = await ClientRepository.get_by_id(session, client_id)
+
+    if ok:
+        label = f"@{client.username}" if client and client.username else f"client#{client_id}"
+        await callback.answer(f"Разблокирован: {label}")
+    else:
+        await callback.answer("Запись уже удалена")
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        rows = await NeuroStopRepository.list_for_mailing(session, mailing_id, limit=30)
+    if not mailing:
+        return
+
+    if not rows:
+        text = (
+            "🚫 <b>STOP-лист нейрочата</b>\n\n"
+            "Список пуст. Никто не заблокирован по [STOP]."
+        )
+    else:
+        lines = [
+            "🚫 <b>STOP-лист нейрочата</b>",
+            "",
+            f"📋 {mailing.name or mailing_id}",
+            "",
+            "Последние пользователи со статусом [STOP]:",
+        ]
+        for acc_id, cid, username, _created in rows:
+            user_label = f"@{username}" if username else f"client#{cid}"
+            lines.append(f"• {user_label} (acc#{acc_id})")
+        text = "\n".join(lines)
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_mailing_neuro_stoplist_keyboard(mailing_id, rows),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(MailingNeuroFSM.waiting_for_prompt_file, F.document)
+async def process_neuro_prompt_doc(message: Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+
+    data = await state.get_data()
+    mailing_id = data.get("mailing_neuro_id")
+    if not mailing_id:
+        await state.clear()
+        await message.answer("Сессия устарела.")
+        return
+
+    fn = (message.document.file_name or "").lower()
+    if not fn.endswith(".txt"):
+        await message.answer("Нужен файл с расширением .txt")
+        return
+
+    from bot.config import BASE_DIR
+
+    dest = neuro_prompt_file_path(mailing_id)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    await message.bot.download(message.document, destination=dest)
+
+    await state.clear()
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    await message.answer(
+        f"✅ Промпт сохранён: <code>{dest.relative_to(BASE_DIR)}</code>",
+        parse_mode=ParseMode.HTML,
+    )
+    if mailing:
+        await message.answer(
+            "🔮 Нейрочат",
+            reply_markup=get_mailing_neuro_keyboard(mailing),
+            parse_mode=ParseMode.HTML,
+        )
+
+
+@router.message(MailingNeuroFSM.waiting_for_link)
+async def process_neuro_link(message: Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+
+    raw = (message.text or "").strip()
+    if not raw:
+        await message.answer("Отправьте ссылку или off.")
+        return
+    if raw.lower() in ("/cancel", "cancel", "отмена"):
+        await state.clear()
+        await message.answer("Отменено.")
+        return
+
+    value = None
+    if raw.lower() not in ("off", "none", "нет", "выкл", "0"):
+        if not (raw.startswith("http://") or raw.startswith("https://")):
+            await message.answer("Нужна ссылка в формате http:// или https://")
+            return
+        value = raw
+
+    data = await state.get_data()
+    mailing_id = data.get("mailing_neuro_id")
+    await state.clear()
+    if not mailing_id:
+        await message.answer("Сессия устарела.")
+        return
+
+    async with session_scope() as session:
+        await session.execute(
+            update(Mailing).where(Mailing.id == mailing_id).values(community_link=value)
+        )
+        await session.commit()
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    await message.answer(
+        f"✅ Ссылка {('{link} очищена' if value is None else 'сохранена')}.\n"
+        f"{value or ''}",
+        parse_mode=ParseMode.HTML,
+    )
+    if mailing:
+        await message.answer(
+            "🔮 Нейрочат",
+            reply_markup=get_mailing_neuro_keyboard(mailing),
+            parse_mode=ParseMode.HTML,
+        )
+
+
+@router.callback_query(F.data.startswith("mailing_mod_first_"))
+async def cb_mailing_mod_first(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    await state.clear()
+    mailing_id = int(callback.data.split("_")[-1])
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+    if not mailing:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+
+    extra = _extra_variants(mailing)
+    preview_main = (mailing.message_text or "")[:400]
+    if len(mailing.message_text or "") > 400:
+        preview_main += "…"
+
+    lines = [
+        "✉️ <b>Первое сообщение</b>\n",
+        f"📋 {mailing.name or mailing_id}\n",
+        "",
+        "<b>Основной текст</b> (один из вариантов при отправке):",
+        f"<pre>{preview_main or '— пусто —'}</pre>",
+        "",
+        f"<b>Дополнительных вариантов:</b> {len(extra)}",
+        "",
+        "Плейсхолдеры в тексте:",
+        "<code>{username}</code> @получателя · <code>{date}</code> <code>{time}</code> <code>{datetime}</code>",
+        "<code>{firstname}</code> <code>{lastname}</code> — аккаунт-отправитель · <code>{phone}</code> <code>{account_id}</code>",
+        "<code>{mailing}</code> — название кампании · <code>{fullname}</code> — @получателя · <code>{link}</code> — ссылка сообщества",
+        "<code>{random4}</code> <code>{random6}</code> — случайные числа",
+        "",
+        "При отправке выбирается <b>случайный</b> непустой вариант: основной текст + список ниже.",
+    ]
+
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=get_mailing_first_message_keyboard(mailing_id, len(extra)),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing_pick_group_"))
+async def cb_mailing_pick_group(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    async with session_scope() as session:
+        groups = await GroupRepository.get_all(session)
+
+    await callback.message.edit_text(
+        "👥 <b>Целевая группа аккаунтов</b>\n\n"
+        "Рассылка пойдёт только с аккаунтов из выбранной группы "
+        "(раздел «Аккаунты → Группы»). «Все аккаунты» — без фильтра по группе.",
+        reply_markup=get_mailing_target_group_keyboard(
+            mailing_id, groups, back_callback=f"mailing_view_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing_target_set_"))
+async def cb_mailing_target_set(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    parts = callback.data.split("_")
+    mailing_id = int(parts[3])
+    gid = int(parts[4])
+    val = None if gid == 0 else gid
+
+    async with session_scope() as session:
+        await session.execute(
+            update(Mailing).where(Mailing.id == mailing_id).values(target_group_id=val)
+        )
+        await session.commit()
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    if not mailing:
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    await callback.answer("Сохранено")
+    await _render_mailing_screen(callback, mailing_id)
+
+
+@router.callback_query(F.data.startswith("mailing_variant_add_"))
+async def cb_mailing_variant_add(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await state.update_data(mailing_id=mailing_id)
+    await state.set_state(MailingEditFSM.waiting_for_variant_add)
+
+    await callback.message.edit_text(
+        "➕ <b>Новый вариант текста</b>\n\n"
+        "Отправьте сообщение одним блоком (можно с плейсхолдерами).\n"
+        "Оно будет добавлено к списку дополнительных вариантов.",
+        reply_markup=get_cancel_with_back_keyboard(
+            "cancel_mailing", f"mailing_mod_first_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.message(MailingEditFSM.waiting_for_variant_add)
+async def process_variant_add(message: Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("❌ Пустой текст — отправьте ещё раз.")
+        return
+
+    data = await state.get_data()
+    mailing_id = data.get("mailing_id")
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if not mailing:
+            await state.clear()
+            await message.answer("❌ Рассылка не найдена.")
+            return
+
+        extra = _extra_variants(mailing)
+        extra.append(text)
+        await session.execute(
+            update(Mailing)
+            .where(Mailing.id == mailing_id)
+            .values(message_variants_json=json.dumps(extra, ensure_ascii=False))
+        )
+        await session.commit()
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    await state.clear()
+    extra = _extra_variants(mailing)
+    await message.answer(
+        f"✅ Вариант добавлен. Всего дополнительных: {len(extra)}.",
+        reply_markup=get_mailing_first_message_keyboard(mailing_id, len(extra)),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data.startswith("mailing_variant_rm_"))
+async def cb_mailing_variant_rm(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    parts = callback.data.split("_")
+    mailing_id = int(parts[3])
+    idx = int(parts[4])
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if not mailing:
+            await callback.answer("Не найдено", show_alert=True)
+            return
+        extra = _extra_variants(mailing)
+        if 0 <= idx < len(extra):
+            extra.pop(idx)
+            await session.execute(
+                update(Mailing)
+                .where(Mailing.id == mailing_id)
+                .values(message_variants_json=json.dumps(extra, ensure_ascii=False))
+            )
+            await session.commit()
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    extra = _extra_variants(mailing)
+    await callback.answer("Удалено")
+
+    preview_main = (mailing.message_text or "")[:400]
+    if len(mailing.message_text or "") > 400:
+        preview_main += "…"
+
+    lines = [
+        "✉️ <b>Первое сообщение</b>\n",
+        f"📋 {mailing.name or mailing_id}\n",
+        "",
+        "<b>Основной текст</b>:",
+        f"<pre>{preview_main or '— пусто —'}</pre>",
+        "",
+        f"<b>Дополнительных вариантов:</b> {len(extra)}",
+        "",
+        "Плейсхолдеры: <code>{username}</code> <code>{date}</code> <code>{time}</code> … <code>{link}</code>",
+    ]
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=get_mailing_first_message_keyboard(mailing_id, len(extra)),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# ==================== Переключатели настроек ====================
+
+@router.callback_query(F.data.startswith("mailing_toggle_typing_"))
+async def cb_toggle_typing(callback: CallbackQuery):
+    """Переключение имитации набора текста."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if mailing:
+            new_value = not mailing.use_typing
+            await session.execute(
+                update(Mailing)
+                .where(Mailing.id == mailing_id)
+                .values(use_typing=new_value)
+            )
+            await session.commit()
+
+            log.info(f"Рассылка {mailing_id}: use_typing = {new_value}")
+
+            mailing.use_typing = new_value
+            await callback.message.edit_text(
+                mailing_security_screen_html(mailing),
+                reply_markup=get_mailing_security_keyboard(mailing),
+                parse_mode=ParseMode.HTML,
+            )
+
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing_toggle_smart_"))
+async def cb_toggle_smart(callback: CallbackQuery):
+    """Переключение умной задержки."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if mailing:
+            new_value = not mailing.smart_delay
+            await session.execute(
+                update(Mailing)
+                .where(Mailing.id == mailing_id)
+                .values(smart_delay=new_value)
+            )
+            await session.commit()
+
+            log.info(f"Рассылка {mailing_id}: smart_delay = {new_value}")
+
+            mailing.smart_delay = new_value
+            await callback.message.edit_text(
+                mailing_security_screen_html(mailing),
+                reply_markup=get_mailing_security_keyboard(mailing),
+                parse_mode=ParseMode.HTML,
+            )
+
+    await callback.answer()
+
+
+# ==================== Редактирование параметров ====================
+
+@router.callback_query(F.data.startswith("mailing_edit_delay_"))
+async def cb_edit_delay(callback: CallbackQuery, state: FSMContext):
+    """Редактирование задержки между сообщениями."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await state.update_data(mailing_id=mailing_id)
+    await state.set_state(MailingEditFSM.waiting_for_delay)
+
+    await callback.message.edit_text(
+        "⏱ <b>Задержка между сообщениями</b>\n\n"
+        "<b>Что меняет:</b> сколько секунд ждать после каждой попытки отправки одному клиенту "
+        "(успех или ошибка), прежде чем брать следующего клиента в текущей очереди или повторять логику. "
+        "Это основной «темп» рассылки.\n\n"
+        "При включённой <b>умной задержке</b> к введённому числу добавляется случайный разброс.\n\n"
+        "Введите число секунд (например: <code>10</code>).\n\n"
+        "❌ Отмена: /start",
+        reply_markup=get_cancel_with_back_keyboard(
+            "cancel_mailing", f"mailing_mod_security_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.message(MailingEditFSM.waiting_for_delay)
+async def process_delay(message: Message, state: FSMContext):
+    """Обработка нового значения задержки."""
+    if message.from_user.id != OWNER_ID:
+        return
+
+    try:
+        new_delay = float(message.text.strip())
+        if new_delay < 0:
+            raise ValueError("Задержка должна быть >= 0")
+    except ValueError as e:
+        await message.answer(f"❌ Ошибка: {e}\n\nВведите число >= 0:")
+        return
+
+    data = await state.get_data()
+    mailing_id = data.get('mailing_id')
+
+    async with session_scope() as session:
+        await session.execute(
+            update(Mailing)
+            .where(Mailing.id == mailing_id)
+            .values(delay_between_messages=new_delay)
+        )
+        await session.commit()
+
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    await state.clear()
+
+    log.info(f"Рассылка {mailing_id}: delay_between_messages = {new_delay}")
+
+    await message.answer(
+        f"✅ Задержка обновлена: {new_delay} сек\n\n"
+        "⚙️ Настройки рассылки:",
+        reply_markup=get_mailing_settings_keyboard(mailing),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data.startswith("mailing_edit_messages_per_batch_"))
+async def cb_edit_batch(callback: CallbackQuery, state: FSMContext):
+    """Редактирование лимита успешных сообщений на один аккаунт (и ротация)."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await state.update_data(mailing_id=mailing_id)
+    await state.set_state(MailingEditFSM.waiting_for_batch_size)
+
+    await callback.message.edit_text(
+        "📨 <b>Сообщений на аккаунт</b>\n\n"
+        "<b>Для рассылки с группой аккаунтов:</b> каждый аккаунт делает до N <b>успешных</b> "
+        "отправок подряд, затем очередь переходит к следующему; когда у <b>всех</b> аккаунтов "
+        "группы набрано по N успехов — кампания завершается (остальные NEW остаются на потом).\n\n"
+        "Введите целое число ≥ 1 (по умолчанию в новых рассылках: <code>10</code>).\n\n"
+        "❌ Отмена: /start",
+        reply_markup=get_cancel_with_back_keyboard(
+            "cancel_mailing", f"mailing_mod_security_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.message(MailingEditFSM.waiting_for_batch_size)
+async def process_batch_size(message: Message, state: FSMContext):
+    """Обработка нового значения количества сообщений."""
+    if message.from_user.id != OWNER_ID:
+        return
+
+    try:
+        new_value = int(message.text.strip())
+        if new_value < 1:
+            raise ValueError("Значение должно быть >= 1")
+    except ValueError as e:
+        await message.answer(f"❌ Ошибка: {e}\n\nВведите число >= 1:")
+        return
+
+    data = await state.get_data()
+    mailing_id = data.get('mailing_id')
+
+    async with session_scope() as session:
+        await session.execute(
+            update(Mailing)
+            .where(Mailing.id == mailing_id)
+            .values(messages_per_batch=new_value)
+        )
+        await session.commit()
+
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    await state.clear()
+
+    log.info(f"Рассылка {mailing_id}: messages_per_account (messages_per_batch) = {new_value}")
+
+    await message.answer(
+        f"✅ «На аккаунт» обновлено: {new_value}\n\n"
+        "⚙️ Настройки рассылки:",
+        reply_markup=get_mailing_settings_keyboard(mailing),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data.startswith("mailing_edit_batch_delay_"))
+async def cb_edit_batch_delay(callback: CallbackQuery, state: FSMContext):
+    """Редактирование задержки между пакетами."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await state.update_data(mailing_id=mailing_id)
+    await state.set_state(MailingEditFSM.waiting_for_batch_delay)
+
+    await callback.message.edit_text(
+        "🔄 <b>Дополнительная задержка между сменой аккаунтов</b>\n\n"
+        "<b>Что меняет:</b> после того как аккаунт отправил свою порцию («на аккаунт»), "
+        "перед переключением на следующий аккаунт добавляется эта пауза <b>плюс</b> внутренняя "
+        "«задержка между аккаунтами» из профиля рассылки (по умолчанию 10 с; меняется только в БД/коде).\n\n"
+        "При <b>умной задержке</b> к итоговой сумме тоже применяется разброс.\n\n"
+        "Введите секунды (например: <code>45</code>).\n\n"
+        "❌ Отмена: /start",
+        reply_markup=get_cancel_with_back_keyboard(
+            "cancel_mailing", f"mailing_mod_security_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.message(MailingEditFSM.waiting_for_batch_delay)
+async def process_batch_delay(message: Message, state: FSMContext):
+    """Обработка нового значения задержки между пакетами."""
+    if message.from_user.id != OWNER_ID:
+        return
+
+    try:
+        new_delay = float(message.text.strip())
+        if new_delay < 0:
+            raise ValueError("Задержка должна быть >= 0")
+    except ValueError as e:
+        await message.answer(f"❌ Ошибка: {e}\n\nВведите число >= 0:")
+        return
+
+    data = await state.get_data()
+    mailing_id = data.get('mailing_id')
+
+    async with session_scope() as session:
+        await session.execute(
+            update(Mailing)
+            .where(Mailing.id == mailing_id)
+            .values(batch_delay=new_delay)
+        )
+        await session.commit()
+
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    await state.clear()
+
+    log.info(f"Рассылка {mailing_id}: batch_delay = {new_delay}")
+
+    await message.answer(
+        f"✅ Задержка между пакетами обновлена: {new_delay} сек\n\n"
+        "⚙️ Настройки рассылки:",
+        reply_markup=get_mailing_settings_keyboard(mailing),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data.startswith("mailing_edit_runtime_"))
+async def cb_edit_runtime(callback: CallbackQuery, state: FSMContext):
+    """Редактирование автоостановки рассылки (в часах)."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await state.update_data(mailing_id=mailing_id)
+    await state.set_state(MailingEditFSM.waiting_for_runtime_hours)
+
+    await callback.message.edit_text(
+        "🕒 <b>Автостоп по времени</b>\n\n"
+        "<b>Что меняет:</b> через сколько часов после <b>старта</b> этой рассылки она сама завершится "
+        "(статус «завершена»), даже если база клиентов не исчерпана. Удобно для ночных прогонов.\n\n"
+        "Введите часы (например: <code>12</code>) или <code>0</code> / <code>off</code> / <code>выкл</code> — "
+        "только ручная остановка.\n\n"
+        "❌ Отмена: /start",
+        reply_markup=get_cancel_with_back_keyboard(
+            "cancel_mailing", f"mailing_mod_security_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.message(MailingEditFSM.waiting_for_runtime_hours)
+async def process_runtime_hours(message: Message, state: FSMContext):
+    if message.from_user.id != OWNER_ID:
+        return
+
+    raw = (message.text or "").strip().lower()
+    value = None
+    if raw in ("0", "off", "none", "выкл", "нет"):
+        value = None
+    else:
+        try:
+            hrs = float(raw.replace(",", "."))
+            if hrs <= 0:
+                raise ValueError("Часы должны быть > 0")
+            value = hrs
+        except ValueError as e:
+            await message.answer(
+                f"❌ Ошибка: {e}\n\nВведите число > 0 или 0/off для отключения:"
+            )
+            return
+
+    data = await state.get_data()
+    mailing_id = data.get("mailing_id")
+
+    async with session_scope() as session:
+        await session.execute(
+            update(Mailing)
+            .where(Mailing.id == mailing_id)
+            .values(auto_stop_hours=value)
+        )
+        await session.commit()
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    await state.clear()
+
+    txt = (
+        f"✅ Автоостановка обновлена: {value:g} ч"
+        if value is not None
+        else "✅ Автоостановка отключена: рассылка работает до ручной остановки."
+    )
+    await message.answer(
+        f"{txt}\n\n⚙️ Настройки рассылки:",
+        reply_markup=get_mailing_settings_keyboard(mailing),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data.startswith("mailing_edit_text_"))
+async def cb_edit_text(callback: CallbackQuery, state: FSMContext):
+    """Редактирование текста сообщения."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+    await state.update_data(mailing_id=mailing_id)
+    await state.set_state(MailingEditFSM.waiting_for_text)
+
+    await callback.message.edit_text(
+        "📝 <b>Основной текст сообщения</b>\n\n"
+        "Отправьте текст. Плейсхолдеры:\n"
+        "<code>{username}</code> <code>{date}</code> <code>{time}</code> <code>{datetime}</code>\n"
+        "<code>{firstname}</code> <code>{lastname}</code> <code>{phone}</code> <code>{account_id}</code>\n"
+        "<code>{mailing}</code> <code>{fullname}</code> <code>{link}</code> <code>{random4}</code> <code>{random6}</code>\n\n"
+        "Дополнительные варианты — в модуле «Первое сообщение».\n\n"
+        "❌ Отмена: кнопка ниже",
+        reply_markup=get_cancel_with_back_keyboard(
+            "cancel_mailing", f"mailing_mod_first_{mailing_id}"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.message(MailingEditFSM.waiting_for_text)
+async def process_text(message: Message, state: FSMContext):
+    """Обработка нового текста сообщения."""
+    if message.from_user.id != OWNER_ID:
+        return
+
+    new_text = message.text
+
+    data = await state.get_data()
+    mailing_id = data.get('mailing_id')
+
+    async with session_scope() as session:
+        await session.execute(
+            update(Mailing)
+            .where(Mailing.id == mailing_id)
+            .values(message_text=new_text)
+        )
+        await session.commit()
+
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    await state.clear()
+
+    log.info(f"Рассылка {mailing_id}: текст обновлён")
+
+    extra_n = len(_extra_variants(mailing))
+    await message.answer(
+        "✅ Основной текст обновлён.\n\n"
+        "✉️ Модуль «Первое сообщение»:",
+        reply_markup=get_mailing_first_message_keyboard(mailing_id, extra_n),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+# ==================== Удаление рассылки ====================
+
+@router.callback_query(F.data.startswith("mailing_delete_confirm_"))
+async def cb_mailing_delete_confirm(callback: CallbackQuery):
+    """Подтверждение удаления рассылки."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+
+    # Показываем подтверждение
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⚠️ Да, удалить", callback_data=f"mailing_delete_{mailing_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"mailing_view_{mailing_id}"),
+            ],
+        ]
+    )
+
+    await callback.message.answer(
+        "⚠️ <b>Подтверждение удаления</b>\n\n"
+        f"Вы уверены, что хотите удалить рассылку #{mailing_id}?\n"
+        "Это действие нельзя отменить.",
+        reply_markup=keyboard,
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mailing_delete_"))
+async def cb_mailing_delete(callback: CallbackQuery):
+    """Удаление рассылки."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+
+    async with session_scope() as session:
+        await MailingRepository.delete(session, mailing_id)
+
+    log.info(f"Удалена рассылка {mailing_id}")
+
+    await callback.message.answer(
+        f"🗑 Рассылка #{mailing_id} удалена.",
+        reply_markup=get_context_back_keyboard("mailing_list", "📋 К списку рассылок"),
+    )
+    await callback.answer()
+
+
+# ==================== Запуск рассылки ====================
+
+@router.callback_query(F.data.regexp(r"^mailing_start_\d+$"))
+async def cb_mailing_start(callback: CallbackQuery):
+    """Перед запуском — экран подтверждения (проверка аккаунтов, готовность)."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    if not mailing:
+        await callback.message.answer(
+            "❌ Рассылка не найдена.",
+            reply_markup=get_context_back_keyboard("mailing_list", "📋 К списку рассылок"),
+        )
+        await callback.answer()
+        return
+
+    if not mailing_has_launchable_text(mailing):
+        await callback.message.answer(
+            "⚠️ <b>Нет текста для рассылки</b>\n\n"
+            "Задайте основной текст или добавьте варианты в разделе "
+            "«Настройки → Первое сообщение».",
+            reply_markup=get_mailing_view_keyboard(
+                mailing,
+                show_stop=False,
+                show_neuro_stop=_mailing_show_neuro_stop(mailing, False),
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        await callback.answer()
+        return
+
+    from bot.main import safe_edit_message
+
+    safe_name = html.escape((mailing.name or f"#{mailing.id}").strip() or f"#{mailing.id}")
+    confirm_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить",
+                    callback_data=f"mailing_start_confirm_{mailing_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Нет, назад",
+                    callback_data=f"mailing_view_{mailing_id}",
+                ),
+            ],
+        ]
+    )
+    await safe_edit_message(
+        callback,
+        "🚀 <b>Запуск рассылки</b>\n\n"
+        f"Рассылка «{safe_name}» (id <code>{mailing_id}</code>).\n\n"
+        "<b>Рекомендуется</b> перед стартом пройти проверку аккаунтов в группе "
+        "(спамблок и прочее) и убедиться, что аккаунты готовы к работе.\n\n"
+        "Запустить сейчас?",
+        reply_markup=confirm_kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^mailing_start_confirm_\d+$"))
+async def cb_mailing_start_confirm(callback: CallbackQuery):
+    """Подтверждённый запуск рассылки."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    mailing_id = int(callback.data.split("_")[-1])
+
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+
+    if not mailing:
+        await callback.message.answer(
+            "❌ Рассылка не найдена.",
+            reply_markup=get_context_back_keyboard("mailing_list", "📋 К списку рассылок"),
+        )
+        await callback.answer()
+        return
+
+    if not mailing_has_launchable_text(mailing):
+        await callback.message.answer(
+            "⚠️ <b>Нет текста для рассылки</b>\n\n"
+            "Задайте основной текст или добавьте варианты в разделе "
+            "«Настройки → Первое сообщение».",
+            reply_markup=get_mailing_view_keyboard(
+                mailing,
+                show_stop=False,
+                show_neuro_stop=_mailing_show_neuro_stop(mailing, False),
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        await callback.answer()
+        return
+
+    if not await _execute_mailing_start(callback, mailing):
+        return
+
+
+async def _execute_mailing_start(callback: CallbackQuery, mailing: Mailing) -> bool:
+    """Запуск рассылки. False — уже ответили через callback (ошибка/конфликт)."""
+    from workers.manager import worker_manager
+
+    if worker_manager._mailing_busy:
+        if worker_manager.current_mailing_id == mailing.id:
+            await callback.answer("Эта рассылка уже запущена", show_alert=True)
+        else:
+            await callback.answer(
+                "Дождитесь завершения текущей рассылки или восстановления аккаунтов",
+                show_alert=True,
+            )
+        return False
+
+    await callback.answer("Подключаю аккаунты…")
+    gid = getattr(mailing, "target_group_id", None)
+    await worker_manager.load_accounts(group_id=gid)
+    await worker_manager.connect_all()
+
+    asyncio.create_task(worker_manager.start_mailing(mailing.id))
+    await _render_mailing_screen(callback, mailing.id)
+    return True
+
+
+# ==================== Кнопка отмены ====================
+
+@router.callback_query(F.data == "cancel_mailing")
+async def cb_cancel_mailing(callback: CallbackQuery, state: FSMContext):
+    """Отмена сценария рассылки (отдельный callback от аккаунтов/прокси)."""
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    await state.clear()
+
+    await callback.message.edit_text(
+        "❌ <b>Отменено</b>\n\n"
+        "Операция отменена.",
+        reply_markup=get_mailing_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()

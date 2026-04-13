@@ -1,0 +1,74 @@
+"""
+Точка входа приложения.
+Запуск Control Bot и инициализация всех компонентов.
+"""
+import asyncio
+import sys
+
+from loguru import logger
+
+from bot.config import validate_config, LOG_LEVEL, OWNER_ID
+from utils.logger import setup_logger
+from utils.telemetry import telemetry_emitter
+
+
+async def main():
+    """Основная функция запуска."""
+    # Настройка логгера
+    setup_logger(LOG_LEVEL)
+    
+    log = logger
+    
+    log.info("=" * 50)
+    log.info("CoreBot - Telegram Mass Mailer")
+    log.info("=" * 50)
+    
+    # Валидация конфигурации
+    if not validate_config():
+        log.error("Конфигурация некорректна. Проверьте .env файл")
+        log.error("Заполните API_ID, API_HASH, BOT_TOKEN и OWNER_ID")
+        sys.exit(1)
+    
+    # Проверка OWNER_ID
+    if OWNER_ID == 0:
+        log.error("OWNER_ID не установлен. Укажите ваш Telegram ID в .env")
+        log.error("Узнать ID можно через бота @userinfobot")
+        sys.exit(1)
+    
+    log.info(f"Владелец бота: {OWNER_ID}")
+    
+    # Инициализация базы данных
+    from database.repository import db
+    try:
+        await db.connect()
+        log.info("База данных подключена")
+    except Exception as e:
+        log.error(f"Ошибка подключения к БД: {e}")
+        sys.exit(1)
+    
+    # Запуск бота
+    from bot.main import run_bot
+    from workers.warmup import warmup_runner
+    log.info("Запуск Control Bot...")
+    
+    try:
+        await telemetry_emitter.start()
+        warmup_runner.start()
+        await run_bot()
+    except KeyboardInterrupt:
+        log.info("Получен сигнал остановки")
+    except Exception as e:
+        log.error(f"Критическая ошибка бота: {e}")
+    finally:
+        await telemetry_emitter.stop()
+        await warmup_runner.stop()
+        # Закрытие подключения к БД
+        await db.disconnect()
+        log.info("Приложение остановлено")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
