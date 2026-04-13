@@ -15,6 +15,7 @@ from sqlalchemy import update
 from bot.config import OWNER_ID, FILES_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import get_clients_keyboard, get_cancel_with_back_keyboard, get_context_back_keyboard
+from bot.keyboards.main import CLIENTS_LIST_PAGE_SIZE, get_clients_list_keyboard
 from database.repository import db
 from database.session import session_scope
 from database.models import Client, ClientStatus
@@ -148,13 +149,32 @@ async def process_clients_txt(message: Message, state: FSMContext):
         await state.clear()
 
 
+def _clients_list_page_from_data(data: str) -> int:
+    if data == "clients_list":
+        return 0
+    if data.startswith("clients_list_p_"):
+        return int(data.rsplit("_", 1)[-1])
+    return 0
+
+
+@router.callback_query(F.data == "clients_page_info")
+async def cb_clients_page_info(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔", show_alert=True)
+        return
+    await callback.answer("Номер страницы · листайте ◀ ▶", show_alert=True)
+
+
 @router.callback_query(F.data == "clients_list")
+@router.callback_query(F.data.startswith("clients_list_p_"))
 async def cb_clients_list(callback: CallbackQuery):
     """Показать список клиентов."""
     if callback.from_user.id != OWNER_ID:
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
+    page = _clients_list_page_from_data(callback.data)
+
     async with session_scope() as session:
         from sqlalchemy import select, func
         # Общее количество
@@ -167,11 +187,11 @@ async def cb_clients_list(callback: CallbackQuery):
         )
         status_stats = {row[0].value: row[1] for row in status_result.all()}
             
-        # Последние 10
-        recent = await session.execute(
-            select(Client).order_by(Client.id.desc()).limit(10)
+        # Список клиентов (для пагинации)
+        rows = await session.execute(
+            select(Client).order_by(Client.id.desc())
         )
-        recent_clients = list(recent.scalars().all())
+        clients = list(rows.scalars().all())
     
     text = "📁 <b>База клиентов</b>\n\n"
     text += f"📊 <b>Всего:</b> {total_count}\n\n"
@@ -181,17 +201,17 @@ async def cb_clients_list(callback: CallbackQuery):
         f"❌ Невалидные: {status_stats.get('invalid', 0)}\n\n"
     )
     
-    if recent_clients:
-        text += "📋 <b>Последние 10:</b>\n"
-        for client in recent_clients:
-            status_emoji = {"new": "🟢", "contacted": "✅", "invalid": "❌", "blocked": "🚫"}.get(
-                client.status.value, "⚪"
-            )
-            text += f"{status_emoji} @{client.username}\n"
+    total = len(clients)
+    total_pages = max(1, (total + CLIENTS_LIST_PAGE_SIZE - 1) // CLIENTS_LIST_PAGE_SIZE) if total else 1
+    page = max(0, min(page, total_pages - 1))
+    if total:
+        start = page * CLIENTS_LIST_PAGE_SIZE + 1
+        end = min((page + 1) * CLIENTS_LIST_PAGE_SIZE, total)
+        text += f"\n📋 <b>Список клиентов:</b> страница {page + 1}/{total_pages} · строки {start}–{end}\n"
     
     await callback.message.answer(
         text,
-        reply_markup=get_context_back_keyboard("menu_clients"),
+        reply_markup=get_clients_list_keyboard(clients, page=page),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()

@@ -40,7 +40,7 @@
 | `photos.py` | Управление фото профиля userbot |
 | `twofa.py` | Установка 2FA |
 | `membership_delete.py` | Membership, подтверждение и удаление аккаунта |
-| `groups.py` | Группы аккаунтов (таблицы `groups` / `account_groups`), массовые проверки прокси и спам-блока по группе |
+| `groups.py` | Группы аккаунтов (таблицы `groups` / `account_groups`), массовые проверки и массовое редактирование профиля (name/username/bio/photo) |
 | `cancel.py` | Callback `cancel_accounts` |
 | `proxy_assign.py` | `account_change_proxy_*`, `proxy_assign_*` |
 | `tags.py` | Теги аккаунта |

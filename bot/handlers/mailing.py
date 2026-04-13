@@ -15,6 +15,7 @@ from sqlalchemy import update
 
 from bot.config import DEFAULT_NEURO_MODEL, OWNER_ID
 from bot.keyboards.main import (
+    MAILING_LIST_PAGE_SIZE,
     get_mailing_keyboard,
     get_mailing_list_keyboard,
     get_mailing_view_keyboard,
@@ -335,14 +336,33 @@ async def process_suffix(message: Message, state: FSMContext):
     )
 
 
+def _mailing_list_page_from_data(data: str) -> int:
+    if data == "mailing_list":
+        return 0
+    if data.startswith("mailing_list_p_"):
+        return int(data.rsplit("_", 1)[-1])
+    return 0
+
+
+@router.callback_query(F.data == "mailing_list_page_info")
+async def cb_mailing_list_page_info(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔", show_alert=True)
+        return
+    await callback.answer("Номер страницы · листайте ◀ ▶", show_alert=True)
+
+
 # ==================== Список рассылок ====================
 
 @router.callback_query(F.data == "mailing_list")
+@router.callback_query(F.data.startswith("mailing_list_p_"))
 async def cb_mailing_list(callback: CallbackQuery):
     """Показать список всех рассылок."""
     if callback.from_user.id != OWNER_ID:
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
+
+    page = _mailing_list_page_from_data(callback.data)
 
     async with session_scope() as session:
         from sqlalchemy import select
@@ -362,10 +382,17 @@ async def cb_mailing_list(callback: CallbackQuery):
         await callback.answer()
         return
 
+    total = len(mailings)
+    total_pages = max(1, (total + MAILING_LIST_PAGE_SIZE - 1) // MAILING_LIST_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * MAILING_LIST_PAGE_SIZE + 1
+    end = min((page + 1) * MAILING_LIST_PAGE_SIZE, total)
+
     await callback.message.answer(
         "📋 <b>Мои рассылки</b>\n\n"
-        f"Всего: {len(mailings)}",
-        reply_markup=get_mailing_list_keyboard(mailings),
+        f"Всего: {total}\n"
+        f"Страница {page + 1} из {total_pages} · строки {start}–{end}",
+        reply_markup=get_mailing_list_keyboard(mailings, page=page),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()

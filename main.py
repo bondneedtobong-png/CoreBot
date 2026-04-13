@@ -60,6 +60,16 @@ async def main():
     except Exception as e:
         log.error(f"Критическая ошибка бота: {e}")
     finally:
+        try:
+            from workers.manager import worker_manager
+            if worker_manager.is_running:
+                log.info("Запрошена остановка активной рассылки перед завершением")
+                worker_manager.stop_mailing()
+                # Даём циклу рассылки корректно завершить текущую итерацию.
+                await asyncio.sleep(1.0)
+            await worker_manager.disconnect_all()
+        except Exception as e:
+            log.warning(f"Ошибка graceful shutdown WorkerManager: {e}")
         await telemetry_emitter.stop()
         await warmup_runner.stop()
         # Закрытие подключения к БД

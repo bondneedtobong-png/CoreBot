@@ -6,6 +6,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 # Пагинация списков в Telegram
 ACCOUNTS_LIST_PAGE_SIZE = 5
 PROXY_LIST_PAGE_SIZE = 10
+MAILING_LIST_PAGE_SIZE = 10
+CLIENTS_LIST_PAGE_SIZE = 10
 
 
 # ==================== Главное меню ====================
@@ -593,6 +595,41 @@ def get_clients_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
+def get_clients_list_keyboard(clients: list, *, page: int = 0) -> InlineKeyboardMarkup:
+    """Клавиатура списка клиентов с пагинацией."""
+    keyboard = []
+    total = len(clients)
+    page_size = CLIENTS_LIST_PAGE_SIZE
+    total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+    page = max(0, min(int(page), total_pages - 1))
+    chunk = clients[page * page_size : (page + 1) * page_size]
+
+    if not chunk:
+        keyboard.append([InlineKeyboardButton(text="📭 Нет клиентов", callback_data="clients_empty")])
+    else:
+        for c in chunk:
+            status_emoji = {
+                "new": "🟢",
+                "contacted": "✅",
+                "invalid": "❌",
+                "blocked": "🚫",
+            }.get(c.status.value, "⚪")
+            uname = f"@{c.username}" if c.username else f"id:{c.id}"
+            keyboard.append([InlineKeyboardButton(text=f"{status_emoji} {uname}"[:64], callback_data="clients_page_info")])
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️ Пред.", callback_data=f"clients_list_p_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="clients_page_info"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="След. ▶️", callback_data=f"clients_list_p_{page + 1}"))
+        keyboard.append(nav)
+
+    keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_clients")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
 # ==================== Рассылки ====================
 
 def get_mailing_keyboard() -> InlineKeyboardMarkup:
@@ -611,16 +648,21 @@ def get_mailing_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_mailing_list_keyboard(mailings: list) -> InlineKeyboardMarkup:
+def get_mailing_list_keyboard(mailings: list, *, page: int = 0) -> InlineKeyboardMarkup:
     """Клавиатура со списком рассылок."""
     keyboard = []
+    total = len(mailings)
+    page_size = MAILING_LIST_PAGE_SIZE
+    total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+    page = max(0, min(int(page), total_pages - 1))
+    chunk = mailings[page * page_size : (page + 1) * page_size]
 
-    if not mailings:
+    if not chunk:
         keyboard.append([
             InlineKeyboardButton(text="📭 Нет рассылок", callback_data="mailing_empty")
         ])
     else:
-        for mailing in mailings:
+        for mailing in chunk:
             status_emoji = {
                 "draft": "📝",
                 "pending": "⏳",
@@ -637,6 +679,15 @@ def get_mailing_list_keyboard(mailings: list) -> InlineKeyboardMarkup:
                     callback_data=f"mailing_view_{mailing.id}"
                 )
             ])
+
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="◀️ Пред.", callback_data=f"mailing_list_p_{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="mailing_list_page_info"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(text="След. ▶️", callback_data=f"mailing_list_p_{page + 1}"))
+        keyboard.append(nav_row)
 
     keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_mailing")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
