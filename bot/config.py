@@ -51,13 +51,22 @@ WARMUP_DAILY_ACTION_LIMIT = int(os.getenv("WARMUP_DAILY_ACTION_LIMIT", "40"))
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
 OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "").strip()
-DEFAULT_NEURO_MODEL = os.getenv("DEFAULT_NEURO_MODEL", "google/gemini-2.0-flash-001:free").strip()
+DEFAULT_NEURO_MODEL = os.getenv("DEFAULT_NEURO_MODEL", "openai/gpt-oss-120b:free").strip()
 NEURO_FALLBACK_MODELS = [
     x.strip() for x in os.getenv("NEURO_FALLBACK_MODELS", "").split(",") if x.strip()
 ]
 NEURO_MAX_CONCURRENT = int(os.getenv("NEURO_MAX_CONCURRENT", "8"))
 NEURO_HISTORY_LIMIT = int(os.getenv("NEURO_HISTORY_LIMIT", "20"))
-NEURO_MAX_TOKENS = int(os.getenv("NEURO_MAX_TOKENS", "1024"))
+# Базовые параметры сэмплирования (как в UI OpenRouter; переопределяются JSON рассылки)
+NEURO_MAX_TOKENS = int(os.getenv("NEURO_MAX_TOKENS", "0"))
+NEURO_DEFAULT_TEMPERATURE = float(os.getenv("NEURO_DEFAULT_TEMPERATURE", "0.7"))
+NEURO_DEFAULT_TOP_P = float(os.getenv("NEURO_DEFAULT_TOP_P", "0.9"))
+NEURO_DEFAULT_TOP_K = int(os.getenv("NEURO_DEFAULT_TOP_K", "40"))
+NEURO_DEFAULT_FREQUENCY_PENALTY = float(os.getenv("NEURO_DEFAULT_FREQUENCY_PENALTY", "0.0"))
+NEURO_DEFAULT_PRESENCE_PENALTY = float(os.getenv("NEURO_DEFAULT_PRESENCE_PENALTY", "0.0"))
+NEURO_DEFAULT_REPETITION_PENALTY = float(os.getenv("NEURO_DEFAULT_REPETITION_PENALTY", "1.15"))
+NEURO_DEFAULT_MIN_P = float(os.getenv("NEURO_DEFAULT_MIN_P", "0.1"))
+NEURO_DEFAULT_TOP_A = float(os.getenv("NEURO_DEFAULT_TOP_A", "0.0"))
 NEURO_OPENROUTER_MAX_RETRIES = int(os.getenv("NEURO_OPENROUTER_MAX_RETRIES", "3"))
 NEURO_OPENROUTER_RETRY_BASE_SEC = float(os.getenv("NEURO_OPENROUTER_RETRY_BASE_SEC", "2"))
 NEURO_UNAVAILABLE_TEMPLATE = os.getenv(
@@ -68,10 +77,27 @@ DEFAULT_NEURO_SYSTEM_PROMPT = (
     "Ты ведёшь переписку от лица проекта: естественно, кратко, по делу.\n\n"
     "Служебные метки (латиница, без пробелов внутри скобок): "
     "[SEND_LINK] — только если пользователь явно просит ссылку, инвайт или «как вступить»; "
-    "[STOP] — если просит прекратить переписку. "
+    "[STOP] — если просит прекратить переписку (в CRM ставится класс stop); "
+    "[ACCEPT] — если явно согласился/готов вступить; "
+    "[DECLINE] — если явно отказался; "
+    "[HATER] — если агрессия/оскорбления/токсичный отказ. "
     "На приветствия, «как дела», общие вопросы отвечай обычным текстом, без этих меток. "
-    "Никогда не отправляй пользователю одну только метку без нормального ответа."
+    "Никогда не отправляй пользователю одну только метку без нормального ответа.\n\n"
+    "Примеры:\n"
+    "1) Пользователь: «как вступить?» → ответ с пояснением + [SEND_LINK]\n"
+    "2) Пользователь: «хватит писать, не интересно» → вежливый ответ + [STOP]\n"
+    "3) Пользователь: «окей, готов вступить» → подтверждение + [ACCEPT]\n"
+    "4) Пользователь: «нет, мне не подходит» → коротко закрыть диалог + [DECLINE]\n"
+    "5) Пользователь: «отстань, иди ...» → нейтрально завершить + [HATER]"
 )
+MAILING_BASE_UTC_OFFSET = int(os.getenv("MAILING_BASE_UTC_OFFSET", "0"))
+
+
+def mailing_timezone_label(hours: int) -> str:
+    """Человекочитаемая метка UTC-сдвига для плейсхолдеров (целые часы)."""
+    sign = "+" if int(hours) >= 0 else "-"
+    return f"UTC{sign}{abs(int(hours)):02d}:00"
+
 
 # Control Plane / distributed-agent telemetry
 CP_AGENT_ENABLED = os.getenv("CP_AGENT_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")

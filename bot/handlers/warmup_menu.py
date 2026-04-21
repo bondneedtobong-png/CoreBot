@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.config import OWNER_ID
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import (
+    get_warmup_status_keyboard,
     get_warmup_menu_keyboard,
     get_warmup_accounts_pick_keyboard,
     get_warmup_account_profile_keyboard,
@@ -21,9 +22,11 @@ from bot.keyboards.main import (
     get_warmup_copy_confirm_keyboard,
 )
 from database.session import session_scope
+from utils.logger import log
 from database.repositories import (
     AccountRepository,
     GroupRepository,
+    WarmupLogRepository,
     WarmupProfileRepository,
 )
 
@@ -50,6 +53,33 @@ async def cb_menu_warmup(callback: CallbackQuery):
         reply_markup=get_warmup_menu_keyboard(),
         parse_mode=ParseMode.HTML,
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "warmup_status_summary")
+async def cb_warmup_status_summary(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    try:
+        async with session_scope() as session:
+            s = await WarmupLogRepository.summary(session)
+        text = (
+            "🔥 <b>Прогрев аккаунтов</b>\n\n"
+            f"• Включено аккаунтов: <b>{s['enabled']}</b>\n"
+            f"• На паузе: <b>{s['paused']}</b>\n"
+            f"• Действий за 24ч: <b>{s['actions_24h']}</b>\n\n"
+            "Сейчас активен безопасный режим (умеренный профиль)."
+        )
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_warmup_status_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        log.error(f"warmup_status_summary: {e}")
+        await callback.answer(f"Ошибка: {e}", show_alert=True)
+        return
     await callback.answer()
 
 

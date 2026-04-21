@@ -3,19 +3,19 @@
 Загрузка TXT, просмотр, очистка.
 """
 import re
+import json
 from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import update
 
 from bot.config import OWNER_ID, FILES_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import get_clients_keyboard, get_cancel_with_back_keyboard, get_context_back_keyboard
-from bot.keyboards.main import CLIENTS_LIST_PAGE_SIZE, get_clients_list_keyboard
 from database.repository import db
 from database.session import session_scope
 from database.models import Client, ClientStatus
@@ -29,6 +29,72 @@ class ClientUpload(StatesGroup):
     """Состояния для загрузки базы клиентов."""
     waiting_for_file = State()
     processing = State()
+
+
+CLIENT_STATS_FILE = FILES_DIR / "clients_stats_reset.json"
+
+
+def _clients_dashboard_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📥 Загрузить базу (TXT)", callback_data="clients_upload")],
+            [InlineKeyboardButton(text="⬇️ Скачать необработанных (NEW)", callback_data="clients_export_new")],
+            [InlineKeyboardButton(text="♻️ Сбросить статистику", callback_data="clients_stats_reset_confirm")],
+            [InlineKeyboardButton(text="🗑 Очистить базу", callback_data="clients_clear")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="db_sheet_213")],
+        ]
+    )
+
+
+def _load_clients_stats_baseline() -> dict:
+    try:
+        if CLIENT_STATS_FILE.exists():
+            return json.loads(CLIENT_STATS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"processed": 0, "skipped": 0}
+
+
+def _save_clients_stats_baseline(processed: int, skipped: int) -> None:
+    FILES_DIR.mkdir(parents=True, exist_ok=True)
+    CLIENT_STATS_FILE.write_text(
+        json.dumps({"processed": int(processed), "skipped": int(skipped)}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+async def render_clients_dashboard(callback: CallbackQuery) -> None:
+    async with session_scope() as session:
+        from sqlalchemy import select, func
+        total = await session.execute(select(func.count(Client.id)))
+        total_count = int(total.scalar() or 0)
+        status_result = await session.execute(
+            select(Client.status, func.count(Client.id)).group_by(Client.status)
+        )
+        status_stats = {row[0].value: int(row[1]) for row in status_result.all()}
+
+    contacted = status_stats.get("contacted", 0)
+    blocked = status_stats.get("blocked", 0)
+    new_count = status_stats.get("new", 0)
+    invalid = status_stats.get("invalid", 0)
+
+    baseline = _load_clients_stats_baseline()
+    processed_now = max(0, contacted - int(baseline.get("processed", 0)))
+    skipped_now = max(0, blocked - int(baseline.get("skipped", 0)))
+
+    text = (
+        "📁 <b>База клиентов</b>\n\n"
+        f"📊 Всего в базе: <b>{total_count}</b>\n"
+        f"✅ Обработано (с момента сброса): <b>{processed_now}</b>\n"
+        f"🚫 Пропущено (STOP-лист, с момента сброса): <b>{skipped_now}</b>\n"
+        f"🆕 Осталось сейчас (NEW): <b>{new_count}</b>\n\n"
+        f"ℹ️ Дополнительно: невалидные <b>{invalid}</b>"
+    )
+    await callback.message.answer(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=_clients_dashboard_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "clients_upload")
@@ -51,7 +117,7 @@ async def cb_clients_upload(callback: CallbackQuery, state: FSMContext):
         "  username2\n"
         "  @username3\n\n"
         "❌ Отмена: /start",
-        reply_markup=get_cancel_with_back_keyboard("cancel_clients_upload", "menu_clients"),
+        reply_markup=get_cancel_with_back_keyboard("cancel_clients_upload", "db_sec_sheets"),
     )
     await state.set_state(ClientUpload.waiting_for_file)
     await callback.answer()
@@ -149,72 +215,88 @@ async def process_clients_txt(message: Message, state: FSMContext):
         await state.clear()
 
 
-def _clients_list_page_from_data(data: str) -> int:
-    if data == "clients_list":
-        return 0
-    if data.startswith("clients_list_p_"):
-        return int(data.rsplit("_", 1)[-1])
-    return 0
-
-
-@router.callback_query(F.data == "clients_page_info")
-async def cb_clients_page_info(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
-        await callback.answer("⛔", show_alert=True)
-        return
-    await callback.answer("Номер страницы · листайте ◀ ▶", show_alert=True)
-
-
 @router.callback_query(F.data == "clients_list")
-@router.callback_query(F.data.startswith("clients_list_p_"))
 async def cb_clients_list(callback: CallbackQuery):
-    """Показать список клиентов."""
+    """Дашборд клиентов: статистика и действия без длинного списка."""
     if callback.from_user.id != OWNER_ID:
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
-    
-    page = _clients_list_page_from_data(callback.data)
+
+    await render_clients_dashboard(callback)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "clients_export_new")
+async def cb_clients_export_new(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    async with session_scope() as session:
+        from sqlalchemy import select
+        rows = await session.execute(
+            select(Client.username)
+            .where(Client.status == ClientStatus.NEW)
+            .order_by(Client.id.asc())
+        )
+        usernames = [str(r[0]).strip() for r in rows.fetchall() if r[0]]
+
+    if not usernames:
+        await callback.answer("Нет необработанных клиентов (NEW).", show_alert=True)
+        return
+
+    body = "\n".join(f"@{u.lstrip('@')}" for u in usernames) + "\n"
+    file = BufferedInputFile(
+        body.encode("utf-8"),
+        filename="clients_new_export.txt",
+    )
+    await callback.message.answer_document(
+        document=file,
+        caption=f"⬇️ Выгрузка NEW-клиентов: <b>{len(usernames)}</b>",
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer("Файл отправлен")
+
+
+@router.callback_query(F.data == "clients_stats_reset_confirm")
+async def cb_clients_stats_reset_confirm(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="♻️ Да, сбросить", callback_data="clients_stats_reset_apply")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="db_m_2131")],
+        ]
+    )
+    await callback.message.answer(
+        "♻️ <b>Сброс статистики клиентов</b>\n\n"
+        "Сбросятся счётчики «Обработано» и «Пропущено (STOP-лист)».\n"
+        "Статусы клиентов в базе не изменятся.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "clients_stats_reset_apply")
+async def cb_clients_stats_reset_apply(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
 
     async with session_scope() as session:
         from sqlalchemy import select, func
-        # Общее количество
-        total = await session.execute(select(func.count(Client.id)))
-        total_count = total.scalar()
-            
-        # По статусам
         status_result = await session.execute(
             select(Client.status, func.count(Client.id)).group_by(Client.status)
         )
-        status_stats = {row[0].value: row[1] for row in status_result.all()}
-            
-        # Список клиентов (для пагинации)
-        rows = await session.execute(
-            select(Client).order_by(Client.id.desc())
-        )
-        clients = list(rows.scalars().all())
-    
-    text = "📁 <b>База клиентов</b>\n\n"
-    text += f"📊 <b>Всего:</b> {total_count}\n\n"
-    text += (
-        f"🟢 Новые: {status_stats.get('new', 0)}\n"
-        f"✅ Обработанные: {status_stats.get('contacted', 0)}\n"
-        f"❌ Невалидные: {status_stats.get('invalid', 0)}\n\n"
+        status_stats = {row[0].value: int(row[1]) for row in status_result.all()}
+    _save_clients_stats_baseline(
+        processed=status_stats.get("contacted", 0),
+        skipped=status_stats.get("blocked", 0),
     )
-    
-    total = len(clients)
-    total_pages = max(1, (total + CLIENTS_LIST_PAGE_SIZE - 1) // CLIENTS_LIST_PAGE_SIZE) if total else 1
-    page = max(0, min(page, total_pages - 1))
-    if total:
-        start = page * CLIENTS_LIST_PAGE_SIZE + 1
-        end = min((page + 1) * CLIENTS_LIST_PAGE_SIZE, total)
-        text += f"\n📋 <b>Список клиентов:</b> страница {page + 1}/{total_pages} · строки {start}–{end}\n"
-    
-    await callback.message.answer(
-        text,
-        reply_markup=get_clients_list_keyboard(clients, page=page),
-        parse_mode=ParseMode.HTML,
-    )
-    await callback.answer()
+    await callback.answer("Статистика сброшена")
+    await render_clients_dashboard(callback)
 
 
 @router.callback_query(F.data == "clients_clear")
@@ -273,7 +355,7 @@ async def cb_clients_reset_contacted_confirm(callback: CallbackQuery):
     await callback.message.answer(
         f"✅ Готово. Переведено в NEW: <b>{changed}</b> клиентов.",
         parse_mode=ParseMode.HTML,
-        reply_markup=get_context_back_keyboard("menu_clients"),
+        reply_markup=get_context_back_keyboard("menu_database"),
     )
     await callback.answer("Сброшено")
 
@@ -319,7 +401,7 @@ def get_confirm_reset_clients_keyboard():
             ),
         ],
         [
-            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_clients"),
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="db_sheet_213"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)

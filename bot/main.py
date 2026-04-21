@@ -16,14 +16,14 @@ from bot.keyboards.main import (
     get_main_keyboard,
     get_proxy_keyboard,
     get_accounts_keyboard,
-    get_clients_keyboard,
     get_mailing_keyboard,
-    get_monitoring_keyboard,
 )
 from bot.handlers.accounts import router as accounts_router
 from bot.handlers.clients import router as clients_router
+from bot.handlers.database import database_router
 from bot.handlers.mailing import router as mailing_router
-from bot.handlers.monitoring import router as monitoring_router
+from bot.handlers.neurochat import router as neurochat_router
+from bot.handlers.openrouter_key import router as openrouter_key_router
 from bot.handlers.proxy import router as proxy_router
 from bot.handlers.warmup_menu import router as warmup_menu_router
 from bot.handlers.username_list_tool import router as username_list_tool_router
@@ -156,9 +156,11 @@ async def run_bot():
 
     # 6. Регистрация роутеров
     dp.include_router(accounts_router)
+    dp.include_router(database_router)
     dp.include_router(clients_router)
     dp.include_router(mailing_router)
-    dp.include_router(monitoring_router)
+    dp.include_router(openrouter_key_router)
+    dp.include_router(neurochat_router)
     dp.include_router(proxy_router)
     dp.include_router(warmup_menu_router)
     dp.include_router(username_list_tool_router)
@@ -304,39 +306,6 @@ async def run_bot():
             "📁 Отправьте ZIP-архив с папкой tdata,\n"
             "или выберите действие:",
             reply_markup=get_accounts_keyboard(),
-        )
-        await callback.answer()
-
-    @dp.callback_query(F.data == "menu_clients")
-    async def cb_clients(callback: CallbackQuery, state: FSMContext):
-        """Кнопка управления клиентами."""
-        if callback.from_user.id != OWNER_ID:
-            await callback.answer("⛔ Доступ запрещён", show_alert=True)
-            return
-
-        await state.clear()
-        await safe_edit_message(
-            callback,
-            "📁 <b>База клиентов</b>\n\n"
-            "Загрузите TXT со списком @username или воспользуйтесь "
-            "«Обработать список t.me» для сырых ссылок из парсеров.",
-            reply_markup=get_clients_keyboard(),
-        )
-        await callback.answer()
-
-    @dp.callback_query(F.data == "menu_monitoring")
-    async def cb_monitoring(callback: CallbackQuery):
-        """Кнопка мониторинга."""
-        if callback.from_user.id != OWNER_ID:
-            await callback.answer("⛔ Доступ запрещён", show_alert=True)
-            return
-
-        await safe_edit_message(
-            callback,
-            "📊 <b>Мониторинг</b>\n\n"
-            "Просмотр логов и статистики.\n"
-            "Используйте команду /status для быстрого просмотра.",
-            reply_markup=get_monitoring_keyboard(),
         )
         await callback.answer()
 

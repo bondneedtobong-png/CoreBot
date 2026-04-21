@@ -88,7 +88,7 @@ async def cb_username_tool_start(callback: CallbackQuery, state: FSMContext):
         "• Кнопки: убрать кандидатов из итогового списка или оставить как есть.\n\n"
         "❌ Отмена: кнопка ниже или /start",
         reply_markup=get_cancel_with_back_keyboard(
-            "cancel_username_tool", "menu_clients"
+            "cancel_username_tool", "menu_database"
         ),
         parse_mode=ParseMode.HTML,
     )

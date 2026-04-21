@@ -13,6 +13,9 @@
 | `main.py` | Точка входа: логирование, инициализация БД, запуск Control Bot |
 | `bot/main.py` | Dispatcher, роутеры, команды `/start`, `/help`, `/status`, сессия aiohttp (прокси для Bot API) |
 | `bot/handlers/` | Обработчики callback и сообщений |
+| `bot/handlers/database/` | Модуль «База данных»: навигация, CRM-таблицы (`client_class_counters`, …), заглушки подразделов |
+| `database/crm_repositories.py` | Счётчики классов, взаимодействия, сессии рассылки, accept-транскрипты |
+| `services/database/` | Сервисы: инкремент классов, сохранение accept-транскрипта (Telethon — TODO) |
 | `bot/keyboards/main.py` | Inline-клавиатуры |
 | `workers/manager.py` | `Worker` (один Telethon-клиент), `WorkerManager` (пул, рассылка, проверки) |
 | `workers/session_converter.py` | Tdata → `.session` (tgconvertor) |
@@ -61,5 +64,7 @@
 - `data/tdata_temp/` — распаковка ZIP при импорте  
 
 Кнопки «Отмена» в разных разделах используют разные `callback_data` (`cancel_accounts`, `cancel_mailing`, `cancel_proxy`). Старое значение `cancel` обрабатывается последним роутером в `bot/main.py` и ведёт в главное меню.
+
+Планируемый модуль **«База данных»** (замена раздела «Клиенты»), классы-счётчики, бэкапы и требования к рассылке/нейрочату — в [DATABASE_MODULE_SPEC.md](DATABASE_MODULE_SPEC.md).
 
 Подробный список улучшений и известных ограничений — в [BACKLOG.md](BACKLOG.md).

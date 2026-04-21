@@ -15,6 +15,7 @@ from sqlalchemy import (
     Enum,
     Table,
     Index,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship
 import enum
@@ -185,6 +186,8 @@ class Account(Base):
     mailing_logs = relationship("MailingLog", back_populates="account")
     neuro_chat_messages = relationship("NeuroChatMessage", back_populates="account", cascade="all, delete-orphan")
     groups = relationship("Group", secondary=account_groups, back_populates="accounts")
+    client_interactions = relationship("ClientInteraction", back_populates="account")
+    client_mail_sessions = relationship("ClientMailSession", back_populates="account")
 
     def __repr__(self):
         return f"<Account {self.username or self.phone} ({self.status.value})>"
@@ -268,9 +271,158 @@ class Client(Base):
     
     # Связи
     mailing_logs = relationship("MailingLog", back_populates="client")
-    
+    class_counters = relationship(
+        "ClientClassCounter",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
+    tags = relationship(
+        "ClientTag",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
+    interactions = relationship(
+        "ClientInteraction",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
+    mail_sessions = relationship(
+        "ClientMailSession",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
+
     def __repr__(self):
         return f"<Client @{self.username}>"
+
+
+class ClientClassCounter(Base):
+    """
+    Счётчики классов по клиенту (accept, pulse, bl, …) — монотонный рост.
+    """
+
+    __tablename__ = "client_class_counters"
+    __table_args__ = (
+        UniqueConstraint("client_id", "class_key", name="uq_client_class_counter"),
+        Index("ix_class_counters_client", "client_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    class_key = Column(String(64), nullable=False)
+    count = Column(Integer, nullable=False, default=0)
+
+    client = relationship("Client", back_populates="class_counters")
+
+    def __repr__(self):
+        return f"<ClientClassCounter {self.class_key}={self.count}>"
+
+
+class ClientTag(Base):
+    """Произвольные теги пользователя."""
+
+    __tablename__ = "client_tags"
+    __table_args__ = (
+        UniqueConstraint("client_id", "tag", name="uq_client_tag"),
+        Index("ix_client_tags_tag", "tag"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    tag = Column(String(128), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    client = relationship("Client", back_populates="tags")
+
+    def __repr__(self):
+        return f"<ClientTag {self.tag}>"
+
+
+class ClientInteraction(Base):
+    """
+    События: pulse, сообщения нейрочата, триггеры классов и т.д.
+    """
+
+    __tablename__ = "client_interactions"
+    __table_args__ = (
+        Index("ix_client_interactions_client_created", "client_id", "created_at"),
+        Index("ix_client_interactions_mailing", "mailing_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="SET NULL"), nullable=True)
+    direction = Column(String(8), nullable=False, default="in")  # in | out | system
+    kind = Column(String(64), nullable=False)
+    body = Column(Text, nullable=True)
+    payload_json = Column(Text, nullable=True)
+    telegram_message_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    client = relationship("Client", back_populates="interactions")
+    account = relationship("Account", back_populates="client_interactions")
+    mailing = relationship("Mailing", back_populates="client_interactions")
+
+
+class ClientMailSession(Base):
+    """
+    Сессия рассылки по (клиент, аккаунт, рассылка).
+    Для ретенции переписки и привязки accept-транскрипта.
+    """
+
+    __tablename__ = "client_mail_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "client_id",
+            "account_id",
+            "mailing_id",
+            name="uq_client_mail_session",
+        ),
+        Index("ix_mail_sessions_client", "client_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
+    first_outbound_at = Column(DateTime, nullable=True)
+    success_end_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    client = relationship("Client", back_populates="mail_sessions")
+    account = relationship("Account", back_populates="client_mail_sessions")
+    mailing = relationship("Mailing", back_populates="client_mail_sessions")
+    accept_transcript = relationship(
+        "ClientAcceptTranscript",
+        back_populates="mail_session",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class ClientAcceptTranscript(Base):
+    """
+    Полная переписка от начала удачной рассылки до успешного конца (при accept).
+    """
+
+    __tablename__ = "client_accept_transcripts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mail_session_id = Column(
+        Integer,
+        ForeignKey("client_mail_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    messages_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    mail_session = relationship("ClientMailSession", back_populates="accept_transcript")
+
+    def __repr__(self):
+        return "<ClientAcceptTranscript>"
 
 
 class Mailing(Base):
@@ -314,19 +466,83 @@ class Mailing(Base):
     target_group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
     # JSON-массив строк — дополнительные варианты текста (основной текст в message_text)
     message_variants_json = Column(Text, nullable=True, default="[]")
+    # Режим перебора вариантов первого сообщения: random | sequential
+    variant_mode = Column(String(20), nullable=False, default="random")
     # Зарезервировано под автоответы / нейросеть
     neurochat_enabled = Column(Boolean, default=False)
-    # Идентификатор модели OpenRouter (например google/gemini-2.0-flash-001:free)
+    # Идентификатор модели OpenRouter (например openai/gpt-oss-120b:free)
     neuro_model = Column(String(255), nullable=True)
+    # JSON: параметры сэмплирования (temperature, top_p, max_tokens, …) для OpenRouter
+    neuro_sampling_json = Column(Text, nullable=True, default="{}")
     # Кастомная ссылка для плейсхолдера {link}
     community_link = Column(String(1024), nullable=True)
+    # Фильтр очереди рассылки: JSON {"client_status":"new"|"open","include_classes":[],"exclude_classes":["bl"]}
+    audience_filter_json = Column(Text, nullable=True)
+    # Режим аудитории: test | new | classes (classes — фильтр по классам из audience_filter_json)
+    audience_mode = Column(String(20), nullable=False, default="classes")
+    # Лимит успешных первых сообщений за запуск (None — без лимита)
+    max_recipients = Column(Integer, nullable=True)
+    # Пауза рассылки (первое сообщение) для аккаунта после messages_per_batch успешных отправок
+    mailing_cooldown_hours = Column(Float, nullable=False, default=12.0)
 
     # Связи
     logs = relationship("MailingLog", back_populates="mailing")
     target_group = relationship("Group", foreign_keys=[target_group_id])
+    client_interactions = relationship("ClientInteraction", back_populates="mailing")
+    client_mail_sessions = relationship("ClientMailSession", back_populates="mailing")
 
     def __repr__(self):
         return f"<Mailing {self.name or self.id} ({self.status.value})>"
+
+
+class MailingTestRecipient(Base):
+    """Тестовая аудитория рассылки: username из txt, привязка к Client для отправки и локальных классов."""
+
+    __tablename__ = "mailing_test_recipients"
+    __table_args__ = (
+        UniqueConstraint("mailing_id", "username", name="uq_mailing_test_username"),
+        Index("ix_mailing_test_mailing", "mailing_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
+    username = Column(String(255), nullable=False)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MailingLocalClassCounter(Base):
+    """Счётчики классов только внутри тестовой рассылки (audience_mode=test)."""
+
+    __tablename__ = "mailing_local_class_counters"
+    __table_args__ = (
+        UniqueConstraint(
+            "mailing_id", "client_id", "class_key", name="uq_mailing_local_class"
+        ),
+        Index("ix_mailing_local_mc", "mailing_id", "client_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    class_key = Column(String(64), nullable=False)
+    count = Column(Integer, default=0)
+
+
+class MailingAccountState(Base):
+    """Волна первых сообщений и кулдаун рассылки по аккаунту в рамках кампании."""
+
+    __tablename__ = "mailing_account_states"
+    __table_args__ = (
+        UniqueConstraint("mailing_id", "account_id", name="uq_mailing_account_state"),
+        Index("ix_mas_mailing_cooldown", "mailing_id", "cooldown_until"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    sent_in_wave = Column(Integer, default=0)
+    cooldown_until = Column(DateTime, nullable=True)
 
 
 class MailingLog(Base):
@@ -395,6 +611,23 @@ class NeuroActionLog(Base):
 
     def __repr__(self):
         return f"<NeuroAction {self.action} mailing={self.mailing_id} client={self.client_id}>"
+
+
+class InstanceSettings(Base):
+    """
+    Единственная строка настроек инстанса (id=1): ключи API и прочее.
+    """
+
+    __tablename__ = "instance_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=False)
+    # Зашифрованное или помеченное хранение ключа OpenRouter (см. utils/crypto_openrouter)
+    openrouter_key_ciphertext = Column(Text, nullable=True)
+    # Базовый UTC-сдвиг для плейсхолдеров {date}/{time}/… в первом сообщении (часы, −12…+14). None = брать из .env MAILING_BASE_UTC_OFFSET
+    mailing_base_utc_offset = Column(Integer, nullable=True)
+
+    def __repr__(self):
+        return "<InstanceSettings>"
 
 
 class NeuroStopList(Base):

@@ -8,7 +8,7 @@ import os
 import random
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Callable, Any, Union
 from pathlib import Path
 from dotenv import load_dotenv
@@ -25,15 +25,19 @@ from database.models import Account, AccountStatus, ClientStatus, Proxy, ProxyTy
 from bot.config import (
     BANDWIDTH_SKIP_PROFILE_ENRICH,
     BANDWIDTH_SKIP_SPAMBOT_CHECK,
+    MAILING_BASE_UTC_OFFSET,
 )
 from database.repositories import (
     AccountRepository,
     GroupRepository,
+    InstanceSettingsRepository,
+    MailingAccountStateRepository,
     ProxyRepository,
     ClientRepository,
     MailingRepository,
     MailingLogRepository,
 )
+from database.crm_repositories import ClientMailSessionRepository
 from database.repository import db
 from database.session import session_scope
 from utils.logger import log
@@ -81,6 +85,11 @@ def _mailing_send_failure_hint(error: Optional[str]) -> str:
     if "No user has" in e and "username" in e:
         return "Пользователь с таким @username не найден — пометьте клиента невалидным или проверьте ник."
     return "См. текст ошибки; часто помогает увеличение задержек и снижение частоты первых сообщений."
+
+
+def _fmt_utc_offset(hours: int) -> str:
+    sign = "+" if hours >= 0 else "-"
+    return f"UTC{sign}{abs(int(hours)):02d}:00"
 
 
 # Глобальные API credentials (кэшируются)
@@ -752,6 +761,7 @@ class WorkerManager:
         self.workers: Dict[int, Worker] = {}  # account_id -> Worker
         self.is_running = False
         self.current_mailing_id: Optional[int] = None
+        self._mailing_utc_offset: Optional[int] = None  # эффективный UTC-сдвиг на время рассылки
         self._stop_event = asyncio.Event()
         # True с запуска start_mailing до конца восстановления пула (в т.ч. фоновое)
         self._mailing_busy = False
@@ -980,17 +990,24 @@ class WorkerManager:
         """
         Подстановка плейсхолдеров в текст первого сообщения.
 
-        Доступно: {username} {date} {time} {datetime} {fullname} {firstname} {lastname}
+        Доступно: {username} {date} {time} {datetime} {timezone} {firstname} {lastname}
         {phone} {account_id} {mailing} {link} {random4} {random6}
+        Динамические офсеты: {time+3} {time-2} {datetime+1} {date-1} {timezone+2}
         """
-        now = datetime.utcnow()
+        base = (
+            self._mailing_utc_offset
+            if self._mailing_utc_offset is not None
+            else MAILING_BASE_UTC_OFFSET
+        )
+        now = datetime.now(timezone.utc) + timedelta(hours=base)
 
         replacements = {
             "{username}": f"@{client_username}",
             "{date}": now.strftime("%d.%m.%Y"),
             "{time}": now.strftime("%H:%M"),
             "{datetime}": now.strftime("%d.%m.%Y %H:%M"),
-            "{fullname}": client_username,
+            "{fullname}": client_username,  # legacy alias
+            "{timezone}": _fmt_utc_offset(base),
             "{firstname}": (account.first_name or "") if account else "",
             "{lastname}": (account.last_name or "") if account else "",
             "{phone}": account.phone if account else "",
@@ -1003,6 +1020,26 @@ class WorkerManager:
         result = text
         for key, value in replacements.items():
             result = result.replace(key, value)
+
+        def _offset_sub(match: re.Match[str]) -> str:
+            token = (match.group(1) or "").lower()
+            delta = int(match.group(2) or "0")
+            shifted = now + timedelta(hours=delta)
+            if token == "time":
+                return shifted.strftime("%H:%M")
+            if token == "date":
+                return shifted.strftime("%d.%m.%Y")
+            if token == "datetime":
+                return shifted.strftime("%d.%m.%Y %H:%M")
+            if token == "timezone":
+                return _fmt_utc_offset(base + delta)
+            return ""
+
+        result = re.sub(
+            r"\{(time|date|datetime|timezone)([+-]\d{1,2})\}",
+            _offset_sub,
+            result,
+        )
         return result
     
     async def start_mailing(
@@ -1038,6 +1075,11 @@ class WorkerManager:
                     log.error(f"Рассылка {mailing_id} не найдена")
                     return
 
+                self._mailing_utc_offset = (
+                    await InstanceSettingsRepository.get_effective_mailing_base_utc_offset(
+                        session
+                    )
+                )
                 variants: List[str] = []
                 if mailing.message_text and str(mailing.message_text).strip():
                     variants.append(mailing.message_text.strip())
@@ -1066,6 +1108,9 @@ class WorkerManager:
                 delay_between_accounts = float(mailing.delay_between_accounts or 10.0)
                 batch_delay = float(mailing.batch_delay or 0.0)
                 messages_per_account = max(1, int(mailing.messages_per_batch or 10))
+                variant_mode = (getattr(mailing, "variant_mode", None) or "random").strip().lower()
+                if variant_mode not in ("random", "sequential"):
+                    variant_mode = "random"
                 auto_stop_hours = (
                     float(mailing.auto_stop_hours)
                     if getattr(mailing, "auto_stop_hours", None)
@@ -1089,12 +1134,18 @@ class WorkerManager:
                 else:
                     log.info(f"Запуск рассылки {mailing_id} (все подходящие аккаунты)")
 
+                mailing_cooldown_hours = float(
+                    getattr(mailing, "mailing_cooldown_hours", None) or 12.0
+                )
+                max_recipients_cap = getattr(mailing, "max_recipients", None)
+
             safe_name = html.escape(str(mailing_name or ""), quote=False)
             _start_lines = [
                 f"🚀 <b>Рассылка #{mailing_id}</b> «{safe_name}» запущена.",
                 f"👥 Аккаунтов в группе: <b>{n_group_accounts if n_group_accounts else 'все доступные'}</b>",
                 f"📨 Ротация: после <b>{messages_per_account}</b> успешных с одного аккаунта — "
                 "следующий (лимит не накапливается между запусками; логи — в мониторинге).",
+                f"🧩 Перебор вариантов первого сообщения: <b>{'по очереди' if variant_mode == 'sequential' else 'случайно'}</b>.",
                 "<i>Пул после рассылки восстанавливается только для этой группы — нейрочат на них остаётся.</i>",
             ]
             await self._notify_owner_html("\n".join(_start_lines))
@@ -1108,7 +1159,9 @@ class WorkerManager:
             processed = 0
             current_idx = 0
             sent_from_current = 0
+            sequential_variant_idx = 0
             prev_eligible_ids: Optional[tuple[int, ...]] = None
+            cap_reached = False
 
             while True:
                 if self._stop_event.is_set():
@@ -1121,16 +1174,16 @@ class WorkerManager:
                     break
 
                 async with session_scope() as session:
-                    res = await session.execute(
-                        select(Mailing.target_group_id).where(Mailing.id == mailing_id)
-                    )
-                    group_id = res.scalar_one_or_none()
+                    mrow = await MailingRepository.get_by_id(session, mailing_id)
+                    if not mrow:
+                        log.error(f"Рассылка {mailing_id} пропала из БД")
+                        break
+                    group_id = mrow.target_group_id
+                    clients = await ClientRepository.get_mailing_queue(session, mrow)
 
-                async with session_scope() as session:
-                    clients = await ClientRepository.get_new(session)
                 if not clients:
-                    await self._interruptible_sleep(10)
-                    continue
+                    log.info(f"Рассылка {mailing_id}: очередь пуста — завершение.")
+                    break
 
                 queue_len = len(clients)
                 for idx, client in enumerate(clients, start=1):
@@ -1138,10 +1191,15 @@ class WorkerManager:
                         break
                     if end_at and datetime.utcnow() >= end_at:
                         break
+                    if cap_reached:
+                        break
 
                     async with session_scope() as session:
                         available_accounts = await AccountRepository.get_available_for_mailing(
-                            session, tags_filter=None, group_id=group_id
+                            session,
+                            tags_filter=None,
+                            group_id=group_id,
+                            mailing_id=mailing_id,
                         )
 
                     if not available_accounts:
@@ -1182,7 +1240,11 @@ class WorkerManager:
                         await self._interruptible_sleep(60)
                         continue
 
-                    message_body = random.choice(variants)
+                    if variant_mode == "sequential":
+                        message_body = variants[sequential_variant_idx % len(variants)]
+                        sequential_variant_idx += 1
+                    else:
+                        message_body = random.choice(variants)
                     final_text = self.apply_template(
                         message_body,
                         client.username,
@@ -1227,11 +1289,25 @@ class WorkerManager:
                                 await ClientRepository.set_telegram_user_id(
                                     session, client.id, int(peer_uid)
                                 )
+                            ms = await ClientMailSessionRepository.get_or_create(
+                                session, client.id, account.id, mailing_id
+                            )
+                            if ms.first_outbound_at is None:
+                                await ClientMailSessionRepository.set_first_outbound(
+                                    session, ms.id
+                                )
                             await AccountRepository.increment_stats(
                                 session, account.id, sent=1
                             )
                             await MailingRepository.increment_stats(
                                 session, mailing_id, sent=1
+                            )
+                            await MailingAccountStateRepository.record_successful_first_message(
+                                session,
+                                mailing_id,
+                                account.id,
+                                wave_limit=messages_per_account,
+                                cooldown_hours=mailing_cooldown_hours,
                             )
                         else:
                             if error and "No user has" in error and "as username" in error:
@@ -1244,6 +1320,16 @@ class WorkerManager:
                             await MailingRepository.increment_stats(
                                 session, mailing_id, failed=1
                             )
+
+                    if success and max_recipients_cap:
+                        async with session_scope() as session:
+                            ms = await MailingRepository.get_by_id(session, mailing_id)
+                            if ms and int(ms.messages_sent or 0) >= int(max_recipients_cap):
+                                cap_reached = True
+                                log.info(
+                                    f"Рассылка {mailing_id}: достигнут лимит "
+                                    f"{max_recipients_cap} успешных отправок"
+                                )
 
                     processed += 1
 
@@ -1292,6 +1378,12 @@ class WorkerManager:
                                 await self._interruptible_sleep(
                                     _mailing_jittered_delay(extra, smart_delay)
                                 )
+
+                    if cap_reached:
+                        break
+
+                if cap_reached:
+                    break
 
             # Завершение
             async with session_scope() as session:
@@ -1362,6 +1454,7 @@ class WorkerManager:
         finally:
             self.is_running = False
             self.current_mailing_id = None
+            self._mailing_utc_offset = None
             if self._mailing_run_started:
                 try:
                     asyncio.create_task(self._restore_workers_after_mailing())

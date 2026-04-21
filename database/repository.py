@@ -263,6 +263,11 @@ class Database:
                         await conn.execute(text(
                             "ALTER TABLE mailings ADD COLUMN message_variants_json TEXT DEFAULT '[]'"
                         ))
+                    if "variant_mode" not in mcols:
+                        log.info("➕ mailings: variant_mode")
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN variant_mode VARCHAR(20) DEFAULT 'random'"
+                        ))
                     if "neurochat_enabled" not in mcols:
                         log.info("➕ mailings: neurochat_enabled")
                         await conn.execute(text(
@@ -292,6 +297,57 @@ class Database:
                         log.info("➕ mailings: auto_neuro_after_first_phase")
                         await conn.execute(text(
                             "ALTER TABLE mailings ADD COLUMN auto_neuro_after_first_phase BOOLEAN DEFAULT 1"
+                        ))
+                    if "neuro_sampling_json" not in mcols:
+                        log.info("➕ mailings: neuro_sampling_json")
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN neuro_sampling_json TEXT DEFAULT '{}'"
+                        ))
+                    if "audience_filter_json" not in mcols:
+                        log.info("➕ mailings: audience_filter_json")
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN audience_filter_json TEXT"
+                        ))
+                    if "audience_mode" not in mcols:
+                        log.info("➕ mailings: audience_mode")
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN audience_mode VARCHAR(20) DEFAULT 'classes'"
+                        ))
+                    if "max_recipients" not in mcols:
+                        log.info("➕ mailings: max_recipients")
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN max_recipients INTEGER"
+                        ))
+                    if "mailing_cooldown_hours" not in mcols:
+                        log.info("➕ mailings: mailing_cooldown_hours")
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN mailing_cooldown_hours FLOAT DEFAULT 12.0"
+                        ))
+
+                # --- instance_settings (ключ OpenRouter и др.) ---
+                ins_exists = await conn.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='instance_settings'"
+                ))
+                if not ins_exists.fetchone():
+                    log.info("➕ Создание таблицы instance_settings")
+                    await conn.execute(text("""
+                        CREATE TABLE instance_settings (
+                            id INTEGER PRIMARY KEY,
+                            openrouter_key_ciphertext TEXT,
+                            mailing_base_utc_offset INTEGER
+                        )
+                    """))
+                    await conn.execute(text(
+                        "INSERT INTO instance_settings (id) VALUES (1)"
+                    ))
+                    log.info("✅ Таблица instance_settings создана")
+                else:
+                    ins_info = await conn.execute(text("PRAGMA table_info(instance_settings)"))
+                    iscols = {row[1] for row in ins_info.fetchall()}
+                    if "mailing_base_utc_offset" not in iscols:
+                        log.info("➕ instance_settings: mailing_base_utc_offset")
+                        await conn.execute(text(
+                            "ALTER TABLE instance_settings ADD COLUMN mailing_base_utc_offset INTEGER"
                         ))
 
                 # --- clients: telegram_user_id ---

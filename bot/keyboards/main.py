@@ -3,6 +3,8 @@
 """
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+from utils.neuro_sampling import NEURO_PARAM_BUTTONS
+
 # Пагинация списков в Telegram
 ACCOUNTS_LIST_PAGE_SIZE = 5
 PROXY_LIST_PAGE_SIZE = 10
@@ -17,11 +19,11 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton(text="👥 Аккаунты", callback_data="menu_accounts"),
-            InlineKeyboardButton(text="📁 Клиенты", callback_data="menu_clients"),
+            InlineKeyboardButton(text="🗄 База данных", callback_data="menu_database"),
         ],
         [
             InlineKeyboardButton(text="📬 Рассылка", callback_data="menu_mailing"),
-            InlineKeyboardButton(text="📊 Мониторинг", callback_data="menu_monitoring"),
+            InlineKeyboardButton(text="🧠 Нейрочаттинг", callback_data="menu_neurochat"),
         ],
         [
             InlineKeyboardButton(text="🌐 Прокси", callback_data="menu_proxy"),
@@ -41,13 +43,27 @@ def get_warmup_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⚙️ Настройки прогрева", callback_data="warmup_settings"),
         ],
         [
-            InlineKeyboardButton(text="📊 Статус прогрева", callback_data="monitoring_warmup"),
+            InlineKeyboardButton(text="📊 Статус прогрева", callback_data="warmup_status_summary"),
         ],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_warmup_status_keyboard() -> InlineKeyboardMarkup:
+    """Сводка по прогреву: обновить, назад в меню прогрева."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="warmup_status_summary"),
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_warmup"),
+            ],
+        ]
+    )
 
 
 def get_warmup_accounts_pick_keyboard(accounts: list) -> InlineKeyboardMarkup:
@@ -589,7 +605,7 @@ def get_clients_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="♻️ Повторный прогон (CONTACTED→NEW)", callback_data="clients_reset_contacted"),
         ],
         [
-            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back"),
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_database"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -626,7 +642,7 @@ def get_clients_list_keyboard(clients: list, *, page: int = 0) -> InlineKeyboard
             nav.append(InlineKeyboardButton(text="След. ▶️", callback_data=f"clients_list_p_{page + 1}"))
         keyboard.append(nav)
 
-    keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_clients")])
+    keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_database")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
@@ -739,21 +755,24 @@ def get_mailing_view_keyboard(
         )
     keyboard.extend(
         [
-        [
-            InlineKeyboardButton(
-                text=mailing_target_group_button_label(mailing),
-                callback_data=f"mailing_pick_group_{mid}",
-            ),
-        ],
-        [
-            InlineKeyboardButton(text="⚙️ Настройки", callback_data=f"mailing_settings_{mid}"),
-        ],
-        [
-            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"mailing_delete_confirm_{mid}"),
-        ],
-        [
-            InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="mailing_list"),
-        ],
+            [
+                InlineKeyboardButton(
+                    text=mailing_target_group_button_label(mailing),
+                    callback_data=f"mailing_pick_group_{mid}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Настройки", callback_data=f"mailing_settings_{mid}"),
+            ],
+            [
+                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"mailing_delete_confirm_{mid}"),
+            ],
+            [
+                InlineKeyboardButton(text="🧠 К нейрочаттингу", callback_data=f"neurochat_open_{mid}"),
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="mailing_list"),
+            ],
         ],
     )
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -771,8 +790,8 @@ def get_mailing_modules_keyboard(mailing: object) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🔮 Нейрочат",
-                    callback_data=f"mailing_mod_neuro_{mailing.id}",
+                    text="🎯 Аудитория рассылки",
+                    callback_data=f"mailing_campaign_aud_{mailing.id}",
                 ),
             ],
             [
@@ -783,6 +802,97 @@ def get_mailing_modules_keyboard(mailing: object) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="⬅️ Назад", callback_data=f"mailing_view_{mailing.id}"),
+            ],
+        ]
+    )
+
+
+def get_mailing_audience_keyboard(mailing_id: int, status_lbl: str) -> InlineKeyboardMarkup:
+    """Настройка аудитории рассылки по классам и статусу."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"Статус очереди: {status_lbl}",
+                    callback_data=f"mailing_aud_toggle_{mailing_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Include классы",
+                    callback_data=f"mailing_aud_inc_{mailing_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Exclude классы",
+                    callback_data=f"mailing_aud_exc_{mailing_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="♻️ Сброс к умолчанию",
+                    callback_data=f"mailing_aud_reset_{mailing_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=f"mailing_campaign_aud_{mailing_id}",
+                ),
+            ],
+        ]
+    )
+
+
+def get_mailing_campaign_keyboard(mailing: object) -> InlineKeyboardMarkup:
+    """Режим аудитории, тестовый список, лимит и пауза аккаунта после пакета."""
+    mid = mailing.id
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🧪 Тест (txt)",
+                    callback_data=f"mailing_aud_mode_test_{mid}",
+                ),
+                InlineKeyboardButton(
+                    text="📗 Из базы NEW",
+                    callback_data=f"mailing_aud_mode_new_{mid}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎛 По классам",
+                    callback_data=f"mailing_aud_mode_classes_{mid}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎛 Фильтр классов (include/exclude)",
+                    callback_data=f"mailing_aud_menu_{mid}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📎 Загрузить тестовый txt",
+                    callback_data=f"mailing_test_txt_{mid}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔢 Лимит успешных",
+                    callback_data=f"mailing_cap_edit_{mid}",
+                ),
+                InlineKeyboardButton(
+                    text="⏳ Пауза аккаунта (ч)",
+                    callback_data=f"mailing_cd_edit_{mid}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=f"mailing_settings_{mid}",
+                ),
             ],
         ]
     )
@@ -846,6 +956,82 @@ def get_mailing_security_keyboard(mailing: object) -> InlineKeyboardMarkup:
     )
 
 
+def get_openrouter_key_keyboard(mailing_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✏️ Задать ключ",
+                    callback_data=f"openrouter_key_set_neuro_{mailing_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить ключ из бота",
+                    callback_data=f"openrouter_key_clear_confirm_neuro_{mailing_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=f"neurochat_open_{mailing_id}",
+                ),
+            ],
+        ]
+    )
+
+
+def get_openrouter_key_clear_keyboard(mailing_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да, удалить",
+                    callback_data=f"openrouter_key_clear_do_neuro_{mailing_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Отмена",
+                    callback_data=f"openrouter_key_menu_neuro_{mailing_id}",
+                ),
+            ],
+        ]
+    )
+
+
+def get_mailing_neuro_sampling_keyboard(mailing_id: int) -> InlineKeyboardMarkup:
+    """Кнопка на каждый параметр сэмплирования + сброс и назад."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for i in range(0, len(NEURO_PARAM_BUTTONS), 2):
+        chunk = NEURO_PARAM_BUTTONS[i : i + 2]
+        row = [
+            InlineKeyboardButton(
+                text=label[:64],
+                callback_data=f"mailing_nsp_{mailing_id}_{code}",
+            )
+            for code, _key, label in chunk
+        ]
+        rows.append(row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="♻️ Сбросить к дефолтам",
+                callback_data=f"mailing_neuro_sampling_reset_{mailing_id}",
+            ),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=f"neurochat_open_{mailing_id}",
+            ),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def get_mailing_neuro_keyboard(mailing) -> InlineKeyboardMarkup:
     """mailing — объект с полями id, neurochat_enabled."""
     mid = mailing.id
@@ -861,8 +1047,20 @@ def get_mailing_neuro_keyboard(mailing) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text="🔑 Ключ OpenRouter",
+                    callback_data=f"openrouter_key_menu_neuro_{mid}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text="🧠 Модель OpenRouter",
                     callback_data=f"mailing_neuro_model_{mid}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎛 Параметры сэмплирования",
+                    callback_data=f"mailing_neuro_sampling_{mid}",
                 ),
             ],
             [
@@ -878,47 +1076,32 @@ def get_mailing_neuro_keyboard(mailing) -> InlineKeyboardMarkup:
                 ),
             ],
             [
-                InlineKeyboardButton(
-                    text="🚫 STOP-лист",
-                    callback_data=f"mailing_neuro_stoplist_{mid}",
-                ),
+                InlineKeyboardButton(text="⬅️ К рассылке", callback_data=f"mailing_view_{mid}"),
             ],
             [
-                InlineKeyboardButton(text="⬅️ Назад", callback_data=f"mailing_settings_{mid}"),
+                InlineKeyboardButton(text="⬅️ К списку нейрочата", callback_data="menu_neurochat"),
             ],
         ]
     )
 
 
-def get_mailing_neuro_stoplist_keyboard(
+def get_mailing_first_message_keyboard(
     mailing_id: int,
-    rows: list[tuple[int, int, str, str]],
+    extra_variant_count: int,
+    *,
+    variant_mode: str = "random",
+    tz_short: str = "",
 ) -> InlineKeyboardMarkup:
-    kb_rows = []
-    for account_id, client_id, username, _created in rows:
-        label = f"✅ Разблокировать @{username}" if username else f"✅ Разблокировать client#{client_id}"
-        kb_rows.append(
-            [
-                InlineKeyboardButton(
-                    text=label[:60],
-                    callback_data=f"mailing_neuro_unstop_{mailing_id}_{account_id}_{client_id}",
-                )
-            ]
-        )
-    kb_rows.append(
+    """Первое сообщение: основной текст, доп. варианты, удаление по индексу."""
+    mode = "🎲 Случайно" if (variant_mode or "random") == "random" else "🔁 По очереди"
+    tz_btn = f"🕐 {tz_short}" if tz_short else "🕐 Часовой пояс плейсхолдеров"
+    rows = [
         [
             InlineKeyboardButton(
-                text="⬅️ Назад в нейрочат",
-                callback_data=f"mailing_mod_neuro_{mailing_id}",
-            )
-        ]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=kb_rows)
-
-
-def get_mailing_first_message_keyboard(mailing_id: int, extra_variant_count: int) -> InlineKeyboardMarkup:
-    """Первое сообщение: основной текст, доп. варианты, удаление по индексу."""
-    rows = [
+                text=tz_btn[:64],
+                callback_data=f"mailing_tz_menu_{mailing_id}",
+            ),
+        ],
         [
             InlineKeyboardButton(
                 text="✏️ Основной текст",
@@ -931,22 +1114,52 @@ def get_mailing_first_message_keyboard(mailing_id: int, extra_variant_count: int
                 callback_data=f"mailing_variant_add_{mailing_id}",
             ),
         ],
+        [
+            InlineKeyboardButton(
+                text=f"🧩 Перебор вариантов: {mode}",
+                callback_data=f"mailing_variant_mode_toggle_{mailing_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"📚 Список вариантов ({extra_variant_count})",
+                callback_data=f"mailing_variants_{mailing_id}",
+            ),
+        ],
     ]
-    for i in range(min(extra_variant_count, 15)):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"🗑 Доп. вариант {i + 1}",
-                    callback_data=f"mailing_variant_rm_{mailing_id}_{i}",
-                ),
-            ]
-        )
     rows.append(
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data=f"mailing_settings_{mailing_id}"),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_mailing_tz_keyboard(mailing_id: int) -> InlineKeyboardMarkup:
+    """Сдвиг UTC для плейсхолдеров первого сообщения (−12…+14 ч)."""
+    mid = mailing_id
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="−3 ч", callback_data=f"mailing_tz_adj_{mid}_-3"),
+                InlineKeyboardButton(text="−1 ч", callback_data=f"mailing_tz_adj_{mid}_-1"),
+                InlineKeyboardButton(text="+1 ч", callback_data=f"mailing_tz_adj_{mid}_1"),
+                InlineKeyboardButton(text="+3 ч", callback_data=f"mailing_tz_adj_{mid}_3"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="♻️ Как в .env (сбросить бот)",
+                    callback_data=f"mailing_tz_reset_{mid}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ К первому сообщению",
+                    callback_data=f"mailing_mod_first_{mid}",
+                ),
+            ],
+        ]
+    )
 
 
 def get_mailing_target_group_keyboard(
@@ -983,99 +1196,6 @@ def get_mailing_target_group_keyboard(
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-# ==================== Мониторинг ====================
-
-def get_monitoring_keyboard() -> InlineKeyboardMarkup:
-    """Меню мониторинга."""
-    keyboard = [
-        [
-            InlineKeyboardButton(text="📊 Статистика", callback_data="monitoring_stats_menu"),
-        ],
-        [
-            InlineKeyboardButton(text="👥 Аккаунты", callback_data="monitoring_accounts"),
-        ],
-        [
-            InlineKeyboardButton(text="🔥 Прогрев", callback_data="monitoring_warmup"),
-        ],
-        [
-            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back"),
-        ],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-
-def get_monitoring_stats_menu_keyboard(groups: list) -> InlineKeyboardMarkup:
-    """Выбор области: вся база или группа."""
-    rows = [
-        [
-            InlineKeyboardButton(
-                text="🌐 Все аккаунты",
-                callback_data="monitoring_stats_g_0",
-            ),
-        ],
-    ]
-    for g in groups:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"📂 {g.name}",
-                    callback_data=f"monitoring_stats_g_{g.id}",
-                ),
-            ]
-        )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_monitoring")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def get_monitoring_stats_scope_keyboard(scope_id: int) -> InlineKeyboardMarkup:
-    """Обновить текущую сводку / назад к выбору группы / в меню мониторинга."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔄 Обновить",
-                    callback_data=f"monitoring_stats_g_{scope_id}",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⬅️ К выбору группы",
-                    callback_data="monitoring_stats_menu",
-                ),
-            ],
-            [
-                InlineKeyboardButton(text="⬅️ В мониторинг", callback_data="menu_monitoring"),
-            ],
-        ]
-    )
-
-
-def get_monitoring_accounts_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔄 Обновить", callback_data="monitoring_accounts"),
-            ],
-            [
-                InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_monitoring"),
-            ],
-        ]
-    )
-
-
-def get_monitoring_warmup_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔄 Обновить", callback_data="monitoring_warmup"),
-            ],
-            [
-                InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_monitoring"),
-            ],
-        ]
-    )
 
 
 # ==================== Прокси ====================

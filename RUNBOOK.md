@@ -359,6 +359,8 @@ df -h
 
 ## 10) Обновление версии без простоя надолго
 
+Подробная отдельная инструкция: `docs/VPS_UPDATE_GUIDE.md`.
+
 ```bash
 sudo -u corebot bash -c 'cd /opt/corebot/app && git pull'
 sudo -u corebot /opt/corebot/venv/bin/pip install -r /opt/corebot/app/requirements.txt

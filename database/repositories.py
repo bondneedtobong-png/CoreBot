@@ -1,18 +1,24 @@
 """
 Репозитории для CRUD операций с базой данных.
 """
+import json
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
+
+from bot.config import MAILING_BASE_UTC_OFFSET, OPENROUTER_API_KEY as ENV_OPENROUTER_API_KEY
+from utils.crypto_openrouter import decrypt_openrouter_key, encrypt_openrouter_key
 from sqlalchemy import select, update, delete, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database.models import (
     Account, AccountStatus,
-    Client, ClientStatus,
+    Client, ClientClassCounter, ClientStatus,
     Group,
-    Mailing, MailingStatus,
+    InstanceSettings,
+    Mailing, MailingAccountState, MailingStatus,
     MailingLog,
+    MailingTestRecipient,
     NeuroActionLog,
     NeuroChatMessage,
     NeuroStopList,
@@ -171,6 +177,98 @@ class ProxyRepository:
         await session.execute(delete(Proxy).where(Proxy.id == proxy_id))
         await session.commit()
         return True
+
+
+# ==================== Instance settings (ключ OpenRouter) ====================
+
+
+class InstanceSettingsRepository:
+    """Одна строка instance_settings.id = 1."""
+
+    _ROW_ID = 1
+    _MAILING_TZ_MIN = -12
+    _MAILING_TZ_MAX = 14
+
+    @staticmethod
+    def clamp_mailing_base_utc_offset(hours: int) -> int:
+        return max(
+            InstanceSettingsRepository._MAILING_TZ_MIN,
+            min(InstanceSettingsRepository._MAILING_TZ_MAX, int(hours)),
+        )
+
+    @staticmethod
+    async def get_row(session: AsyncSession) -> InstanceSettings:
+        result = await session.execute(
+            select(InstanceSettings).where(InstanceSettings.id == InstanceSettingsRepository._ROW_ID)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = InstanceSettings(id=InstanceSettingsRepository._ROW_ID)
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+        return row
+
+    @staticmethod
+    async def get_effective_openrouter_key(session: AsyncSession) -> Optional[str]:
+        """Ключ из БД (расшифрованный) или из переменной окружения OPENROUTER_API_KEY."""
+        row = await InstanceSettingsRepository.get_row(session)
+        blob = (row.openrouter_key_ciphertext or "").strip()
+        if blob:
+            dec = decrypt_openrouter_key(blob)
+            if dec:
+                return dec
+        env = (ENV_OPENROUTER_API_KEY or "").strip()
+        return env or None
+
+    @staticmethod
+    async def set_openrouter_key(session: AsyncSession, plain_key: str) -> None:
+        row = await InstanceSettingsRepository.get_row(session)
+        row.openrouter_key_ciphertext = encrypt_openrouter_key(plain_key.strip())
+        await session.commit()
+
+    @staticmethod
+    async def clear_openrouter_key(session: AsyncSession) -> None:
+        row = await InstanceSettingsRepository.get_row(session)
+        row.openrouter_key_ciphertext = None
+        await session.commit()
+
+    @staticmethod
+    async def has_stored_key(session: AsyncSession) -> bool:
+        row = await InstanceSettingsRepository.get_row(session)
+        blob = (row.openrouter_key_ciphertext or "").strip()
+        if not blob:
+            return False
+        return bool(decrypt_openrouter_key(blob))
+
+    @staticmethod
+    async def get_stored_mailing_base_utc_offset(session: AsyncSession) -> Optional[int]:
+        row = await InstanceSettingsRepository.get_row(session)
+        v = getattr(row, "mailing_base_utc_offset", None)
+        if v is None:
+            return None
+        return int(v)
+
+    @staticmethod
+    async def get_effective_mailing_base_utc_offset(session: AsyncSession) -> int:
+        stored = await InstanceSettingsRepository.get_stored_mailing_base_utc_offset(session)
+        if stored is not None:
+            return int(stored)
+        return int(MAILING_BASE_UTC_OFFSET)
+
+    @staticmethod
+    async def set_mailing_base_utc_offset(session: AsyncSession, hours: int) -> int:
+        h = InstanceSettingsRepository.clamp_mailing_base_utc_offset(hours)
+        row = await InstanceSettingsRepository.get_row(session)
+        row.mailing_base_utc_offset = h
+        await session.commit()
+        return h
+
+    @staticmethod
+    async def clear_mailing_base_utc_offset(session: AsyncSession) -> None:
+        row = await InstanceSettingsRepository.get_row(session)
+        row.mailing_base_utc_offset = None
+        await session.commit()
 
 
 # ==================== Account Repository ====================
@@ -350,6 +448,7 @@ class AccountRepository:
         session: AsyncSession,
         tags_filter: Optional[List[str]] = None,
         group_id: Optional[int] = None,
+        mailing_id: Optional[int] = None,
     ) -> List[Account]:
         """
         Получение аккаунтов доступных для рассылки.
@@ -358,6 +457,7 @@ class AccountRepository:
             session: DB-сессия
             tags_filter: Список тегов (OR). Учитывается только если group_id is None.
             group_id: Если задан — только аккаунты из этой группы (account_groups).
+            mailing_id: Если задан — исключить аккаунты в кулдауне первой фазы этой рассылки.
 
         Returns:
             list[Account]: Доступные аккаунты
@@ -376,6 +476,13 @@ class AccountRepository:
                 Account.messages_today < Account.daily_limit,
             )
         )
+
+        if mailing_id is not None:
+            cooled = select(MailingAccountState.account_id).where(
+                MailingAccountState.mailing_id == mailing_id,
+                MailingAccountState.cooldown_until > now,
+            )
+            query = query.where(~Account.id.in_(cooled))
 
         if group_id is not None:
             query = query.where(
@@ -1125,8 +1232,146 @@ class WarmupLogRepository:
 
 # ==================== Client Repository ====================
 
+DEFAULT_MAILING_AUDIENCE: Dict[str, Any] = {
+    "client_status": "new",
+    "include_classes": [],
+    "exclude_classes": ["bl"],
+}
+
+
 class ClientRepository:
     """Репозиторий для работы с клиентами."""
+
+    @staticmethod
+    def parse_mailing_audience(mailing) -> Dict[str, Any]:
+        """Разбор audience_filter_json рассылки с дефолтами."""
+        raw = getattr(mailing, "audience_filter_json", None) or ""
+        try:
+            d = json.loads(raw) if str(raw).strip() else {}
+        except Exception:
+            d = {}
+        base = dict(DEFAULT_MAILING_AUDIENCE)
+        for k in ("client_status", "include_classes", "exclude_classes"):
+            if k in d:
+                base[k] = d[k]
+        if base.get("client_status") not in ("new", "open"):
+            base["client_status"] = "new"
+        base["include_classes"] = [
+            str(x).strip().lower()
+            for x in (base.get("include_classes") or [])
+            if str(x).strip()
+        ]
+        ex_raw = base.get("exclude_classes")
+        if "exclude_classes" not in d:
+            ex_raw = DEFAULT_MAILING_AUDIENCE["exclude_classes"]
+        base["exclude_classes"] = [
+            str(x).strip().lower()
+            for x in (ex_raw or [])
+            if str(x).strip()
+        ]
+        return base
+
+    @staticmethod
+    async def get_clients_for_mailing(
+        session: AsyncSession,
+        audience: Dict[str, Any],
+        *,
+        mailing_id: Optional[int] = None,
+    ) -> List[Client]:
+        """
+        Очередь клиентов для рассылки.
+        client_status: new — только NEW; open — NEW и CONTACTED.
+        exclude_classes: не брать, если счётчик класса > 0.
+        include_classes: нужны все перечисленные классы с count > 0.
+        mailing_id: не возвращать клиентов с успешной отправкой в этой рассылке (повтор исключён).
+        """
+        st = audience.get("client_status") or "new"
+        inc = audience.get("include_classes") or []
+        exc_raw = audience.get("exclude_classes")
+        if exc_raw is None:
+            exc = ["bl"]
+        else:
+            exc = [str(x).strip().lower() for x in exc_raw if str(x).strip()]
+
+        q = select(Client)
+        if st == "new":
+            q = q.where(Client.status == ClientStatus.NEW)
+        elif st == "open":
+            q = q.where(Client.status.in_([ClientStatus.NEW, ClientStatus.CONTACTED]))
+        q = q.where(~Client.status.in_([ClientStatus.INVALID, ClientStatus.BLOCKED]))
+
+        if mailing_id is not None:
+            mailed = select(MailingLog.client_id).where(
+                MailingLog.mailing_id == mailing_id,
+                MailingLog.success == True,
+            )
+            q = q.where(~Client.id.in_(mailed))
+
+        for key in exc:
+            bad = select(ClientClassCounter.client_id).where(
+                ClientClassCounter.class_key == key,
+                ClientClassCounter.count > 0,
+            )
+            q = q.where(~Client.id.in_(bad))
+
+        for key in inc:
+            ok = select(ClientClassCounter.client_id).where(
+                ClientClassCounter.class_key == key,
+                ClientClassCounter.count > 0,
+            )
+            q = q.where(Client.id.in_(ok))
+
+        q = q.order_by(Client.id)
+        result = await session.execute(q)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def _get_test_queue_clients(
+        session: AsyncSession,
+        mailing_id: int,
+    ) -> List[Client]:
+        """Очередь тестовой рассылки: список из txt, без уже успешно обработанных."""
+        mailed = select(MailingLog.client_id).where(
+            MailingLog.mailing_id == mailing_id,
+            MailingLog.success == True,
+        )
+        q = (
+            select(Client)
+            .join(MailingTestRecipient, MailingTestRecipient.client_id == Client.id)
+            .where(MailingTestRecipient.mailing_id == mailing_id)
+            .where(~Client.id.in_(mailed))
+            .where(~Client.status.in_([ClientStatus.INVALID, ClientStatus.BLOCKED]))
+            .order_by(MailingTestRecipient.id)
+        )
+        result = await session.execute(q)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_mailing_queue(session: AsyncSession, mailing: Mailing) -> List[Client]:
+        """Очередь по audience_mode рассылки."""
+        mode = (getattr(mailing, "audience_mode", None) or "classes").strip().lower()
+        if mode == "test":
+            return await ClientRepository._get_test_queue_clients(session, mailing.id)
+        if mode == "new":
+            parsed = ClientRepository.parse_mailing_audience(mailing)
+            aud = {
+                "client_status": "new",
+                "include_classes": [],
+                "exclude_classes": parsed["exclude_classes"],
+            }
+            return await ClientRepository.get_clients_for_mailing(
+                session, aud, mailing_id=mailing.id
+            )
+        aud = ClientRepository.parse_mailing_audience(mailing)
+        return await ClientRepository.get_clients_for_mailing(
+            session, aud, mailing_id=mailing.id
+        )
+
+    @staticmethod
+    async def count_mailing_queue(session: AsyncSession, mailing: Mailing) -> int:
+        """Число клиентов в очереди (для превью)."""
+        clients = await ClientRepository.get_mailing_queue(session, mailing)
+        return len(clients)
     
     @staticmethod
     async def create(
@@ -1268,6 +1513,109 @@ class ClientRepository:
         return True
 
 
+class MailingTestRecipientRepository:
+    """Тестовая аудитория: список username, привязанный к рассылке."""
+
+    @staticmethod
+    async def client_in_test_list(
+        session: AsyncSession,
+        mailing_id: int,
+        client_id: int,
+    ) -> bool:
+        r = await session.execute(
+            select(MailingTestRecipient.id).where(
+                MailingTestRecipient.mailing_id == mailing_id,
+                MailingTestRecipient.client_id == client_id,
+            ).limit(1)
+        )
+        return r.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def replace_from_usernames(
+        session: AsyncSession,
+        mailing_id: int,
+        usernames: List[str],
+    ) -> tuple[int, int]:
+        """
+        Полная замена списка. Возвращает (уникальных добавлено, дубликатов строк в файле).
+        """
+        seen: set[str] = set()
+        unique: List[str] = []
+        dups = 0
+        for raw in usernames:
+            u = (raw or "").strip().lstrip("@").lower()
+            if not u:
+                continue
+            if u in seen:
+                dups += 1
+                continue
+            seen.add(u)
+            unique.append(u)
+
+        await session.execute(
+            delete(MailingTestRecipient).where(MailingTestRecipient.mailing_id == mailing_id)
+        )
+        await session.flush()
+
+        for u in unique:
+            existing = await ClientRepository.get_by_username(session, u)
+            if existing is None:
+                existing = await ClientRepository.create(session, u, status=ClientStatus.NEW)
+            tr = MailingTestRecipient(
+                mailing_id=mailing_id,
+                username=u,
+                client_id=existing.id,
+            )
+            session.add(tr)
+        await session.commit()
+        return len(unique), dups
+
+    @staticmethod
+    async def count_for_mailing(session: AsyncSession, mailing_id: int) -> int:
+        r = await session.execute(
+            select(func.count(MailingTestRecipient.id)).where(
+                MailingTestRecipient.mailing_id == mailing_id
+            )
+        )
+        return int(r.scalar() or 0)
+
+
+class MailingAccountStateRepository:
+    """Волна первых сообщений и кулдаун рассылки по аккаунту."""
+
+    @staticmethod
+    async def record_successful_first_message(
+        session: AsyncSession,
+        mailing_id: int,
+        account_id: int,
+        *,
+        wave_limit: int,
+        cooldown_hours: float,
+    ) -> None:
+        now = datetime.utcnow()
+        r = await session.execute(
+            select(MailingAccountState).where(
+                MailingAccountState.mailing_id == mailing_id,
+                MailingAccountState.account_id == account_id,
+            )
+        )
+        row = r.scalar_one_or_none()
+        if row is None:
+            row = MailingAccountState(
+                mailing_id=mailing_id,
+                account_id=account_id,
+                sent_in_wave=0,
+            )
+            session.add(row)
+            await session.flush()
+        row.sent_in_wave = int(row.sent_in_wave or 0) + 1
+        wl = max(1, int(wave_limit))
+        if row.sent_in_wave >= wl:
+            row.cooldown_until = now + timedelta(hours=float(cooldown_hours))
+            row.sent_in_wave = 0
+        await session.commit()
+
+
 # ==================== Mailing Repository ====================
 
 class MailingRepository:
@@ -1378,6 +1726,9 @@ class MailingRepository:
                 updated_at=datetime.utcnow(),
             )
         )
+        await session.execute(
+            delete(MailingAccountState).where(MailingAccountState.mailing_id == mailing_id)
+        )
         await session.commit()
         return True
 
@@ -1387,15 +1738,22 @@ class MailingRepository:
         mailing_id: int,
         neurochat_enabled: Optional[bool] = None,
         neuro_model: Optional[str] = None,
+        neuro_sampling_json: Optional[str] = None,
     ) -> bool:
         """Обновление настроек нейрочата."""
-        if neurochat_enabled is None and neuro_model is None:
+        if (
+            neurochat_enabled is None
+            and neuro_model is None
+            and neuro_sampling_json is None
+        ):
             return False
         data: dict = {"updated_at": datetime.utcnow()}
         if neurochat_enabled is not None:
             data["neurochat_enabled"] = neurochat_enabled
         if neuro_model is not None:
             data["neuro_model"] = neuro_model
+        if neuro_sampling_json is not None:
+            data["neuro_sampling_json"] = neuro_sampling_json
         await session.execute(
             update(Mailing).where(Mailing.id == mailing_id).values(**data)
         )
@@ -1533,6 +1891,22 @@ class MailingLogRepository:
         )
         return result.scalar_one_or_none()
 
+    @staticmethod
+    async def has_successful_outbound_to_client(
+        session: AsyncSession,
+        account_id: int,
+        client_id: int,
+    ) -> bool:
+        """Был ли хотя бы один успешный исходящий контакт по паре аккаунт–клиент (любая рассылка)."""
+        result = await session.execute(
+            select(MailingLog.id).where(
+                MailingLog.account_id == account_id,
+                MailingLog.client_id == client_id,
+                MailingLog.success == True,
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
 
 # ==================== Neuro chat history ====================
 
@@ -1612,7 +1986,7 @@ class NeuroChatRepository:
 
 
 class NeuroActionRepository:
-    """События команд нейрочата: [SEND_LINK], [STOP]."""
+    """События команд нейрочата: [SEND_LINK], [STOP], [ACCEPT], [DECLINE], [HATER]."""
 
     @staticmethod
     async def create(
