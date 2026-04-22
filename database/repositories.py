@@ -1361,16 +1361,15 @@ class ClientRepository:
         session: AsyncSession,
         mailing_id: int,
     ) -> List[Client]:
-        """Очередь тестовой рассылки: список из txt, без уже успешно обработанных."""
-        mailed = select(MailingLog.client_id).where(
-            MailingLog.mailing_id == mailing_id,
-            MailingLog.success == True,
-        )
+        """
+        Очередь тестовой рассылки: список из txt всегда.
+        Для режима test не исключаем клиентов с прошлым успешным first-message:
+        тестовая аудитория должна переиспользоваться на каждом запуске.
+        """
         q = (
             select(Client)
             .join(MailingTestRecipient, MailingTestRecipient.client_id == Client.id)
             .where(MailingTestRecipient.mailing_id == mailing_id)
-            .where(~Client.id.in_(mailed))
             .where(~Client.status.in_([ClientStatus.INVALID, ClientStatus.BLOCKED]))
             .order_by(MailingTestRecipient.id)
         )

@@ -168,11 +168,27 @@ scripts\cb_push.cmd "your commit message"
 
 ### B. На VPS (SSH)
 
+#### B1. Нормальный путь (когда `update_corebot.sh` уже есть)
+
 ```bash
 cd /opt/corebot/app
 git config --global --add safe.directory /opt/corebot/app
 sudo bash /opt/corebot/app/scripts/update_corebot.sh
 ```
+
+#### B2. Bootstrap (если `No such file or directory` на `update_corebot.sh`)
+
+```bash
+cd /opt/corebot/app
+git config --global --add safe.directory /opt/corebot/app
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+/opt/corebot/venv/bin/pip install -r requirements.txt
+sudo systemctl restart corebot.service
+```
+
+После этого скрипт уже появится, и дальше используй только B1.
 
 ### C. Проверка на VPS
 
@@ -181,4 +197,4 @@ sudo systemctl status corebot.service --no-pager -l
 journalctl -u corebot.service -n 120 --no-pager
 ```
 
-Если на шаге B видишь `No such file or directory` для `update_corebot.sh`, значит этот файл еще не доехал до GitHub (забыл сделать `cb_push` локально).
+Если на шаге B1 видишь `No such file or directory` для `update_corebot.sh`, выполни B2 один раз.

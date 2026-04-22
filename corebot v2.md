@@ -170,6 +170,11 @@
 - Добавлен unit-тест `test_alive_window_key_hour_bucket`.
 - Проверка: `python -m pytest -q tests/test_backlog_fixes.py` -> `10 passed`.
 
+### 2026-04-22 (фикс тестовой очереди)
+- Исправлен `database/repositories.py`: в `audience_mode=test` клиенты из `mailing_test_recipients` больше не исключаются по прошлым успешным `mailing_logs`.
+- Теперь тестовый txt-список переиспользуется на каждом запуске рассылки (кроме `INVALID/BLOCKED`), что позволяет стабильно ретестить нейрочат и классы.
+- Проверка: `python -m pytest -q tests/test_backlog_fixes.py` -> `10 passed`.
+
 ---
 
 ## Дебаг и анализ (рабочий шаблон)
