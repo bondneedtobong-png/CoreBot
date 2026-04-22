@@ -22,9 +22,15 @@ echo [2/5] Staging changes...
 git add -A
 
 echo [3/5] Creating commit...
-git commit -m "%MSG%"
-if errorlevel 1 (
-  echo INFO: commit may be skipped (no changes) or failed by hooks.
+git diff --cached --quiet
+if not errorlevel 1 (
+  echo INFO: no staged changes, skipping commit.
+) else (
+  git commit -m "%MSG%"
+  if errorlevel 1 (
+    echo ERROR: commit failed.
+    exit /b 1
+  )
 )
 
 echo [4/5] Pushing to origin/%BRANCH%...
