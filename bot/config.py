@@ -49,6 +49,7 @@ WARMUP_DAILY_ACTION_LIMIT = int(os.getenv("WARMUP_DAILY_ACTION_LIMIT", "40"))
 
 # OpenRouter / нейрочат
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+NEUROCHAT_ENABLED = os.getenv("NEUROCHAT_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
 OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "").strip()
 DEFAULT_NEURO_MODEL = os.getenv("DEFAULT_NEURO_MODEL", "openai/gpt-oss-120b:free").strip()

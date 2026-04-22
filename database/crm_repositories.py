@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import (
     ClientAcceptTranscript,
+    ClientAliveWindow,
     ClientClassCounter,
     ClientInteraction,
     ClientMailSession,
@@ -147,6 +148,38 @@ class ClientInteractionRepository:
         await session.commit()
         await session.refresh(ev)
         return ev
+
+
+class ClientAliveWindowRepository:
+    @staticmethod
+    async def create_if_absent(
+        session: AsyncSession,
+        *,
+        mailing_id: int,
+        account_id: int,
+        client_id: int,
+        window_key: int,
+    ) -> bool:
+        result = await session.execute(
+            select(ClientAliveWindow).where(
+                ClientAliveWindow.mailing_id == mailing_id,
+                ClientAliveWindow.account_id == account_id,
+                ClientAliveWindow.client_id == client_id,
+                ClientAliveWindow.window_key == int(window_key),
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is not None:
+            return False
+        row = ClientAliveWindow(
+            mailing_id=mailing_id,
+            account_id=account_id,
+            client_id=client_id,
+            window_key=int(window_key),
+        )
+        session.add(row)
+        await session.commit()
+        return True
 
 
 class ClientMailSessionRepository:

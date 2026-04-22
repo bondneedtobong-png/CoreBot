@@ -334,7 +334,8 @@ class Database:
                         CREATE TABLE instance_settings (
                             id INTEGER PRIMARY KEY,
                             openrouter_key_ciphertext TEXT,
-                            mailing_base_utc_offset INTEGER
+                            mailing_base_utc_offset INTEGER,
+                            neurochat_enabled BOOLEAN
                         )
                     """))
                     await conn.execute(text(
@@ -348,6 +349,11 @@ class Database:
                         log.info("➕ instance_settings: mailing_base_utc_offset")
                         await conn.execute(text(
                             "ALTER TABLE instance_settings ADD COLUMN mailing_base_utc_offset INTEGER"
+                        ))
+                    if "neurochat_enabled" not in iscols:
+                        log.info("➕ instance_settings: neurochat_enabled")
+                        await conn.execute(text(
+                            "ALTER TABLE instance_settings ADD COLUMN neurochat_enabled BOOLEAN"
                         ))
 
                 # --- clients: telegram_user_id ---
@@ -401,6 +407,32 @@ class Database:
                         "ON neuro_stop_list(account_id, client_id)"
                     ))
                     log.info("✅ Таблица neuro_stop_list создана")
+
+                # --- client alive windows table ---
+                caw_exists = await conn.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='client_alive_windows'"
+                ))
+                if not caw_exists.fetchone():
+                    log.info("➕ Создание таблицы client_alive_windows")
+                    await conn.execute(text("""
+                        CREATE TABLE client_alive_windows (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            mailing_id INTEGER NOT NULL REFERENCES mailings(id),
+                            account_id INTEGER NOT NULL REFERENCES accounts(id),
+                            client_id INTEGER NOT NULL REFERENCES clients(id),
+                            window_key INTEGER NOT NULL,
+                            created_at DATETIME DEFAULT (datetime('now'))
+                        )
+                    """))
+                    await conn.execute(text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_client_alive_window "
+                        "ON client_alive_windows(mailing_id, account_id, client_id, window_key)"
+                    ))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_client_alive_windows_client "
+                        "ON client_alive_windows(client_id)"
+                    ))
+                    log.info("✅ Таблица client_alive_windows создана")
 
                 log.info("✅ Все миграции завершены")
 

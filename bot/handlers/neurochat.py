@@ -22,20 +22,24 @@ from database.repositories import (
     ClientRepository,
     InstanceSettingsRepository,
     MailingRepository,
-    NeuroActionRepository,
 )
 from database.session import session_scope
+from services.neurochat.admin_service import (
+    count_actions_by_mailing,
+    get_prompt_path,
+    get_sampling_effective,
+    get_sampling_overrides,
+    has_prompt_file,
+    load_prompt_text,
+)
 from utils.crypto_openrouter import mask_api_key
 from utils.links import normalize_public_link
-from utils.neuro_prompts import neuro_prompt_file_path, prompt_file_exists, load_system_prompt
 from utils.neuro_sampling import (
     CODE_TO_KEY,
     NEURO_PARAM_BUTTONS,
     coerce_param_value,
     format_sampling_human,
     format_sampling_menu_block,
-    merge_sampling_for_request,
-    parse_sampling_mailing_column,
 )
 
 router = Router()
@@ -59,7 +63,27 @@ def _param_display_label(param_key: str) -> str:
 async def _render_neurochat_hub(callback: CallbackQuery) -> None:
     async with session_scope() as session:
         mailings = await MailingRepository.get_all(session)
+        global_enabled = await InstanceSettingsRepository.get_effective_neurochat_enabled(session)
+        global_stored = await InstanceSettingsRepository.get_stored_neurochat_enabled(session)
     rows = []
+    global_label = "🌐 Глобально: ВКЛ" if global_enabled else "🌐 Глобально: ВЫКЛ"
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=global_label,
+                callback_data="neurochat_global_toggle",
+            )
+        ]
+    )
+    if global_stored is not None:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="♻️ Глобально: как в .env",
+                    callback_data="neurochat_global_reset",
+                )
+            ]
+        )
     for m in mailings[:25]:
         label = (m.name or f"#{m.id}")[:48]
         rows.append(
@@ -80,6 +104,9 @@ async def _render_neurochat_hub(callback: CallbackQuery) -> None:
     )
     await callback.message.edit_text(
         "🧠 <b>Нейрочаттинг</b>\n\n"
+        f"Глобальный режим: <b>{'включен' if global_enabled else 'выключен'}</b>"
+        + (" (из .env)" if global_stored is None else " (сохранено в БД)")
+        + "\n\n"
         "Нейрочат привязан к <b>рассылке</b>: после первого сообщения кампании ответы на входящие "
         "идут с того же аккаунта по промпту и модели ниже.\n\n"
         "<b>Выберите рассылку</b> — модель, system.txt (плейсхолдеры {first_name}, {link}, …), сэмплирование.\n"
@@ -99,6 +126,31 @@ async def cb_menu_neurochat(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data == "neurochat_global_toggle")
+async def cb_neurochat_global_toggle(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await state.clear()
+    async with session_scope() as session:
+        current = await InstanceSettingsRepository.get_effective_neurochat_enabled(session)
+        await InstanceSettingsRepository.set_neurochat_enabled(session, not current)
+    await _render_neurochat_hub(callback)
+    await callback.answer("Глобальный нейрочат обновлён")
+
+
+@router.callback_query(F.data == "neurochat_global_reset")
+async def cb_neurochat_global_reset(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await state.clear()
+    async with session_scope() as session:
+        await InstanceSettingsRepository.clear_neurochat_enabled(session)
+    await _render_neurochat_hub(callback)
+    await callback.answer("Глобальный режим берется из .env")
+
+
 @router.callback_query(F.data.startswith("neurochat_progress_"))
 async def cb_neurochat_progress(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != OWNER_ID:
@@ -114,7 +166,7 @@ async def cb_neurochat_progress(callback: CallbackQuery, state: FSMContext):
         nq = await ClientRepository.count_mailing_queue(session, mailing)
         sent = int(getattr(mailing, "messages_sent", None) or 0)
         fail = int(getattr(mailing, "messages_failed", None) or 0)
-        neuro_actions = await NeuroActionRepository.count_by_action(session, mailing_id)
+        neuro_actions = await count_actions_by_mailing(session, mailing_id)
     cap = getattr(mailing, "max_recipients", None)
     cap_line = f"{sent} / {int(cap)}" if cap else f"{sent} (лимит не задан)"
     text = (
@@ -168,13 +220,14 @@ async def cb_neurochat_open(callback: CallbackQuery, state: FSMContext):
             return
         eff = await InstanceSettingsRepository.get_effective_openrouter_key(session)
         stored = await InstanceSettingsRepository.has_stored_key(session)
+        global_enabled = await InstanceSettingsRepository.get_effective_neurochat_enabled(session)
 
     model = (mailing.neuro_model or "").strip() or DEFAULT_NEURO_MODEL
     link = normalize_public_link((getattr(mailing, "community_link", None) or "").strip())
-    has_prompt = prompt_file_exists(mailing_id)
+    has_prompt = has_prompt_file(mailing_id)
     prompt_preview = ""
     if has_prompt:
-        full = load_system_prompt(mailing_id)
+        full = load_prompt_text(mailing_id)
         prompt_preview = full[:200] + ("…" if len(full) > 200 else "")
     masked = mask_api_key(eff or "")
     if stored:
@@ -184,13 +237,13 @@ async def cb_neurochat_open(callback: CallbackQuery, state: FSMContext):
     else:
         key_line = "ключ <b>не задан</b> — укажите через «Ключ OpenRouter» или .env"
 
-    overrides = parse_sampling_mailing_column(getattr(mailing, "neuro_sampling_json", None))
-    effective_samp = merge_sampling_for_request(overrides)
+    effective_samp = get_sampling_effective(mailing)
     samp_line = format_sampling_human(effective_samp)
 
     txt = (
         "🔮 <b>Нейрочат (OpenRouter)</b>\n\n"
         f"📋 {mailing.name or mailing_id}\n\n"
+        f"• Глобально: <b>{'да' if global_enabled else 'нет'}</b>\n"
         f"• Включено: <b>{'да' if mailing.neurochat_enabled else 'нет'}</b>\n"
         f"• Модель: <code>{model}</code>\n"
         f"• Ссылка {{link}}: <code>{link or 'не задана'}</code>\n"
@@ -201,6 +254,11 @@ async def cb_neurochat_open(callback: CallbackQuery, state: FSMContext):
     )
     if prompt_preview:
         txt += f"\n<i>Превью:</i>\n<pre>{prompt_preview}</pre>\n"
+    if mailing.neurochat_enabled and not global_enabled:
+        txt += (
+            "\n⚠️ <b>Внимание:</b> у рассылки нейрочат включен, но глобально он выключен. "
+            "Входящие не будут обрабатываться, пока не включите глобальный режим."
+        )
     txt += (
         "\nПосле завершения рассылки (если нейрочат включён) входящие в личку "
         "отвечаются с того же аккаунта. Контекст — последние сообщения в паре "
@@ -227,8 +285,7 @@ async def cb_neurochat_sampling_menu(callback: CallbackQuery, state: FSMContext)
     if not mailing:
         await callback.answer("Не найдено", show_alert=True)
         return
-    overrides = parse_sampling_mailing_column(getattr(mailing, "neuro_sampling_json", None))
-    effective = merge_sampling_for_request(overrides)
+    effective = get_sampling_effective(mailing)
     block = format_sampling_menu_block(effective)
     await callback.message.edit_text(
         "🎛 <b>Параметры сэмплирования (OpenRouter)</b>\n\n"
@@ -261,8 +318,7 @@ async def cb_neurochat_sampling_param(callback: CallbackQuery, state: FSMContext
     if not mailing:
         await callback.answer("Не найдено", show_alert=True)
         return
-    overrides = parse_sampling_mailing_column(getattr(mailing, "neuro_sampling_json", None))
-    effective = merge_sampling_for_request(overrides)
+    effective = get_sampling_effective(mailing)
     current_val = effective.get(param_key)
     label = _param_display_label(param_key)
     await state.set_state(NeuroChatFSM.waiting_for_sampling_value)
@@ -366,7 +422,7 @@ async def process_neuro_sampling_value(message: Message, state: FSMContext):
             await state.clear()
             await message.answer("Рассылка не найдена.")
             return
-        overrides = parse_sampling_mailing_column(getattr(mailing, "neuro_sampling_json", None))
+        overrides = get_sampling_overrides(mailing)
         overrides[param_key] = val
         await MailingRepository.update_neuro(
             session,
@@ -497,7 +553,7 @@ async def process_neuro_prompt_doc(message: Message, state: FSMContext):
 
     from bot.config import BASE_DIR
 
-    dest = neuro_prompt_file_path(mailing_id)
+    dest = get_prompt_path(mailing_id)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     await message.bot.download(message.document, destination=dest)

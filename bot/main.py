@@ -347,7 +347,10 @@ async def run_bot():
     try:
         await dp.start_polling(bot)
     finally:
-        # Корректное закрытие сессии
-        if bot.session and not bot.session.closed:
-            await bot.session.close()
-            log.info("✅ Сессия Control Bot закрыта")
+        # Корректное закрытие сессии (в AiohttpSession нет атрибута `closed`).
+        if bot.session:
+            try:
+                await bot.session.close()
+                log.info("✅ Сессия Control Bot закрыта")
+            except Exception as e:
+                log.warning(f"Ошибка закрытия сессии Control Bot: {e}")

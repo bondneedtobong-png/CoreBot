@@ -132,7 +132,7 @@ ufw status
 ```bash
 sudo -u corebot -H bash -c '
 cd /opt/corebot
-git clone <URL_ВАШЕГО_РЕПОЗИТОРИЯ> app
+git clone https://github.com/bondneedtobong-png/CoreBot app
 '
 ```
 
@@ -151,7 +151,7 @@ chown -R corebot:corebot /opt/corebot/app
 ```bash
 sudo -u corebot -H bash -c '
 cd /opt/corebot
-python3 -m venv venv
+python3.11 -m venv venv
 ./venv/bin/pip install --upgrade pip
 ./venv/bin/pip install -r app/requirements.txt
 '
@@ -162,17 +162,16 @@ python3 -m venv venv
 ### Шаг 4.7. Создать `.env` и заполнить секреты
 
 ```bash
-sudo -u corebot cp /opt/corebot/app/.env.example /opt/corebot/app/.env
-sudo -u corebot chmod 600 /opt/corebot/app/.env
-sudo -u corebot nano /opt/corebot/app/.env
+sudo -u corebot bash -c '
+cd /opt/corebot/app
+bash scripts/init_env.sh .env
+'
 ```
 
-Минимально обязательные:
+По умолчанию логика такая:
 
-- `API_ID`
-- `API_HASH`
-- `BOT_TOKEN`
-- `OWNER_ID`
+- `API_ID` / `API_HASH` — общий Telegram app для всей команды (заполняется один раз в шаблоне).
+- `BOT_TOKEN` / `OWNER_ID` — индивидуально для каждого инстанса.
 
 Рекомендуемые строки (лучше вставить сразу):
 
@@ -260,6 +259,9 @@ systemctl daemon-reload
 systemctl enable --now corebot.service
 systemctl status corebot.service
 ```
+
+Важно: запускайте именно `main.py` (корень проекта), а не `python -m bot.main`.
+`main.py` выполняет инициализацию БД (`db.connect()`), миграции и корректный bootstrap всех модулей.
 
 Логи в реальном времени:
 
@@ -387,6 +389,46 @@ tar -czvf /opt/corebot/corebot-data-$(date +%F).tar.gz -C /opt/corebot/app data
 ```
 
 Рекомендуется cron раз в сутки.
+
+### 11.1 Восстановление данных при переносе на новый VPS (локальный ПК -> VPS)
+
+Минимальный набор для переноса:
+
+- `/opt/corebot/app/.env`
+- `/opt/corebot/app/data/corebot.db`
+- `/opt/corebot/app/data/sessions/` (критично: файлы сессий аккаунтов)
+- `/opt/corebot/app/data/neuro/` (промпты нейрочата)
+- `/opt/corebot/app/data/files/` (загрузки/служебные файлы, если использовались)
+
+Команды с локального Windows (CMD):
+
+```cmd
+set VPS=<IP_СЕРВЕРА>
+scp "C:\Users\bond\Desktop\CoreBot\.env" root@%VPS%:/opt/corebot/app/.env
+scp "C:\Users\bond\Desktop\CoreBot\data\corebot.db" root@%VPS%:/opt/corebot/app/data/corebot.db
+scp -r "C:\Users\bond\Desktop\CoreBot\data\sessions" root@%VPS%:/opt/corebot/app/data/
+scp -r "C:\Users\bond\Desktop\CoreBot\data\neuro" root@%VPS%:/opt/corebot/app/data/
+scp -r "C:\Users\bond\Desktop\CoreBot\data\files" root@%VPS%:/opt/corebot/app/data/
+```
+
+После копирования на VPS:
+
+```bash
+systemctl stop corebot.service
+chown -R corebot:corebot /opt/corebot/app
+chmod 600 /opt/corebot/app/.env
+find /opt/corebot/app/data -type d -exec chmod 755 {} \;
+find /opt/corebot/app/data -type f -exec chmod 644 {} \;
+systemctl start corebot.service
+systemctl status corebot.service --no-pager -l
+```
+
+Проверка БД:
+
+```bash
+sqlite3 /opt/corebot/app/data/corebot.db "SELECT 'accounts', count(*) FROM accounts;"
+sqlite3 /opt/corebot/app/data/corebot.db "SELECT 'proxies', count(*) FROM proxies;"
+```
 
 ---
 

@@ -1,8 +1,13 @@
 from types import SimpleNamespace
 import re
+import asyncio
+from datetime import datetime, timezone
 
 from bot.handlers.accounts.groups import _render_template
 from bot.handlers.mailing import _mailing_list_page_from_data
+from services.neurochat.engagement_service import build_alive_window_key
+from services.neurochat import manager as neuro_manager
+from services.neurochat import post_actions as neuro_post_actions
 from workers.manager import WorkerManager
 from utils.neuro_sampling import (
     merge_sampling_for_request,
@@ -100,3 +105,94 @@ def test_apply_template_timezone_placeholders():
     assert "{datetime-2}" not in out
     assert "{date+1}" not in out
     assert "{timezone-1}" not in out
+
+
+def test_check_incoming_allowed_reason_priority(monkeypatch):
+    async def _can_true(_session):
+        return True
+
+    async def _can_false(_session):
+        return False
+
+    async def _filters_ok(_session, _client_id):
+        return True, "ok"
+
+    async def _filters_block(_session, _client_id):
+        return False, "client_class_bl"
+
+    mailing_on = SimpleNamespace(neurochat_enabled=True)
+    mailing_off = SimpleNamespace(neurochat_enabled=False)
+
+    monkeypatch.setattr(neuro_manager, "can_process_incoming", _can_false)
+    monkeypatch.setattr(neuro_manager, "check_client_filters", _filters_ok)
+    ok, reason = asyncio.run(
+        neuro_manager.check_incoming_allowed(
+            session=None, mailing=mailing_on, worker_connected=True, client_id=10
+        )
+    )
+    assert not ok and reason == "global_disabled"
+
+    monkeypatch.setattr(neuro_manager, "can_process_incoming", _can_true)
+    ok, reason = asyncio.run(
+        neuro_manager.check_incoming_allowed(
+            session=None, mailing=mailing_off, worker_connected=True, client_id=10
+        )
+    )
+    assert not ok and reason == "mailing_local_disabled"
+
+    monkeypatch.setattr(neuro_manager, "check_client_filters", _filters_block)
+    ok, reason = asyncio.run(
+        neuro_manager.check_incoming_allowed(
+            session=None, mailing=mailing_on, worker_connected=True, client_id=10
+        )
+    )
+    assert not ok and reason == "client_class_bl"
+
+
+def test_send_text_reply_success_and_failure(monkeypatch):
+    async def _emit_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(neuro_post_actions.telemetry_emitter, "emit_event", _emit_event)
+    monkeypatch.setattr(neuro_post_actions.random, "uniform", lambda _a, _b: 0.0)
+
+    class OkWorker:
+        async def send_message_with_typing(self, *_args, **_kwargs):
+            return True, 1, None, None
+
+    class FailWorker:
+        async def send_message_with_typing(self, *_args, **_kwargs):
+            return False, None, "send failed", None
+
+    ok = asyncio.run(
+        neuro_post_actions.send_text_reply(
+            OkWorker(),
+            peer_uid=123,
+            reply="hello",
+            use_typing_neuro=False,
+            account_id=1,
+            client_id=2,
+        )
+    )
+    assert ok is True
+
+    ok = asyncio.run(
+        neuro_post_actions.send_text_reply(
+            FailWorker(),
+            peer_uid=123,
+            reply="hello",
+            use_typing_neuro=False,
+            account_id=1,
+            client_id=2,
+        )
+    )
+    assert ok is False
+
+
+def test_alive_window_key_hour_bucket():
+    dt = datetime(2026, 4, 21, 10, 59, 59, tzinfo=timezone.utc)
+    dt_next = datetime(2026, 4, 21, 11, 0, 1, tzinfo=timezone.utc)
+    k1 = build_alive_window_key(dt)
+    k2 = build_alive_window_key(dt_next)
+    assert isinstance(k1, int) and isinstance(k2, int)
+    assert k2 == k1 + 1

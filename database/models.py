@@ -365,6 +365,32 @@ class ClientInteraction(Base):
     mailing = relationship("Mailing", back_populates="client_interactions")
 
 
+class ClientAliveWindow(Base):
+    """
+    Идемпотентное окно для инкремента класса alive.
+    Один alive на (mailing, account, client, window_key).
+    """
+
+    __tablename__ = "client_alive_windows"
+    __table_args__ = (
+        UniqueConstraint(
+            "mailing_id",
+            "account_id",
+            "client_id",
+            "window_key",
+            name="uq_client_alive_window",
+        ),
+        Index("ix_client_alive_windows_client", "client_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    window_key = Column(Integer, nullable=False)  # int(utc_timestamp // 3600)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class ClientMailSession(Base):
     """
     Сессия рассылки по (клиент, аккаунт, рассылка).
@@ -625,6 +651,8 @@ class InstanceSettings(Base):
     openrouter_key_ciphertext = Column(Text, nullable=True)
     # Базовый UTC-сдвиг для плейсхолдеров {date}/{time}/… в первом сообщении (часы, −12…+14). None = брать из .env MAILING_BASE_UTC_OFFSET
     mailing_base_utc_offset = Column(Integer, nullable=True)
+    # Глобальный toggle нейрочата: None = брать из .env NEUROCHAT_ENABLED
+    neurochat_enabled = Column(Boolean, nullable=True)
 
     def __repr__(self):
         return "<InstanceSettings>"

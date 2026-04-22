@@ -47,8 +47,8 @@ from database.repositories import (
     MailingLogRepository,
     MailingRepository,
     MailingTestRecipientRepository,
-    NeuroActionRepository,
 )
+from services.neurochat.stats_service import count_actions_by_mailing
 from utils.logger import log
 
 router = Router()
@@ -216,7 +216,7 @@ async def _render_mailing_screen(callback: CallbackQuery, mailing_id: int) -> No
             await callback.answer("Рассылка не найдена", show_alert=True)
             return
         account_stats = await MailingLogRepository.get_send_stats_by_account(session, mailing_id)
-        neuro_actions = await NeuroActionRepository.count_by_action(session, mailing_id)
+        neuro_actions = await count_actions_by_mailing(session, mailing_id)
         hidden = 0
         tg_id = getattr(mailing, "target_group_id", None)
         if tg_id:

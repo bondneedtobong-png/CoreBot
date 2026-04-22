@@ -5,7 +5,11 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, List
 
-from bot.config import MAILING_BASE_UTC_OFFSET, OPENROUTER_API_KEY as ENV_OPENROUTER_API_KEY
+from bot.config import (
+    MAILING_BASE_UTC_OFFSET,
+    NEUROCHAT_ENABLED as ENV_NEUROCHAT_ENABLED,
+    OPENROUTER_API_KEY as ENV_OPENROUTER_API_KEY,
+)
 from utils.crypto_openrouter import decrypt_openrouter_key, encrypt_openrouter_key
 from sqlalchemy import select, update, delete, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -268,6 +272,33 @@ class InstanceSettingsRepository:
     async def clear_mailing_base_utc_offset(session: AsyncSession) -> None:
         row = await InstanceSettingsRepository.get_row(session)
         row.mailing_base_utc_offset = None
+        await session.commit()
+
+    @staticmethod
+    async def get_stored_neurochat_enabled(session: AsyncSession) -> Optional[bool]:
+        row = await InstanceSettingsRepository.get_row(session)
+        v = getattr(row, "neurochat_enabled", None)
+        if v is None:
+            return None
+        return bool(v)
+
+    @staticmethod
+    async def get_effective_neurochat_enabled(session: AsyncSession) -> bool:
+        stored = await InstanceSettingsRepository.get_stored_neurochat_enabled(session)
+        if stored is not None:
+            return bool(stored)
+        return bool(ENV_NEUROCHAT_ENABLED)
+
+    @staticmethod
+    async def set_neurochat_enabled(session: AsyncSession, enabled: bool) -> None:
+        row = await InstanceSettingsRepository.get_row(session)
+        row.neurochat_enabled = bool(enabled)
+        await session.commit()
+
+    @staticmethod
+    async def clear_neurochat_enabled(session: AsyncSession) -> None:
+        row = await InstanceSettingsRepository.get_row(session)
+        row.neurochat_enabled = None
         await session.commit()
 
 
