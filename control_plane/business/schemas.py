@@ -48,7 +48,15 @@ class MessageOut(BaseModel):
     role: str  # 'user' | 'assistant'
     content: str
     created_at: datetime
-    source: str = "neuro"  # 'neuro' | 'manual'
+    # Источник строки в ленте:
+    #   'neuro'   — реально доставленное сообщение из neuro_chat_messages
+    #   'queue'   — строка outbound_queue (ещё не доставлена / failed / cancelled)
+    source: str = "neuro"
+    # Для строк из очереди:
+    queue_status: Optional[str] = None    # pending | sending | sent | failed | cancelled
+    queue_error: Optional[str] = None
+    queue_attempts: Optional[int] = None
+    queue_id: Optional[int] = None
 
 
 class SendMessageIn(BaseModel):

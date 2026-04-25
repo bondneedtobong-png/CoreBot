@@ -244,7 +244,8 @@ def list_messages(
     rows = list(db.execute(stmt).scalars().all())
     if after_id is None:
         rows = list(reversed(rows))
-    return [
+
+    items: list[MessageOut] = [
         MessageOut(
             id=int(r.id),
             role=r.role,
@@ -254,6 +255,44 @@ def list_messages(
         )
         for r in rows
     ]
+
+    # При первой выборке (after_id is None) дополнительно подмешиваем строки
+    # очереди (pending / sending / failed / cancelled), чтобы пользователь
+    # видел, что его ручные сообщения «в работе», а не пропали.
+    if after_id is None:
+        queue_rows = (
+            db.execute(
+                select(OutboundQueue)
+                .where(
+                    OutboundQueue.account_id == account_id,
+                    OutboundQueue.peer_user_id == peer_user_id,
+                    OutboundQueue.status.in_(
+                        ["pending", "sending", "failed", "cancelled"]
+                    ),
+                )
+                .order_by(OutboundQueue.created_at.asc())
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        for q in queue_rows:
+            items.append(
+                MessageOut(
+                    id=-int(q.id),  # отрицательный id — чтобы не конфликтовал с neuro
+                    role="assistant",
+                    content=q.text or "",
+                    created_at=q.created_at or datetime.utcnow(),
+                    source="queue",
+                    queue_status=q.status,
+                    queue_error=q.error,
+                    queue_attempts=int(getattr(q, "attempts", 0) or 0),
+                    queue_id=int(q.id),
+                )
+            )
+        items.sort(key=lambda m: (m.created_at, m.id))
+
+    return items
 
 
 @router.post(
@@ -294,6 +333,66 @@ def enqueue_manual_send(
     return SendMessageOut(
         queue_id=int(row.id), status=row.status, enqueued_at=row.created_at
     )
+
+
+@router.post(
+    "/queue/{queue_id}/retry",
+    response_model=SendMessageOut,
+)
+def retry_queue_item(
+    queue_id: int,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(get_current_user),
+):
+    row = db.get(OutboundQueue, queue_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="queue item not found")
+    if row.status not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"can retry only failed/cancelled, current status={row.status}",
+        )
+    db.execute(
+        update(OutboundQueue)
+        .where(OutboundQueue.id == queue_id)
+        .values(
+            status="pending",
+            error=None,
+            attempts=0,
+            next_attempt_at=None,
+            sent_at=None,
+        )
+    )
+    db.commit()
+    db.refresh(row)
+    return SendMessageOut(
+        queue_id=int(row.id), status=row.status, enqueued_at=row.created_at
+    )
+
+
+@router.post(
+    "/queue/{queue_id}/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def cancel_queue_item(
+    queue_id: int,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(get_current_user),
+):
+    row = db.get(OutboundQueue, queue_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="queue item not found")
+    if row.status not in ("pending", "failed"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"can cancel only pending/failed, current status={row.status}",
+        )
+    db.execute(
+        update(OutboundQueue)
+        .where(OutboundQueue.id == queue_id)
+        .values(status="cancelled", next_attempt_at=None)
+    )
+    db.commit()
 
 
 @router.delete(

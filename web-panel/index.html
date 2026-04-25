@@ -23,34 +23,53 @@
     };
   </script>
 </head>
-<body class="bg-ink-950 text-slate-200 min-h-screen font-sans">
+<body class="bg-ink-950 text-slate-200 min-h-screen font-sans" style="background:#0b1220;color:#e2e8f0;font-family:Inter,system-ui,sans-serif;">
+
+<noscript>
+  <div style="max-width:420px;margin:80px auto;padding:24px;border:1px solid #334155;border-radius:12px;background:#0f172a;">
+    <h2 style="color:#fff;margin:0 0 8px">JavaScript отключён</h2>
+    <p style="color:#94a3b8;margin:0">Для работы панели включите JS в браузере и обновите страницу.</p>
+  </div>
+</noscript>
+
+<!-- Видим, пока bootstrap JS не отработал. Скрывается в DOMContentLoaded. -->
+<div id="bootSplash" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b1220;z-index:9999;">
+  <div style="text-align:center">
+    <div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#3b82f6,#2563eb);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;margin:0 auto 12px;">CB</div>
+    <div style="color:#94a3b8;font-size:14px;">Загрузка панели…</div>
+    <div id="bootError" style="color:#fda4af;font-size:12px;margin-top:12px;max-width:520px;display:none;"></div>
+  </div>
+</div>
 
 <!-- =========================== Login screen =========================== -->
-<section id="loginScreen" class="hidden min-h-screen items-center justify-center p-6">
-  <div class="w-full max-w-sm bg-ink-900 rounded-2xl shadow-xl border border-ink-700 p-8">
-    <div class="flex items-center gap-3 mb-6">
-      <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center font-bold text-white">CB</div>
+<section id="loginScreen" class="min-h-screen items-center justify-center p-6 flex" style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;">
+  <div class="w-full max-w-sm bg-ink-900 rounded-2xl shadow-xl border border-ink-700 p-8" style="width:100%;max-width:380px;background:#0f172a;border:1px solid #1e293b;border-radius:16px;padding:32px;box-shadow:0 10px 25px rgba(0,0,0,.35);">
+    <div class="flex items-center gap-3 mb-6" style="display:flex;align-items:center;gap:12px;margin-bottom:24px;">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center font-bold text-white" style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#3b82f6,#2563eb);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;">CB</div>
       <div>
-        <h1 class="text-xl font-semibold text-white">CoreBot</h1>
-        <p class="text-xs text-slate-400">Control Panel</p>
+        <h1 class="text-xl font-semibold text-white" style="margin:0;color:#fff;font-size:20px;font-weight:600;">CoreBot</h1>
+        <p class="text-xs text-slate-400" style="margin:0;color:#94a3b8;font-size:12px;">Control Panel</p>
       </div>
     </div>
     <form id="loginForm" class="space-y-4">
-      <div>
-        <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1">Логин</label>
+      <div style="margin-bottom:14px;">
+        <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1" style="display:block;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Логин</label>
         <input id="username" type="text" autocomplete="username" required
-          class="w-full px-3 py-2 rounded-lg bg-ink-800 border border-ink-600 text-slate-100 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500" />
+          class="w-full px-3 py-2 rounded-lg bg-ink-800 border border-ink-600 text-slate-100 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
+          style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;background:#111a2e;border:1px solid #334155;color:#e2e8f0;outline:none;" />
       </div>
-      <div>
-        <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1">Пароль</label>
+      <div style="margin-bottom:18px;">
+        <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1" style="display:block;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Пароль</label>
         <input id="password" type="password" autocomplete="current-password" required
-          class="w-full px-3 py-2 rounded-lg bg-ink-800 border border-ink-600 text-slate-100 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500" />
+          class="w-full px-3 py-2 rounded-lg bg-ink-800 border border-ink-600 text-slate-100 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
+          style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;background:#111a2e;border:1px solid #334155;color:#e2e8f0;outline:none;" />
       </div>
       <button id="loginBtn" type="submit"
-        class="w-full py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white font-medium transition">
+        class="w-full py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white font-medium transition"
+        style="width:100%;padding:10px;border-radius:8px;background:#2563eb;border:none;color:#fff;font-weight:500;cursor:pointer;">
         Войти
       </button>
-      <p id="loginMsg" class="text-sm text-rose-400 hidden"></p>
+      <p id="loginMsg" class="text-sm text-rose-400 hidden" style="display:none;color:#fda4af;font-size:13px;margin-top:10px;"></p>
     </form>
   </div>
 </section>
@@ -119,5 +138,25 @@
 </div>
 
 <script src="main.js" defer></script>
+<script>
+  // Watchdog: если main.js не отработал за 5 секунд — показать ошибку прямо в splash.
+  window.addEventListener("error", function (e) {
+    var box = document.getElementById("bootError");
+    if (box) {
+      box.style.display = "block";
+      box.textContent = "Ошибка загрузки JS: " + (e && e.message ? e.message : "(unknown)");
+    }
+  });
+  setTimeout(function () {
+    var splash = document.getElementById("bootSplash");
+    if (splash && splash.style.display !== "none") {
+      var box = document.getElementById("bootError");
+      if (box) {
+        box.style.display = "block";
+        box.textContent = "main.js не отработал за 5 c. Проверьте Network → main.js (статус 200?), затем DevTools → Console.";
+      }
+    }
+  }, 5000);
+</script>
 </body>
 </html>

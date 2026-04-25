@@ -88,17 +88,67 @@ class OutboundConsumer:
             await asyncio.sleep(random.uniform(0.2, 0.6))
         return len(batch)
 
+    # Сколько раз пробуем отправить, прежде чем поставить final 'failed'.
+    MAX_ATTEMPTS = 5
+    # База для экспоненциального бэк-оффа в секундах: 2, 4, 8, 16, 32.
+    BACKOFF_BASE_SEC = 2.0
+    BACKOFF_MAX_SEC = 60.0
+
+    # Permanent-ошибки — на них не ретраимся, сразу 'failed'.
+    _PERMANENT_ERR_MARKERS = (
+        "USER_DEACTIVATED",
+        "USER_DELETED",
+        "USER_IS_BLOCKED",
+        "PEER_ID_INVALID",
+        "CHAT_WRITE_FORBIDDEN",
+        "INPUT_USER_DEACTIVATED",
+        "Получатель недоступен",
+    )
+
+    def _looks_transient(self, err: str) -> bool:
+        if not err:
+            return True
+        err_up = err.upper()
+        for marker in self._PERMANENT_ERR_MARKERS:
+            if marker.upper() in err_up:
+                return False
+        return True
+
+    def _backoff_delay(self, attempts_done: int) -> float:
+        delay = self.BACKOFF_BASE_SEC * (2 ** max(0, attempts_done - 1))
+        return min(self.BACKOFF_MAX_SEC, delay) + random.uniform(0, 1.5)
+
     async def _process_one(self, row, worker_manager) -> None:
+        attempts_done = int(getattr(row, "attempts", 0) or 0)
         worker = worker_manager.workers.get(int(row.account_id))
-        if worker is None or not getattr(worker, "is_connected", False):
-            async with session_scope() as session:
-                await OutboundQueueRepository.mark_failed(
-                    session, row.id, "worker not connected"
+        worker_ready = bool(worker and getattr(worker, "is_connected", False))
+
+        if not worker_ready:
+            # Не падаем моментально — может быть временный disconnect/restart.
+            if attempts_done + 1 >= self.MAX_ATTEMPTS:
+                async with session_scope() as session:
+                    await OutboundQueueRepository.mark_failed(
+                        session, row.id, "worker not connected (max attempts reached)"
+                    )
+                log.warning(
+                    f"OutboundConsumer: worker for account_id={row.account_id} "
+                    f"not connected after {self.MAX_ATTEMPTS} attempts, "
+                    f"queue_id={row.id} -> failed"
                 )
-            log.warning(
-                f"OutboundConsumer: worker for account_id={row.account_id} "
-                f"not connected, queue_id={row.id} failed"
-            )
+            else:
+                delay = self._backoff_delay(attempts_done + 1)
+                async with session_scope() as session:
+                    await OutboundQueueRepository.reschedule(
+                        session,
+                        row.id,
+                        delay_sec=delay,
+                        last_error="worker not connected",
+                    )
+                log.info(
+                    f"OutboundConsumer: worker not ready for queue_id={row.id} "
+                    f"(account={row.account_id}), retry in {delay:.1f}s "
+                    f"(attempt {attempts_done + 1}/{self.MAX_ATTEMPTS})"
+                )
             return
 
         text = (row.text or "").strip()
@@ -116,14 +166,26 @@ class OutboundConsumer:
         )
 
         if not ok:
-            async with session_scope() as session:
-                await OutboundQueueRepository.mark_failed(
-                    session, row.id, err or "unknown send error"
+            err_str = err or "unknown send error"
+            transient = self._looks_transient(err_str)
+            if transient and attempts_done + 1 < self.MAX_ATTEMPTS:
+                delay = self._backoff_delay(attempts_done + 1)
+                async with session_scope() as session:
+                    await OutboundQueueRepository.reschedule(
+                        session, row.id, delay_sec=delay, last_error=err_str
+                    )
+                log.info(
+                    f"OutboundConsumer: transient send error for queue_id={row.id} "
+                    f"({err_str!r}), retry in {delay:.1f}s "
+                    f"(attempt {attempts_done + 1}/{self.MAX_ATTEMPTS})"
                 )
-            log.warning(
-                f"OutboundConsumer: send failed (queue_id={row.id}, "
-                f"account={row.account_id}, peer={row.peer_user_id}): {err}"
-            )
+            else:
+                async with session_scope() as session:
+                    await OutboundQueueRepository.mark_failed(session, row.id, err_str)
+                log.warning(
+                    f"OutboundConsumer: send failed (queue_id={row.id}, "
+                    f"account={row.account_id}, peer={row.peer_user_id}): {err_str}"
+                )
             return
 
         async with session_scope() as session:

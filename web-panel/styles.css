@@ -80,3 +80,21 @@ table.cb-table tbody tr:hover { background-color: rgba(30,41,59,0.5); }
 /* Live dot */
 .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #22c55e; box-shadow: 0 0 0 0 rgba(34,197,94,0.6); animation: pulse 1.6s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.6); } 70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+
+/* ===== Outbound queue (manual sends in dialog feed) ===== */
+.bubble-queue { opacity: 0.95; border: 1px dashed rgba(96,165,250,0.45); }
+.qstatus-failed.bubble-queue { border-color: rgba(244,63,94,0.55); background-color: rgba(244,63,94,0.10); color: #fecdd3; }
+.qstatus-cancelled.bubble-queue { border-color: rgba(148,163,184,0.45); background-color: rgba(148,163,184,0.10); color: #cbd5e1; text-decoration: line-through; }
+.qstatus-sending.bubble-queue { border-style: solid; }
+.qpill { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0 0.4rem; border-radius: 9999px; font-size: 0.625rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.qpill-pend { background: rgba(59,130,246,0.18); color: #93c5fd; }
+.qpill-send { background: rgba(245,158,11,0.18); color: #fcd34d; }
+.qpill-fail { background: rgba(244,63,94,0.18); color: #fda4af; }
+.qpill-cncl { background: rgba(148,163,184,0.18); color: #cbd5e1; }
+.qpill-ok   { background: rgba(34,197,94,0.18);  color: #86efac; }
+.bubble-actions { display: flex; gap: 0.375rem; margin-top: 0.25rem; }
+.qbtn { font-size: 0.7rem; padding: 0.125rem 0.5rem; border-radius: 0.375rem; border: 1px solid; transition: background-color 120ms ease; }
+.qbtn-retry { color: #93c5fd; border-color: rgba(59,130,246,0.4); background: transparent; }
+.qbtn-retry:hover { background: rgba(59,130,246,0.15); }
+.qbtn-cancel { color: #cbd5e1; border-color: rgba(148,163,184,0.4); background: transparent; }
+.qbtn-cancel:hover { background: rgba(148,163,184,0.15); }

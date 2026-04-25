@@ -194,7 +194,13 @@ function onLiveMessage(msg) {
   if (state.route === "dialogs" &&
       state.current.accountId === msg.account_id &&
       state.current.peerId === msg.peer_user_id) {
-    appendMessageToChat(msg);
+    // Если это assistant — он мог соответствовать строке очереди.
+    // Перерисовываем диалог целиком, чтобы убрать placeholder из outbound_queue.
+    if (msg.role === "assistant") {
+      loadDialogMessages(msg.account_id, msg.peer_user_id);
+    } else {
+      appendMessageToChat(msg);
+    }
   }
   if (state.route === "dashboard") {
     incLiveCounter();
@@ -561,7 +567,9 @@ async function loadDialogMessages(accountId, peerId) {
       el.innerHTML = "";
       list.forEach(appendMessageToChat);
     }
-    state.current.messageMaxId = list.length ? list[list.length - 1].id : 0;
+    // messageMaxId считаем только по реальным neuro-сообщениям (положительные id).
+    const realIds = list.filter((m) => m.source !== "queue" && (m.id || 0) > 0).map((m) => m.id);
+    state.current.messageMaxId = realIds.length ? Math.max(...realIds) : 0;
     renderComposer(accountId, peerId);
     el.scrollTop = el.scrollHeight;
   } catch (e) {
@@ -569,21 +577,86 @@ async function loadDialogMessages(accountId, peerId) {
   }
 }
 
+function _queueStatusBadge(status) {
+  switch (status) {
+    case "pending":   return '<span class="qpill qpill-pend">в очереди</span>';
+    case "sending":   return '<span class="qpill qpill-send">отправляется</span>';
+    case "failed":    return '<span class="qpill qpill-fail">не доставлено</span>';
+    case "cancelled": return '<span class="qpill qpill-cncl">отменено</span>';
+    case "sent":      return '<span class="qpill qpill-ok">отправлено</span>';
+    default:          return `<span class="qpill">${escapeHTML(status || "?")}</span>`;
+  }
+}
+
 function appendMessageToChat(msg) {
   const el = $("#dlgMessages");
   if (!el) return;
-  if (msg.id <= state.current.messageMaxId) return;
-  state.current.messageMaxId = Math.max(state.current.messageMaxId, msg.id || 0);
+  // Дубли только по реальным neuro-сообщениям (положительный id).
+  if (msg.source !== "queue" && (msg.id || 0) > 0 && msg.id <= state.current.messageMaxId) return;
+  if (msg.source !== "queue") {
+    state.current.messageMaxId = Math.max(state.current.messageMaxId, msg.id || 0);
+  }
 
-  const cls = msg.role === "assistant" ? "bubble bubble-asst" : "bubble bubble-user";
+  const isAssistant = msg.role === "assistant";
+  const isQueue = msg.source === "queue";
   const wrap = document.createElement("div");
-  wrap.className = "flex flex-col " + (msg.role === "assistant" ? "items-end" : "items-start");
+  wrap.className = "flex flex-col " + (isAssistant ? "items-end" : "items-start");
+
+  let metaExtra = "";
+  let bubbleCls = isAssistant ? "bubble bubble-asst" : "bubble bubble-user";
+
+  if (isQueue) {
+    bubbleCls += " bubble-queue qstatus-" + escapeHTML(msg.queue_status || "pending");
+    metaExtra = ` · ${_queueStatusBadge(msg.queue_status)}`;
+    if (msg.queue_attempts) metaExtra += ` · попытка ${msg.queue_attempts}`;
+    if (msg.queue_error) {
+      metaExtra += ` · <span class="text-rose-400" title="${escapeHTML(msg.queue_error)}">${escapeHTML(msg.queue_error.slice(0, 60))}</span>`;
+    }
+  }
+
+  let actions = "";
+  if (isQueue) {
+    if (msg.queue_status === "failed" || msg.queue_status === "cancelled") {
+      actions += `<button class="qbtn qbtn-retry" data-action="retry" data-qid="${msg.queue_id}">Повторить</button>`;
+    }
+    if (msg.queue_status === "pending" || msg.queue_status === "failed") {
+      actions += `<button class="qbtn qbtn-cancel" data-action="cancel" data-qid="${msg.queue_id}">Отменить</button>`;
+    }
+  }
+
   wrap.innerHTML = `
-    <div class="${cls}">${escapeHTML(msg.content || "")}</div>
-    <div class="bubble-meta">${msg.role === "assistant" ? "бот" : "клиент"} · ${fmtDate(msg.created_at)}</div>
+    <div class="${bubbleCls}">${escapeHTML(msg.content || "")}</div>
+    <div class="bubble-meta">${isAssistant ? "бот" : "клиент"} · ${fmtDate(msg.created_at)}${metaExtra}</div>
+    ${actions ? `<div class="bubble-actions">${actions}</div>` : ""}
   `;
+
+  if (actions) {
+    wrap.querySelectorAll("button[data-action]").forEach((b) => {
+      b.addEventListener("click", () => onQueueAction(b.dataset.action, parseInt(b.dataset.qid, 10)));
+    });
+  }
+
   el.appendChild(wrap);
   el.scrollTop = el.scrollHeight;
+}
+
+async function onQueueAction(action, queueId) {
+  if (!queueId) return;
+  try {
+    if (action === "retry") {
+      await api(`/business/queue/${queueId}/retry`, { method: "POST" });
+      toast("Поставлено на повторную отправку", "success", 1500);
+    } else if (action === "cancel") {
+      if (!confirm("Отменить отправку этого сообщения?")) return;
+      await api(`/business/queue/${queueId}/cancel`, { method: "POST", raw: true });
+      toast("Отменено", "success", 1500);
+    }
+    if (state.current.accountId && state.current.peerId) {
+      loadDialogMessages(state.current.accountId, state.current.peerId);
+    }
+  } catch (e) {
+    toast(`Ошибка: ${e.message}`, "error");
+  }
 }
 
 function renderComposer(accountId, peerId) {
@@ -614,6 +687,8 @@ function renderComposer(accountId, peerId) {
       });
       ta.value = "";
       toast("Сообщение поставлено в очередь", "success", 1500);
+      // Сразу подтягиваем, чтобы placeholder появился в ленте.
+      loadDialogMessages(accountId, peerId);
     } catch (e) {
       toast(`Не удалось отправить: ${e.message}`, "error");
     }
@@ -776,11 +851,29 @@ function renderNotFound() {
 
 /* ---------------------------- Bootstrap -------------------------------- */
 
-document.addEventListener("DOMContentLoaded", () => {
-  $("#loginForm").addEventListener("submit", loginFlow);
-  $("#logoutBtn").addEventListener("click", () => handleLogout(false));
-  $("#globalRefreshBtn").addEventListener("click", () => navigate(window.location.hash));
+function bootstrap() {
+  try {
+    const splash = document.getElementById("bootSplash");
+    if (splash) splash.style.display = "none";
 
-  if (state.token) enterApp();
-  else handleLogout(true);
-});
+    $("#loginForm").addEventListener("submit", loginFlow);
+    $("#logoutBtn").addEventListener("click", () => handleLogout(false));
+    $("#globalRefreshBtn").addEventListener("click", () => navigate(window.location.hash));
+
+    if (state.token) enterApp();
+    else handleLogout(true);
+  } catch (err) {
+    const box = document.getElementById("bootError");
+    if (box) {
+      box.style.display = "block";
+      box.textContent = "Ошибка инициализации: " + (err && err.message ? err.message : String(err));
+    }
+    console.error("[bootstrap]", err);
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bootstrap);
+} else {
+  bootstrap();
+}

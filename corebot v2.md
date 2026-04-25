@@ -213,6 +213,18 @@
 - Поведение: внутри одного запуска каждый клиент получает ровно одно сообщение -> очередь становится пустой -> срабатывает `_notify_owner_html` о завершении. Между запусками тест-список снова полный.
 - Проверка: `python -m pytest -q tests/test_backlog_fixes.py` -> ожидается `10 passed`.
 
+### 2026-04-25 (web-panel v2.1: видимость очереди + retry/cancel + boot splash)
+- UI: `index.html` — добавлен видимый по умолчанию splash «Загрузка панели…» + watchdog 5 c, форма логина теперь видна без JS, инлайн-стили на случай падения Tailwind CDN. `main.js` — `bootstrap()` обернут в try/catch, splash сам себя гасит.
+- Очередь ручных отправок (`outbound_queue`):
+  - модель + миграция: `attempts INTEGER`, `next_attempt_at DATETIME`;
+  - `OutboundConsumer` теперь не падает на временной проблеме (`worker not connected` или transient send error) — экспоненциальный бэк-офф (2-32 c +jitter) до 5 попыток. На permanent-ошибки (`USER_DEACTIVATED`, `USER_DELETED`, `PEER_ID_INVALID` и т.п.) — мгновенный `failed`.
+  - `OutboundQueueRepository`: добавлены `reschedule(id, delay_sec)`, `retry(id)`, `cancel(id)`. `fetch_pending_batch` уважает `next_attempt_at`.
+  - `messages`-эндпоинт теперь подмешивает строки очереди (status: pending/sending/failed/cancelled) в ленту диалога — пользователь видит, что его сообщения «в работе».
+  - Новые роуты: `POST /business/queue/{id}/retry`, `POST /business/queue/{id}/cancel`.
+  - UI: queue-row рендерится пунктирной рамкой + status-pill, под ним кнопки «Повторить» / «Отменить».
+- SSE: при получении assistant-сообщения для текущего открытого диалога UI делает re-fetch вместо incremental append — чтобы placeholder из очереди корректно исчез после реальной отправки.
+- Проверка: `python -m pytest -q tests/test_backlog_fixes.py` -> `10 passed`.
+
 ### 2026-04-25 (web-panel v2: SPA + бизнес-модули + AI/Manual + cleanup)
 - Полностью переписан фронтенд `web-panel/` (Tailwind CDN + vanilla JS, hash-router, SSE).
   Разделы: Дашборд / Аккаунты / Диалоги / Логи / Настройки. Sidebar, единый header, тосты, live-индикатор.

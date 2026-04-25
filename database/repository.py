@@ -433,6 +433,8 @@ class Database:
                             error TEXT,
                             telegram_message_id BIGINT,
                             requested_by VARCHAR(120),
+                            attempts INTEGER NOT NULL DEFAULT 0,
+                            next_attempt_at DATETIME,
                             created_at DATETIME DEFAULT (datetime('now')),
                             sent_at DATETIME
                         )
@@ -446,6 +448,23 @@ class Database:
                         "ON outbound_queue(account_id, peer_user_id)"
                     ))
                     log.info("✅ Таблица outbound_queue создана")
+                else:
+                    # Доливаем колонки attempts/next_attempt_at, если таблица была создана
+                    # старой миграцией (без них).
+                    ob_cols_res = await conn.execute(text(
+                        "PRAGMA table_info(outbound_queue)"
+                    ))
+                    ob_cols = {row[1] for row in ob_cols_res.fetchall()}
+                    if "attempts" not in ob_cols:
+                        log.info("➕ outbound_queue: attempts")
+                        await conn.execute(text(
+                            "ALTER TABLE outbound_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+                        ))
+                    if "next_attempt_at" not in ob_cols:
+                        log.info("➕ outbound_queue: next_attempt_at")
+                        await conn.execute(text(
+                            "ALTER TABLE outbound_queue ADD COLUMN next_attempt_at DATETIME"
+                        ))
 
                 # --- client alive windows table ---
                 caw_exists = await conn.execute(text(

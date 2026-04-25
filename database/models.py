@@ -742,11 +742,12 @@ class OutboundQueue(Base):
     peer_user_id = Column(BigInteger, nullable=False)
     client_id = Column(Integer, ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
     text = Column(Text, nullable=False)
-    status = Column(String(20), nullable=False, default="pending")  # pending | sent | failed | cancelled
+    status = Column(String(20), nullable=False, default="pending")  # pending | sending | sent | failed | cancelled
     error = Column(Text, nullable=True)
     telegram_message_id = Column(BigInteger, nullable=True)
-    # Кто инициировал отправку (для аудита из веб-панели)
     requested_by = Column(String(120), nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     sent_at = Column(DateTime, nullable=True)
 

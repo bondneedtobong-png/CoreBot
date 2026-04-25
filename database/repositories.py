@@ -2215,9 +2215,16 @@ class OutboundQueueRepository:
         session: AsyncSession,
         limit: int = 20,
     ) -> list[OutboundQueue]:
+        now = datetime.utcnow()
         result = await session.execute(
             select(OutboundQueue)
-            .where(OutboundQueue.status == "pending")
+            .where(
+                OutboundQueue.status == "pending",
+                or_(
+                    OutboundQueue.next_attempt_at.is_(None),
+                    OutboundQueue.next_attempt_at <= now,
+                ),
+            )
             .order_by(OutboundQueue.created_at.asc(), OutboundQueue.id.asc())
             .limit(int(limit))
         )
@@ -2237,6 +2244,7 @@ class OutboundQueueRepository:
                 telegram_message_id=int(telegram_message_id) if telegram_message_id else None,
                 sent_at=datetime.utcnow(),
                 error=None,
+                next_attempt_at=None,
             )
         )
         await session.commit()
@@ -2254,9 +2262,67 @@ class OutboundQueueRepository:
                 status="failed",
                 error=(error or "")[:1000],
                 sent_at=datetime.utcnow(),
+                next_attempt_at=None,
             )
         )
         await session.commit()
+
+    @staticmethod
+    async def reschedule(
+        session: AsyncSession,
+        queue_id: int,
+        *,
+        delay_sec: float,
+        last_error: Optional[str] = None,
+    ) -> None:
+        """
+        Не падаем сразу: помечаем как pending с next_attempt_at = now + delay,
+        чтобы fetch_pending_batch не выбирал её до истечения паузы.
+        """
+        next_at = datetime.utcnow() + timedelta(seconds=max(0.0, float(delay_sec)))
+        await session.execute(
+            update(OutboundQueue)
+            .where(OutboundQueue.id == int(queue_id))
+            .values(
+                status="pending",
+                error=(last_error or "")[:1000] if last_error else None,
+                attempts=OutboundQueue.attempts + 1,
+                next_attempt_at=next_at,
+            )
+        )
+        await session.commit()
+
+    @staticmethod
+    async def cancel(session: AsyncSession, queue_id: int) -> bool:
+        res = await session.execute(
+            update(OutboundQueue)
+            .where(
+                OutboundQueue.id == int(queue_id),
+                OutboundQueue.status.in_(["pending", "failed"]),
+            )
+            .values(status="cancelled", next_attempt_at=None)
+        )
+        await session.commit()
+        return (res.rowcount or 0) > 0
+
+    @staticmethod
+    async def retry(session: AsyncSession, queue_id: int) -> bool:
+        res = await session.execute(
+            update(OutboundQueue)
+            .where(
+                OutboundQueue.id == int(queue_id),
+                OutboundQueue.status.in_(["failed", "cancelled"]),
+            )
+            .values(
+                status="pending",
+                error=None,
+                attempts=0,
+                next_attempt_at=None,
+                sent_at=None,
+            )
+        )
+        await session.commit()
+        return (res.rowcount or 0) > 0
 
     @staticmethod
     async def list_recent_for_dialog(
