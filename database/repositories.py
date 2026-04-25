@@ -26,6 +26,7 @@ from database.models import (
     NeuroActionLog,
     NeuroChatMessage,
     NeuroStopList,
+    OutboundQueue,
     ProxyGroup,
     WarmupProfile,
     WarmupLog,
@@ -906,6 +907,28 @@ class AccountRepository:
             update(Account)
             .where(Account.id == account_id)
             .values(membership=membership, updated_at=datetime.utcnow())
+        )
+        await session.commit()
+        return True
+
+    @staticmethod
+    async def set_ai_mode(
+        session: AsyncSession,
+        account_id: int,
+        ai_mode: str,
+    ) -> bool:
+        """Переключение режима автоответа аккаунта: AI_ACTIVE | MANUAL.
+
+        Используется веб-панелью; бот при следующем входящем перечитает
+        Account из БД и применит новый режим без рестарта.
+        """
+        normalized = (ai_mode or "").strip().upper()
+        if normalized not in ("AI_ACTIVE", "MANUAL"):
+            return False
+        await session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(ai_mode=normalized, updated_at=datetime.utcnow())
         )
         await session.commit()
         return True
@@ -2153,3 +2176,102 @@ class NeuroStopRepository:
                 )
             )
         return out
+
+
+class OutboundQueueRepository:
+    """
+    Очередь ручных исходящих сообщений из веб-панели.
+
+    Вызывается:
+      * веб-панелью (enqueue)               — добавляет 'pending'
+      * outbound consumer воркером бота      — забирает 'pending' и шлёт через Telethon
+    """
+
+    @staticmethod
+    async def enqueue(
+        session: AsyncSession,
+        *,
+        account_id: int,
+        peer_user_id: int,
+        text: str,
+        client_id: Optional[int] = None,
+        requested_by: Optional[str] = None,
+    ) -> OutboundQueue:
+        row = OutboundQueue(
+            account_id=int(account_id),
+            peer_user_id=int(peer_user_id),
+            client_id=int(client_id) if client_id is not None else None,
+            text=text,
+            status="pending",
+            requested_by=(requested_by or None),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row
+
+    @staticmethod
+    async def fetch_pending_batch(
+        session: AsyncSession,
+        limit: int = 20,
+    ) -> list[OutboundQueue]:
+        result = await session.execute(
+            select(OutboundQueue)
+            .where(OutboundQueue.status == "pending")
+            .order_by(OutboundQueue.created_at.asc(), OutboundQueue.id.asc())
+            .limit(int(limit))
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def mark_sent(
+        session: AsyncSession,
+        queue_id: int,
+        telegram_message_id: Optional[int],
+    ) -> None:
+        await session.execute(
+            update(OutboundQueue)
+            .where(OutboundQueue.id == int(queue_id))
+            .values(
+                status="sent",
+                telegram_message_id=int(telegram_message_id) if telegram_message_id else None,
+                sent_at=datetime.utcnow(),
+                error=None,
+            )
+        )
+        await session.commit()
+
+    @staticmethod
+    async def mark_failed(
+        session: AsyncSession,
+        queue_id: int,
+        error: str,
+    ) -> None:
+        await session.execute(
+            update(OutboundQueue)
+            .where(OutboundQueue.id == int(queue_id))
+            .values(
+                status="failed",
+                error=(error or "")[:1000],
+                sent_at=datetime.utcnow(),
+            )
+        )
+        await session.commit()
+
+    @staticmethod
+    async def list_recent_for_dialog(
+        session: AsyncSession,
+        account_id: int,
+        peer_user_id: int,
+        limit: int = 50,
+    ) -> list[OutboundQueue]:
+        result = await session.execute(
+            select(OutboundQueue)
+            .where(
+                OutboundQueue.account_id == int(account_id),
+                OutboundQueue.peer_user_id == int(peer_user_id),
+            )
+            .order_by(OutboundQueue.created_at.desc())
+            .limit(int(limit))
+        )
+        return list(result.scalars().all())

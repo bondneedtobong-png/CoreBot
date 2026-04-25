@@ -1,43 +1,123 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="ru">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CoreBot Control Panel</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+  <link rel="stylesheet" href="styles.css" />
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            ink: { 950: '#0b1220', 900: '#0f172a', 800: '#111a2e', 700: '#1e293b', 600: '#334155' },
+            accent: { 500: '#3b82f6', 600: '#2563eb' },
+          },
+          fontFamily: {
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
 </head>
-<body>
-  <main class="container">
-    <h1>CoreBot Control Panel</h1>
+<body class="bg-ink-950 text-slate-200 min-h-screen font-sans">
 
-    <section id="loginBox" class="card">
-      <h2>Login</h2>
-      <input id="username" placeholder="username" />
-      <input id="password" placeholder="password" type="password" />
-      <button id="loginBtn">Sign in</button>
-      <p id="loginMsg"></p>
-    </section>
+<!-- =========================== Login screen =========================== -->
+<section id="loginScreen" class="hidden min-h-screen items-center justify-center p-6">
+  <div class="w-full max-w-sm bg-ink-900 rounded-2xl shadow-xl border border-ink-700 p-8">
+    <div class="flex items-center gap-3 mb-6">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center font-bold text-white">CB</div>
+      <div>
+        <h1 class="text-xl font-semibold text-white">CoreBot</h1>
+        <p class="text-xs text-slate-400">Control Panel</p>
+      </div>
+    </div>
+    <form id="loginForm" class="space-y-4">
+      <div>
+        <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1">Логин</label>
+        <input id="username" type="text" autocomplete="username" required
+          class="w-full px-3 py-2 rounded-lg bg-ink-800 border border-ink-600 text-slate-100 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500" />
+      </div>
+      <div>
+        <label class="block text-xs uppercase tracking-wide text-slate-400 mb-1">Пароль</label>
+        <input id="password" type="password" autocomplete="current-password" required
+          class="w-full px-3 py-2 rounded-lg bg-ink-800 border border-ink-600 text-slate-100 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500" />
+      </div>
+      <button id="loginBtn" type="submit"
+        class="w-full py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white font-medium transition">
+        Войти
+      </button>
+      <p id="loginMsg" class="text-sm text-rose-400 hidden"></p>
+    </form>
+  </div>
+</section>
 
-    <section id="dashboardBox" class="card hidden">
-      <h2>Dashboard</h2>
-      <div id="summary"></div>
-      <button id="refreshBtn">Refresh</button>
-    </section>
+<!-- =========================== App shell =========================== -->
+<div id="appShell" class="hidden min-h-screen flex">
 
-    <section id="agentsBox" class="card hidden">
-      <h2>Agents</h2>
-      <ul id="agents"></ul>
-    </section>
+  <!-- Sidebar -->
+  <aside class="w-60 shrink-0 bg-ink-900 border-r border-ink-700 flex flex-col">
+    <div class="px-4 py-4 border-b border-ink-700 flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center font-bold text-white">CB</div>
+      <div class="leading-tight">
+        <div class="text-sm font-semibold text-white">CoreBot</div>
+        <div class="text-[11px] text-slate-400">Control Panel</div>
+      </div>
+    </div>
+    <nav id="sideNav" class="flex-1 p-2 space-y-1">
+      <a href="#/dashboard" data-route="dashboard" class="nav-link">
+        <span class="nav-ico">📊</span> Дашборд
+      </a>
+      <a href="#/accounts" data-route="accounts" class="nav-link">
+        <span class="nav-ico">👤</span> Аккаунты
+      </a>
+      <a href="#/dialogs" data-route="dialogs" class="nav-link">
+        <span class="nav-ico">💬</span> Диалоги
+      </a>
+      <a href="#/logs" data-route="logs" class="nav-link">
+        <span class="nav-ico">📜</span> Логи
+      </a>
+      <a href="#/settings" data-route="settings" class="nav-link">
+        <span class="nav-ico">⚙️</span> Настройки
+      </a>
+    </nav>
+    <div class="border-t border-ink-700 px-3 py-3 text-xs">
+      <div class="flex items-center justify-between">
+        <span class="text-slate-400">Поток:</span>
+        <span id="sseStatus" class="text-slate-500">offline</span>
+      </div>
+      <div class="flex items-center justify-between mt-2">
+        <span class="text-slate-400" id="userBadge">—</span>
+        <button id="logoutBtn" class="text-rose-400 hover:text-rose-300">Выйти</button>
+      </div>
+    </div>
+  </aside>
 
-    <section id="logsBox" class="card hidden">
-      <h2>Recent Logs</h2>
-      <ul id="logs"></ul>
-    </section>
-    <section id="alertsBox" class="card hidden">
-      <h2>Alerts</h2>
-      <ul id="alerts"></ul>
-    </section>
+  <!-- Main column -->
+  <main class="flex-1 min-w-0 flex flex-col">
+    <header class="px-6 py-4 border-b border-ink-700 bg-ink-900/60 flex items-center justify-between gap-4">
+      <div>
+        <h1 id="pageTitle" class="text-lg font-semibold text-white">Дашборд</h1>
+        <p id="pageSubtitle" class="text-sm text-slate-400">Сводка по системе</p>
+      </div>
+      <div class="flex items-center gap-2 text-xs">
+        <button id="globalRefreshBtn" class="px-3 py-1.5 rounded-md bg-ink-700 hover:bg-ink-600 border border-ink-600 transition">
+          ⟳ Обновить
+        </button>
+      </div>
+    </header>
+
+    <div id="pageRoot" class="flex-1 min-h-0 overflow-hidden">
+      <!-- Сюда рендерятся секции -->
+    </div>
+
+    <div id="toast" class="hidden fixed bottom-4 right-4 z-50 max-w-md px-4 py-3 rounded-lg shadow-lg border border-ink-600 bg-ink-800 text-sm"></div>
   </main>
-  <script src="./main.js"></script>
+</div>
+
+<script src="main.js" defer></script>
 </body>
 </html>

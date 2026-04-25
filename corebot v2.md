@@ -92,25 +92,37 @@
 
 ---
 
-### Этап 6. Веб-панель (MVP)
+### Этап 6. Веб-панель (MVP + бизнес-модули)
 
 Текущее состояние (что уже в репо):
 - [x] Бэкенд `control_plane/` (FastAPI): `/auth/login`, `/dashboard/{summary,agents,logs,alerts}`, `/ingest/batch`, `/admin/*`, `/health`.
 - [x] Multi-tenant модель + audit log + alert engine с Telegram-нотификациями (`control_plane/services/alerts.py`).
 - [x] Агент телеметрии в основном боте (`utils/telemetry.py`), отключён по умолчанию (`CP_AGENT_ENABLED=0`).
-- [x] Статика `web-panel/` (vanilla HTML/JS): логин + Summary/Agents/Logs/Alerts.
 - [x] Шаблон `corebot-cp.service` + `.env.example` блок `CP_*`.
 - [x] Отдельный файл деплоя: `docs/WEBPANEL_DEPLOY.md`.
+- [x] **Sync-движок к `corebot.db`** (`control_plane/business/db.py`, `BOT_DATABASE_URL`).
+- [x] **SPA-фронтенд**: hash-router, sidebar, разделы Dashboard/Accounts/Dialogs/Logs/Settings (Tailwind CDN + vanilla JS, без сборщика).
+- [x] **Бизнес-API** `/business/*`:
+  - `GET /business/accounts` + `POST /business/accounts/{id}/mode` (AI_ACTIVE | MANUAL).
+  - `GET /business/accounts/{id}/dialogs` (последний снимок диалогов).
+  - `GET /business/accounts/{id}/dialogs/{peer}/messages` (лента, with `after_id` для дельт).
+  - `POST /business/accounts/{id}/dialogs/{peer}/send` (ручной ответ -> `outbound_queue`).
+  - `DELETE /business/accounts/{id}/dialogs/{peer}` (вычистить переписку).
+  - `POST /business/cleanup` — массовая безопасная чистка по фильтрам.
+- [x] **SSE-стрим** `GET /business/stream?token=...` — live-сообщения нейрочата.
+- [x] **AI/MANUAL режим аккаунта**: `Account.ai_mode` + миграция; нейро-гейт уважает MANUAL и продолжает фиксировать входящие в `neuro_chat_messages` + `client_interactions` для ленты.
+- [x] **OutboundConsumer** (`workers/outbound_consumer.py`): полит `outbound_queue`, шлёт через тот же `Worker`, что и нейрочат, дописывает результат в `neuro_chat_messages` (role='assistant') — контекст не теряется при возврате в AI_ACTIVE.
+- [x] **CLI-чистка**: `python -m scripts.cleanup_dialogs --older-days 30 --dry-run` для крона.
 
-Что осталось сделать (UI поверх существующего бэка):
+Что осталось сделать:
 - [ ] Дашборд: бизнес-метрики бота (рассылки/клиенты/классы), не только generic agent stats.
-- [ ] Раздел диалогов нейрочата с фильтрами по аккаунту/клиенту/классу.
 - [ ] Раздел настройки нейрочата (prompt/model/presets) — синхронно с админкой в Telegram.
 - [ ] Раздел классовой системы (counters, фильтры, экспорт CSV).
 - [ ] Логи/ошибки OpenRouter (отдельный канал, отдельный фильтр).
-- [ ] Управление аккаунтами/прокси/группами/рассылками (CRUD).
-- [ ] Смена пароля админа из UI.
-- [ ] (Опционально) Перевод фронтенда на нормальный фреймворк (React/Vite) при росте экранов.
+- [ ] Управление аккаунтами/прокси/группами/рассылками (CRUD из UI).
+- [ ] Smart-soft-delete с архивированием (`outbound_queue` + `neuro_chat_messages` -> отдельный архивный стол).
+- [ ] Смена пароля админа из UI; пригласить оператора с ограниченными правами.
+- [ ] (Опционально) Перевод фронтенда на Vite/React, если экранов станет больше.
 
 Критерий готовности MVP:
 - Оператор видит live-состояние (бот + рассылки + нейрочат) и может управлять минимальным конфигом без Telegram.
@@ -200,6 +212,21 @@
 - Исправление: `_get_test_queue_clients` теперь принимает `Mailing` и исключает клиентов с успешными `mailing_logs.sent_at >= mailing.started_at` (т.е. внутри текущего запуска). При следующем `update_status(RUNNING)` `started_at` обновляется -> вся тестовая аудитория снова eligible.
 - Поведение: внутри одного запуска каждый клиент получает ровно одно сообщение -> очередь становится пустой -> срабатывает `_notify_owner_html` о завершении. Между запусками тест-список снова полный.
 - Проверка: `python -m pytest -q tests/test_backlog_fixes.py` -> ожидается `10 passed`.
+
+### 2026-04-25 (web-panel v2: SPA + бизнес-модули + AI/Manual + cleanup)
+- Полностью переписан фронтенд `web-panel/` (Tailwind CDN + vanilla JS, hash-router, SSE).
+  Разделы: Дашборд / Аккаунты / Диалоги / Логи / Настройки. Sidebar, единый header, тосты, live-индикатор.
+- Бэкенд: добавлен модуль `control_plane/business/` (sync-движок к `corebot.db` через `BOT_DATABASE_URL`),
+  роуты `/business/accounts`, `/business/accounts/{id}/mode`, `/business/accounts/{id}/dialogs`,
+  `/business/accounts/{id}/dialogs/{peer}/messages`, `/business/accounts/{id}/dialogs/{peer}/send`,
+  `/business/accounts/{id}/dialogs/{peer}` (DELETE), `/business/cleanup`.
+- SSE: `GET /business/stream?token=...` — стрим новых сообщений `neuro_chat_messages` (poll каждые ~1.5 c).
+- Бот: `Account.ai_mode` (`AI_ACTIVE | MANUAL`) + миграция; нейро-гейт уважает MANUAL и в этом режиме всё равно фиксирует входящее в `neuro_chat_messages` (для ленты) и `client_interactions` (для классовой системы).
+- Бот: новая таблица `outbound_queue` + `OutboundQueueRepository`; в `main.py` запускается `OutboundConsumer` (`workers/outbound_consumer.py`), который раз в ~1.5 c шлёт `pending` строки через тот же `Worker`, что и нейрочат, и дописывает результат в `neuro_chat_messages` (role='assistant') — контекст не теряется при возврате в AI_ACTIVE.
+- CLI: `scripts/cleanup_dialogs.py` — безопасная батч-чистка (account_id / peer_user_id / older-days / classes), `--dry-run`.
+- Документы: обновлён `docs/WEBPANEL_DEPLOY.md` (раздел 12 — бизнес-модули, BOT_DATABASE_URL, описание AI/MANUAL и cleanup), обновлён `.env.example` (BOT_DATABASE_URL и `CP_BUSINESS_STREAM_*`).
+- Не сломаны: рассылки, прокси, классовая система, существующий ingest/dashboard и схема телеметрии. Все изменения базы — аддитивные (новые столбцы/таблицы, дефолты).
+- Проверка: `python -m pytest -q tests/test_backlog_fixes.py` — ожидается прежний набор `10 passed` (новые web-роуты и SSE — отдельные интеграционные сценарии, тесты по ним планируются отдельно).
 
 ---
 

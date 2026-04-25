@@ -10,6 +10,7 @@ from database.crm_repositories import ClientClassCounterRepository, ClientIntera
 from database.repositories import (
     ClientRepository,
     MailingLogRepository,
+    NeuroChatRepository,
 )
 from database.session import session_scope
 from services.neurochat.class_bridge import apply_neuro_class_commands
@@ -103,6 +104,37 @@ async def handle_incoming(worker: Any, event: events.NewMessage.Event) -> None:
                 f"Neuro incoming denied: reason={prep_reason} mailing={mailing.id} "
                 f"account={worker.account.id} client={client.id}"
             )
+            # Когда отказ из-за MANUAL-режима аккаунта — всё равно фиксируем
+            # входящее сообщение для веб-панели: чтобы оператор видел поток в
+            # реальном времени и мог ответить вручную.
+            if prep_reason == "account_manual_mode":
+                try:
+                    await NeuroChatRepository.append(
+                        session,
+                        worker.account.id,
+                        int(peer_uid),
+                        "user",
+                        text,
+                    )
+                    await ClientInteractionRepository.add(
+                        session,
+                        client_id=client.id,
+                        account_id=worker.account.id,
+                        mailing_id=mailing.id,
+                        direction="in",
+                        kind="manual_inbound",
+                        body=(text[:4000] if text else None),
+                        telegram_message_id=getattr(event.message, "id", None),
+                    )
+                    if not await MailingLogRepository.has_successful_outbound_to_client(
+                        session, worker.account.id, client.id
+                    ):
+                        return
+                    await ClientClassCounterRepository.increment(
+                        session, client.id, "pulse", 1
+                    )
+                except Exception as exc:
+                    log.warning(f"Manual-mode persist failed: {exc}")
             return
 
     assert prepared is not None

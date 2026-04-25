@@ -59,6 +59,15 @@ CP_BOOTSTRAP_ADMIN_PASSWORD=<сильный_пароль>
 CP_TELEGRAM_BOT_TOKEN=
 CP_TELEGRAM_ALERT_CHAT_ID=
 
+# Бизнес-данные бота: панель открывает основную БД бота на чтение/запись
+# (аккаунты, диалоги, ручные отправки). Это тот же файл, что DATABASE_URL,
+# но без +aiosqlite (используется sync-движок).
+BOT_DATABASE_URL=sqlite:////opt/corebot/app/data/corebot.db
+
+# SSE-стрим (опционально, можно не задавать — есть дефолты):
+CP_BUSINESS_STREAM_INTERVAL=1.5
+CP_BUSINESS_STREAM_BATCH=200
+
 # === Агент телеметрии в основном боте (corebot.service) ===
 # Пока 0 — бот ничего не шлёт в панель. Включим позже (раздел 8).
 CP_AGENT_ENABLED=0
@@ -287,7 +296,7 @@ https://panel.example.com/panel/
 ```bash
 # 1) Логин (получаем access_token)
 ADMIN_USER=admin
-ADMIN_PASS='<твой пароль>'
+ADMIN_PASS=IAGJnfsir82719fajx521iN
 TOKEN=$(curl -s -X POST http://127.0.0.1:8081/auth/login \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}" \
@@ -393,21 +402,87 @@ cb-update-all
 
 ## 11) Чеклист после первого деплоя
 
-- [ ] `systemctl is-active corebot.service` → `active`
-- [ ] `systemctl is-active corebot-cp.service` → `active`
-- [ ] `curl http://127.0.0.1:8081/health` → `{"ok":true}`
-- [ ] `http://127.0.0.1:8081/panel/` через SSH-туннель открывается
-- [ ] Залогинился под `admin` / новым паролем
+- [x] `systemctl is-active corebot.service` → `active`
+- [x] `systemctl is-active corebot-cp.service` → `active`
+- [x] `curl http://127.0.0.1:8081/health` → `{"ok":true}`
+- [x] `http://127.0.0.1:8081/panel/` через SSH-туннель открывается
+- [x] Залогинился под `admin` / новым паролем
 - [ ] (если нужен публичный доступ) `https://panel.example.com/panel/` работает
-- [ ] (если нужна телеметрия) `CP_AGENT_ENABLED=1`, в логах бота `TelemetryEmitter started`
+- [x] (если нужна телеметрия) `CP_AGENT_ENABLED=1`, в логах бота `TelemetryEmitter started`
 - [ ] В Summary растут `events_24h` после рассылки
 
 ---
 
-## 12) Что осознанно не реализовано (план на будущее)
+## 12) Бизнес-модули панели (Аккаунты, Диалоги, AI/Manual, Cleanup)
 
-Сейчас панель показывает только **agent-телеметрию**. Полноценного
-управления ботом из веб-интерфейса (CRUD по аккаунтам, рассылкам,
-клиентам, классам, нейрочату) **нет**. Это отдельный этап:
-смотри `docs/BACKLOG.md` и раздел `Этап 6 (Веб-панель MVP)` в
-`corebot v2.md`.
+Поверх ingest/dashboard добавлен второй слой — прямая работа с базой бота
+(`corebot.db`). Делается через sync-движок SQLAlchemy (`BOT_DATABASE_URL`).
+SQLite в WAL-режиме корректно отдаёт чтение/запись из двух процессов сразу.
+
+### 12.1 Что умеет
+
+* `Аккаунты` (`/panel/#/accounts`) — список аккаунтов из `accounts`,
+  переключатель `AI_ACTIVE ↔ MANUAL`. Изменение мгновенно подхватывается
+  ботом на ближайшем входящем сообщении (без рестарта).
+* `Диалоги` (`/panel/#/dialogs`) — три колонки: аккаунты → диалоги
+  (по `neuro_chat_messages`) → лента сообщений конкретного диалога.
+* Ручная отправка из ленты диалога — кладёт строку в новую таблицу
+  `outbound_queue`. В боте крутится `OutboundConsumer`
+  (`workers/outbound_consumer.py`), который раз в ~1.5 с разбирает её и
+  шлёт через Telethon тем же `Worker`-ом, что и нейрочат. После успешной
+  отправки сообщение пишется в `neuro_chat_messages` (`role='assistant'`)
+  — поэтому при возврате аккаунта в `AI_ACTIVE` LLM продолжает диалог
+  без потери контекста.
+* `Логи` — те же `dashboard/logs`, в новом UI с фильтром по уровню.
+* `Настройки` — форма безопасной очистки `neuro_chat_messages`
+  и `client_interactions` по фильтрам:
+  `account_id` / `peer_user_id` / возраст в днях / классы клиентов
+  (`dead`, `bl`, `decline`, …). Поддерживается `dry-run`. Удаление
+  идёт батчами (`batch_size`, по умолчанию 500) с отдельным `commit`
+  каждого батча — индексы не ломаются, длинных транзакций нет.
+* Live-обновления — SSE-канал `GET /business/stream` (опрос БД раз в
+  ~1.5 с, новые `neuro_chat_messages` стримятся клиенту). EventSource
+  подключается с JWT в URL `?token=…`.
+
+### 12.2 Что **не** удаляется при cleanup
+
+`MailingLog`, `accounts`, `clients` (как сущности), `class_counters`,
+`mailings`, прокси, `instance_settings`, warmup-логи, `neuro_action_logs`.
+Удаляются только переписки и `client_interactions`, попавшие под фильтр.
+
+Всю логику `cleanup` можно запускать и из CLI на VPS:
+
+```bash
+cd /opt/corebot/app
+sudo -u corebot ./venv/bin/python -m scripts.cleanup_dialogs --older-days 30 --dry-run
+```
+
+### 12.3 Миграции на VPS
+
+После `git pull` бот автоматически применит миграции:
+
+* добавит колонку `accounts.ai_mode` (`AI_ACTIVE` по умолчанию);
+* создаст таблицу `outbound_queue` с индексами.
+
+Это уже встроено в `database/repository.py::_run_migrations()`. Никаких
+ручных `ALTER TABLE` не нужно.
+
+### 12.4 Безопасность ручной отправки
+
+* Любая запись в `outbound_queue` идёт через JWT-аутентифицированный
+  endpoint (`POST /business/accounts/{id}/dialogs/{peer}/send`).
+* В очередь складывается `requested_by=<username>` (поле в БД).
+* Перед отправкой `OutboundConsumer` проверяет, что соответствующий
+  `Worker` подключён; иначе строка получает `status=failed` с понятным
+  `error`.
+* Длина текста ограничена 4000 символов.
+
+### 12.5 Что ещё в плане (не сделано)
+
+Внутри роадмапа `corebot v2.md`:
+
+* CRUD по рассылкам/клиентам/системным настройкам в UI;
+* Soft-delete с архивом (сейчас — hard delete батчами);
+* Webhook-интеграция вместо SSE (если потребуется publish/sub);
+* Смена пароля админа из UI и приглашение операторов;
+* Сборка фронта на Vite/React, если зависимости и роуты вырастут.

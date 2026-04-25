@@ -152,6 +152,11 @@ class Account(Base):
     # Статус
     status = Column(Enum(AccountStatus), default=AccountStatus.INACTIVE)
 
+    # Режим автоматического ответа в нейрочате:
+    # AI_ACTIVE — нейрочат отвечает сам (по обычному pipeline);
+    # MANUAL    — нейрочат игнорирует входящие, оператор отвечает вручную из веб-панели.
+    ai_mode = Column(String(20), nullable=False, default="AI_ACTIVE")
+
     # Статистика
     messages_sent = Column(Integer, default=0)
     messages_failed = Column(Integer, default=0)
@@ -716,3 +721,34 @@ class WarmupLog(Base):
 
     def __repr__(self):
         return f"<WarmupLog acc={self.account_id} {self.action} {self.status}>"
+
+
+class OutboundQueue(Base):
+    """
+    Очередь ручных исходящих сообщений из веб-панели.
+
+    Веб-панель добавляет сюда строки со статусом 'pending'.
+    Воркер бота (workers/outbound_consumer.py) поллит таблицу,
+    отправляет через Telethon и обновляет статус.
+    """
+    __tablename__ = "outbound_queue"
+    __table_args__ = (
+        Index("ix_outbound_queue_status_created", "status", "created_at"),
+        Index("ix_outbound_queue_account_peer", "account_id", "peer_user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    peer_user_id = Column(BigInteger, nullable=False)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
+    text = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="pending")  # pending | sent | failed | cancelled
+    error = Column(Text, nullable=True)
+    telegram_message_id = Column(BigInteger, nullable=True)
+    # Кто инициировал отправку (для аудита из веб-панели)
+    requested_by = Column(String(120), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    sent_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<OutboundQueue id={self.id} acc={self.account_id} peer={self.peer_user_id} {self.status}>"

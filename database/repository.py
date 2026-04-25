@@ -132,6 +132,14 @@ class Database:
                     await conn.execute(
                         text("ALTER TABLE accounts ADD COLUMN list_label VARCHAR(64)")
                     )
+                if "ai_mode" not in acols2:
+                    log.info("➕ accounts: ai_mode (AI_ACTIVE | MANUAL)")
+                    await conn.execute(
+                        text(
+                            "ALTER TABLE accounts ADD COLUMN ai_mode VARCHAR(20) "
+                            "NOT NULL DEFAULT 'AI_ACTIVE'"
+                        )
+                    )
 
                 # --- Миграция: добавление таблицы groups ---
                 groups_exists = await conn.execute(text(
@@ -407,6 +415,37 @@ class Database:
                         "ON neuro_stop_list(account_id, client_id)"
                     ))
                     log.info("✅ Таблица neuro_stop_list создана")
+
+                # --- outbound queue (manual sends from web-panel) ---
+                ob_exists = await conn.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='outbound_queue'"
+                ))
+                if not ob_exists.fetchone():
+                    log.info("➕ Создание таблицы outbound_queue")
+                    await conn.execute(text("""
+                        CREATE TABLE outbound_queue (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                            peer_user_id BIGINT NOT NULL,
+                            client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+                            text TEXT NOT NULL,
+                            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                            error TEXT,
+                            telegram_message_id BIGINT,
+                            requested_by VARCHAR(120),
+                            created_at DATETIME DEFAULT (datetime('now')),
+                            sent_at DATETIME
+                        )
+                    """))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_outbound_queue_status_created "
+                        "ON outbound_queue(status, created_at)"
+                    ))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_outbound_queue_account_peer "
+                        "ON outbound_queue(account_id, peer_user_id)"
+                    ))
+                    log.info("✅ Таблица outbound_queue создана")
 
                 # --- client alive windows table ---
                 caw_exists = await conn.execute(text(

@@ -1,8 +1,82 @@
-body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; }
-.container { max-width: 900px; margin: 24px auto; padding: 0 12px; }
-.card { background: #1e293b; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
-.hidden { display: none; }
-input { display: block; width: 100%; margin: 8px 0; padding: 8px; border-radius: 8px; border: 1px solid #475569; background: #0b1220; color: #e2e8f0; }
-button { padding: 8px 12px; border-radius: 8px; border: none; background: #2563eb; color: white; cursor: pointer; }
-ul { margin: 0; padding-left: 16px; }
-li { margin: 6px 0; }
+/* CoreBot Control Panel — small overrides on top of Tailwind CDN */
+
+html, body { height: 100%; }
+body { font-family: 'Inter', system-ui, sans-serif; }
+
+/* Прячем дефолтные ::placeholder в скучный блёкло-серый — Tailwind форм-плагин уже кладёт что-то, поэтому докрашиваем сами. */
+input::placeholder, textarea::placeholder { color: #64748b; }
+
+/* Sidebar nav links */
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  color: #cbd5e1;
+  font-size: 0.875rem;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.nav-link:hover { background-color: #1e293b; color: #fff; }
+.nav-link.active {
+  background-color: #1d2a44;
+  color: #fff;
+  border-left: 3px solid #3b82f6;
+  padding-left: calc(0.75rem - 3px);
+}
+.nav-ico { width: 1rem; text-align: center; }
+
+/* Status pills */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pill-green { background-color: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
+.pill-amber { background-color: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+.pill-red   { background-color: rgba(244,63,94,0.15);  color: #fb7185; border: 1px solid rgba(244,63,94,0.3); }
+.pill-blue  { background-color: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+.pill-gray  { background-color: rgba(148,163,184,0.15); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.3); }
+
+/* Card primitive */
+.card {
+  background-color: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 0.875rem;
+  padding: 1.25rem;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.02);
+}
+.card h3 { color: #fff; }
+
+/* Compact table */
+table.cb-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+table.cb-table th { text-align: left; font-weight: 500; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.7rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid #1e293b; }
+table.cb-table td { padding: 0.625rem 0.75rem; border-bottom: 1px solid #111a2e; vertical-align: top; }
+table.cb-table tbody tr:hover { background-color: rgba(30,41,59,0.5); }
+
+/* Chat bubbles */
+.bubble { max-width: 80%; padding: 0.5rem 0.75rem; border-radius: 0.875rem; font-size: 0.875rem; line-height: 1.35; word-break: break-word; white-space: pre-wrap; }
+.bubble-user { background-color: #1e293b; color: #f1f5f9; border-bottom-left-radius: 0.25rem; }
+.bubble-asst { background-color: #1e3a8a; color: #e0e7ff; margin-left: auto; border-bottom-right-radius: 0.25rem; }
+.bubble-sys  { background-color: rgba(148,163,184,0.1); color: #94a3b8; font-size: 0.75rem; text-align: center; max-width: 100%; }
+.bubble-meta { font-size: 0.65rem; color: #64748b; margin-top: 0.125rem; }
+
+/* Scrollbar */
+.cb-scroll { scrollbar-width: thin; scrollbar-color: #1e293b transparent; }
+.cb-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.cb-scroll::-webkit-scrollbar-thumb { background-color: #1e293b; border-radius: 4px; }
+.cb-scroll::-webkit-scrollbar-track { background-color: transparent; }
+
+/* Toast */
+#toast.show { display: block; animation: toast-in 200ms ease forwards; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Live dot */
+.live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #22c55e; box-shadow: 0 0 0 0 rgba(34,197,94,0.6); animation: pulse 1.6s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.6); } 70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }

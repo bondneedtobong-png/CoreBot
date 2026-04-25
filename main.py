@@ -49,11 +49,13 @@ async def main():
     # Запуск бота
     from bot.main import run_bot
     from workers.warmup import warmup_runner
+    from workers.outbound_consumer import outbound_consumer
     log.info("Запуск Control Bot...")
-    
+
     try:
         await telemetry_emitter.start()
         warmup_runner.start()
+        outbound_consumer.start()
         await run_bot()
     except KeyboardInterrupt:
         log.info("Получен сигнал остановки")
@@ -72,6 +74,10 @@ async def main():
             log.warning(f"Ошибка graceful shutdown WorkerManager: {e}")
         await telemetry_emitter.stop()
         await warmup_runner.stop()
+        try:
+            await outbound_consumer.stop()
+        except Exception as e:
+            log.warning(f"Ошибка остановки OutboundConsumer: {e}")
         # Закрытие подключения к БД
         await db.disconnect()
         log.info("Приложение остановлено")

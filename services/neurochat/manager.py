@@ -39,7 +39,7 @@ async def can_process_incoming(session) -> bool:
 
 
 async def check_incoming_allowed(
-    session, mailing, *, worker_connected: bool, client_id: int
+    session, mailing, *, worker_connected: bool, client_id: int, account_id: int | None = None
 ) -> tuple[bool, str]:
     if not worker_connected:
         return False, "worker_disconnected"
@@ -47,6 +47,12 @@ async def check_incoming_allowed(
         return False, "global_disabled"
     if not bool(getattr(mailing, "neurochat_enabled", False)):
         return False, "mailing_local_disabled"
+    if account_id is not None:
+        acct = await AccountRepository.get_by_id(session, int(account_id))
+        if acct is not None:
+            mode = (getattr(acct, "ai_mode", None) or "AI_ACTIVE").upper()
+            if mode == "MANUAL":
+                return False, "account_manual_mode"
     client_allowed, client_reason = await check_client_filters(session, client_id)
     if not client_allowed:
         return False, client_reason
@@ -68,6 +74,7 @@ async def prepare_incoming_context(
         mailing,
         worker_connected=bool(worker.is_connected),
         client_id=client.id,
+        account_id=worker.account.id,
     )
     if not allowed:
         return None, deny_reason
