@@ -1359,17 +1359,32 @@ class ClientRepository:
     @staticmethod
     async def _get_test_queue_clients(
         session: AsyncSession,
-        mailing_id: int,
+        mailing: Mailing,
     ) -> List[Client]:
         """
-        Очередь тестовой рассылки: список из txt всегда.
-        Для режима test не исключаем клиентов с прошлым успешным first-message:
-        тестовая аудитория должна переиспользоваться на каждом запуске.
+        Очередь тестовой рассылки.
+
+        В пределах одного запуска (от mailing.started_at) исключаем клиентов,
+        которым уже успешно отправили — чтобы не было повторной отправки
+        в один и тот же чат с разных аккаунтов и чтобы цикл рассылки
+        корректно завершился, когда список исчерпан.
+
+        Между запусками started_at обновляется (см. update_status(RUNNING)),
+        поэтому вся тест-аудитория автоматически снова становится eligible.
         """
+        run_started = getattr(mailing, "started_at", None)
+        sent_in_run = select(MailingLog.client_id).where(
+            MailingLog.mailing_id == mailing.id,
+            MailingLog.success.is_(True),
+        )
+        if run_started is not None:
+            sent_in_run = sent_in_run.where(MailingLog.sent_at >= run_started)
+
         q = (
             select(Client)
             .join(MailingTestRecipient, MailingTestRecipient.client_id == Client.id)
-            .where(MailingTestRecipient.mailing_id == mailing_id)
+            .where(MailingTestRecipient.mailing_id == mailing.id)
+            .where(~Client.id.in_(sent_in_run))
             .where(~Client.status.in_([ClientStatus.INVALID, ClientStatus.BLOCKED]))
             .order_by(MailingTestRecipient.id)
         )
@@ -1381,7 +1396,7 @@ class ClientRepository:
         """Очередь по audience_mode рассылки."""
         mode = (getattr(mailing, "audience_mode", None) or "classes").strip().lower()
         if mode == "test":
-            return await ClientRepository._get_test_queue_clients(session, mailing.id)
+            return await ClientRepository._get_test_queue_clients(session, mailing)
         if mode == "new":
             parsed = ClientRepository.parse_mailing_audience(mailing)
             aud = {
