@@ -213,6 +213,13 @@
 - Поведение: внутри одного запуска каждый клиент получает ровно одно сообщение -> очередь становится пустой -> срабатывает `_notify_owner_html` о завершении. Между запусками тест-список снова полный.
 - Проверка: `python -m pytest -q tests/test_backlog_fixes.py` -> ожидается `10 passed`.
 
+### 2026-04-25 (web-panel v2.2: workers always-on + lazy reconnect)
+- Симптом: ручные отправки из веб-панели уходили в `failed: worker not connected`. Воркеры (Telethon-клиенты) подключались только при старте рассылки (`bot/main.py::cmd_start_mailing → worker_manager.connect_all()`), вне рассылки `is_connected=False`.
+- Фикс A — `bot/main.py::run_bot()`: перед `dp.start_polling(bot)` делаем `worker_manager.load_accounts()` + `worker_manager.connect_all(quiet_unauthorized=True)`. Все Telethon-клиенты подняты сразу при старте бота → ручная отправка/нейрочат работают мгновенно. Прогрев в try/except — не валит запуск бота, если что-то пошло не так с конкретным аккаунтом.
+- Фикс B — `workers/outbound_consumer.OutboundConsumer._ensure_worker(...)`: если воркера нет в пуле (например, аккаунт добавили после старта) — `worker_manager.load_accounts()`; если есть, но `is_connected=False` — `await worker.connect(quiet=True)`. Только потом считаем «не получилось» и идём в backoff/retry.
+- Безопасность: используется ТА ЖЕ Telethon-сессия, что и для рассылки/нейрочата. Никакой второй авторизации, никакого нового device — Telegram это видит как тот же давно знакомый клиент. Вторая «параллельная сессия» не создаётся.
+- Проверка: `python -m pytest -q tests/test_backlog_fixes.py` -> `10 passed`.
+
 ### 2026-04-25 (web-panel v2.1: видимость очереди + retry/cancel + boot splash)
 - UI: `index.html` — добавлен видимый по умолчанию splash «Загрузка панели…» + watchdog 5 c, форма логина теперь видна без JS, инлайн-стили на случай падения Tailwind CDN. `main.js` — `bootstrap()` обернут в try/catch, splash сам себя гасит.
 - Очередь ручных отправок (`outbound_queue`):

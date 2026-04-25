@@ -341,7 +341,19 @@ async def run_bot():
         )
         await callback.answer()
 
-    # 8. Запуск polling
+    # 8. Прогрев пула воркеров: подключаем все Telethon-сессии заранее,
+    #    чтобы ручная отправка из веб-панели и нейрочат работали мгновенно
+    #    (без «worker not connected»). Не валим бота, если что-то пошло не так.
+    try:
+        log.info("🔌 Прогрев пула воркеров: загружаем аккаунты и подключаем сессии…")
+        await worker_manager.load_accounts()
+        await worker_manager.connect_all(quiet_unauthorized=True)
+        connected = sum(1 for w in worker_manager.workers.values() if w.is_connected)
+        log.info(f"✅ Подключено воркеров: {connected}/{len(worker_manager.workers)}")
+    except Exception as e:
+        log.warning(f"⚠️ Прогрев воркеров не удался (продолжаем старт бота): {e}")
+
+    # 9. Запуск polling
     log.info("Бот запущен и ожидает команды...")
 
     try:

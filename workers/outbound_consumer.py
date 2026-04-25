@@ -118,9 +118,38 @@ class OutboundConsumer:
         delay = self.BACKOFF_BASE_SEC * (2 ** max(0, attempts_done - 1))
         return min(self.BACKOFF_MAX_SEC, delay) + random.uniform(0, 1.5)
 
+    async def _ensure_worker(self, account_id: int, worker_manager):
+        """
+        Достать живой Worker для аккаунта. Если воркера нет вовсе — перезагрузить
+        пул из БД. Если воркер есть, но disconnected — попробовать поднять.
+        Возвращает Worker | None.
+        """
+        worker = worker_manager.workers.get(int(account_id))
+        if worker is None:
+            try:
+                await worker_manager.load_accounts()
+            except Exception as e:
+                log.warning(f"OutboundConsumer: load_accounts failed: {e}")
+            worker = worker_manager.workers.get(int(account_id))
+            if worker is None:
+                return None
+
+        if not getattr(worker, "is_connected", False):
+            try:
+                ok = await worker.connect(quiet=True)
+                if not ok:
+                    return None
+            except Exception as e:
+                log.warning(
+                    f"OutboundConsumer: lazy connect failed for account_id={account_id}: {e}"
+                )
+                return None
+
+        return worker
+
     async def _process_one(self, row, worker_manager) -> None:
         attempts_done = int(getattr(row, "attempts", 0) or 0)
-        worker = worker_manager.workers.get(int(row.account_id))
+        worker = await self._ensure_worker(int(row.account_id), worker_manager)
         worker_ready = bool(worker and getattr(worker, "is_connected", False))
 
         if not worker_ready:
