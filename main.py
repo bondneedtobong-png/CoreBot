@@ -50,12 +50,14 @@ async def main():
     from bot.main import run_bot
     from workers.warmup import warmup_runner
     from workers.outbound_consumer import outbound_consumer
+    from workers.bot_command_consumer import bot_command_consumer
     log.info("Запуск Control Bot...")
 
     try:
         await telemetry_emitter.start()
         warmup_runner.start()
         outbound_consumer.start()
+        bot_command_consumer.start()
         await run_bot()
     except KeyboardInterrupt:
         log.info("Получен сигнал остановки")
@@ -78,6 +80,10 @@ async def main():
             await outbound_consumer.stop()
         except Exception as e:
             log.warning(f"Ошибка остановки OutboundConsumer: {e}")
+        try:
+            await bot_command_consumer.stop()
+        except Exception as e:
+            log.warning(f"Ошибка остановки BotCommandConsumer: {e}")
         # Закрытие подключения к БД
         await db.disconnect()
         log.info("Приложение остановлено")

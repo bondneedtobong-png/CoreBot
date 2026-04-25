@@ -15,13 +15,15 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, delete, desc, func, select, update
+from sqlalchemy import and_, delete, desc, func, insert, select, update
 from sqlalchemy.orm import Session
 
 from control_plane.business.db import get_bot_db
 from control_plane.business.schemas import (
+    AccountDetail,
     AccountListItem,
     AccountModeIn,
+    AccountPatch,
     CleanupRequest,
     CleanupResult,
     DialogListItem,
@@ -33,11 +35,19 @@ from control_plane.deps import get_current_user
 from control_plane.models import User
 from database.models import (
     Account,
+    AccountStatus,
     Client,
     ClientClassCounter,
     ClientInteraction,
+    ClientMailSession,
+    MailingLog,
+    Membership,
+    NeuroActionLog,
     NeuroChatMessage,
+    NeuroStopList,
     OutboundQueue,
+    Proxy,
+    account_groups,
 )
 
 router = APIRouter(prefix="/business", tags=["business"])
@@ -126,6 +136,150 @@ def set_account_mode(
     db.commit()
     db.refresh(account)
     return _serialize_account(account)
+
+
+# ---------------------------- Account editor -----------------------------
+
+
+def _account_groups_ids(db: Session, account_id: int) -> list[int]:
+    rows = db.execute(
+        select(account_groups.c.group_id).where(
+            account_groups.c.account_id == account_id
+        )
+    ).all()
+    return sorted(int(r[0]) for r in rows)
+
+
+def _serialize_account_detail(db: Session, a: Account) -> AccountDetail:
+    base = _serialize_account(a).model_dump()
+    proxy_label = None
+    if a.proxy_id:
+        p = db.get(Proxy, int(a.proxy_id))
+        if p:
+            proxy_label = f"{p.name} ({p.host}:{p.port})"
+    base.update(
+        bio=a.bio,
+        tags=a.tags,
+        daily_limit=int(a.daily_limit or 0),
+        messages_today=int(a.messages_today or 0),
+        messages_sent=int(a.messages_sent or 0),
+        messages_failed=int(a.messages_failed or 0),
+        warmup_enabled=bool(a.warmup_enabled),
+        warmup_profile=a.warmup_profile,
+        proxy_id=int(a.proxy_id) if a.proxy_id else None,
+        proxy_label=proxy_label,
+        flood_wait_until=a.flood_wait_until,
+        is_spam_blocked=bool(a.is_spam_blocked),
+        group_ids=_account_groups_ids(db, int(a.id)),
+    )
+    return AccountDetail(**base)
+
+
+@router.get("/accounts/{account_id}", response_model=AccountDetail)
+def get_account_detail(
+    account_id: int,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(get_current_user),
+):
+    a = db.get(Account, account_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="account not found")
+    return _serialize_account_detail(db, a)
+
+
+@router.patch("/accounts/{account_id}", response_model=AccountDetail)
+def patch_account(
+    account_id: int,
+    payload: AccountPatch,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(get_current_user),
+):
+    a = db.get(Account, account_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="account not found")
+
+    if payload.list_label is not None:
+        a.list_label = payload.list_label.strip() or None
+    if payload.first_name is not None:
+        a.first_name = payload.first_name.strip() or None
+    if payload.last_name is not None:
+        a.last_name = payload.last_name.strip() or None
+    if payload.bio is not None:
+        a.bio = payload.bio
+    if payload.tags is not None:
+        a.tags = payload.tags
+    if payload.status is not None:
+        try:
+            a.status = AccountStatus(payload.status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid status")
+    if payload.membership is not None:
+        try:
+            a.membership = Membership(payload.membership)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid membership")
+    if payload.daily_limit is not None:
+        a.daily_limit = int(payload.daily_limit)
+    if payload.warmup_enabled is not None:
+        a.warmup_enabled = bool(payload.warmup_enabled)
+    if payload.warmup_profile is not None:
+        a.warmup_profile = payload.warmup_profile.strip() or None
+    if payload.proxy_id is not None:
+        if int(payload.proxy_id) <= 0:
+            a.proxy_id = None
+        else:
+            if not db.get(Proxy, int(payload.proxy_id)):
+                raise HTTPException(status_code=400, detail="proxy not found")
+            a.proxy_id = int(payload.proxy_id)
+    a.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(a)
+
+    # Группы — отдельная таблица.
+    if payload.group_ids is not None:
+        desired = sorted({int(x) for x in payload.group_ids if int(x) > 0})
+        db.execute(
+            delete(account_groups).where(account_groups.c.account_id == account_id)
+        )
+        if desired:
+            db.execute(
+                insert(account_groups),
+                [{"account_id": account_id, "group_id": gid} for gid in desired],
+            )
+        db.commit()
+
+    return _serialize_account_detail(db, a)
+
+
+@router.delete(
+    "/accounts/{account_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_account(
+    account_id: int,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(get_current_user),
+):
+    a = db.get(Account, account_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="account not found")
+    # Зависимые таблицы. CASCADE-FK у нас не везде, поэтому чистим явно.
+    # Иначе SQLite (с PRAGMA foreign_keys=ON) ругнётся на FK constraint.
+    db.execute(delete(account_groups).where(account_groups.c.account_id == account_id))
+    db.execute(delete(NeuroChatMessage).where(NeuroChatMessage.account_id == account_id))
+    db.execute(delete(OutboundQueue).where(OutboundQueue.account_id == account_id))
+    db.execute(delete(MailingLog).where(MailingLog.account_id == account_id))
+    db.execute(delete(NeuroActionLog).where(NeuroActionLog.account_id == account_id))
+    db.execute(delete(NeuroStopList).where(NeuroStopList.account_id == account_id))
+    db.execute(delete(ClientMailSession).where(ClientMailSession.account_id == account_id))
+    # ClientInteraction.account_id — SET NULL по FK, обнуляем явно для совместимости.
+    db.execute(
+        update(ClientInteraction)
+        .where(ClientInteraction.account_id == account_id)
+        .values(account_id=None)
+    )
+    db.delete(a)
+    db.commit()
 
 
 # ---------------------------- Dialogs ------------------------------------

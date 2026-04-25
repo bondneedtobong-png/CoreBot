@@ -753,3 +753,101 @@ class OutboundQueue(Base):
 
     def __repr__(self):
         return f"<OutboundQueue id={self.id} acc={self.account_id} peer={self.peer_user_id} {self.status}>"
+
+
+# ==================== Архив (soft-delete) ====================
+
+
+class NeuroChatMessageArchive(Base):
+    """
+    Архив переписки нейрочата. Сюда переносятся строки из neuro_chat_messages
+    при cleanup mode='archive'. Сохраняем оригинальный id (как original_id),
+    чтобы restore был идемпотентным.
+    """
+
+    __tablename__ = "neuro_chat_messages_archive"
+    __table_args__ = (
+        Index(
+            "ix_neuro_archive_account_peer", "account_id", "peer_user_id", "created_at"
+        ),
+        Index("ix_neuro_archive_archived_at", "archived_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    original_id = Column(Integer, nullable=False, index=True)
+    account_id = Column(Integer, nullable=False)
+    peer_user_id = Column(BigInteger, nullable=False)
+    role = Column(String(20), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    archived_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<NeuroChatMessageArchive original_id={self.original_id}>"
+
+
+class ClientInteractionArchive(Base):
+    """
+    Архив client_interactions для истории. Используется при cleanup mode='archive'.
+    """
+
+    __tablename__ = "client_interactions_archive"
+    __table_args__ = (
+        Index(
+            "ix_client_inter_archive_client_created",
+            "client_id",
+            "created_at",
+        ),
+        Index("ix_client_inter_archive_archived_at", "archived_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    original_id = Column(Integer, nullable=False, index=True)
+    client_id = Column(Integer, nullable=False)
+    account_id = Column(Integer, nullable=True)
+    mailing_id = Column(Integer, nullable=True)
+    direction = Column(String(8), nullable=False)
+    kind = Column(String(64), nullable=False)
+    body = Column(Text, nullable=True)
+    payload_json = Column(Text, nullable=True)
+    telegram_message_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    archived_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<ClientInteractionArchive original_id={self.original_id}>"
+
+
+# ==================== Команды для бота из веб-панели ====================
+
+
+class BotCommand(Base):
+    """
+    Очередь команд от веб-панели → к боту (внутри одного процесса бота
+    воркер `workers/bot_command_consumer.py` поллит таблицу и исполняет
+    команды через `worker_manager`).
+
+    command:
+      - 'mailing.start'   args: {"mailing_id": int}
+      - 'mailing.pause'   args: {"mailing_id": int}
+      - 'mailing.stop'    args: {"mailing_id": int}
+    Расширение под будущие команды (account.*, neurochat.*, …) — через тот же
+    механизм без изменения схемы.
+    """
+
+    __tablename__ = "bot_commands"
+    __table_args__ = (
+        Index("ix_bot_commands_status_created", "status", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    command = Column(String(64), nullable=False)
+    args_json = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="pending")  # pending|done|failed|cancelled
+    error = Column(Text, nullable=True)
+    requested_by = Column(String(120), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    processed_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<BotCommand id={self.id} {self.command} {self.status}>"

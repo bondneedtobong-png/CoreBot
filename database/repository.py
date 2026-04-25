@@ -492,6 +492,89 @@ class Database:
                     ))
                     log.info("✅ Таблица client_alive_windows создана")
 
+                # --- archive tables (soft-delete) ---
+                arch_msgs_exists = await conn.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='neuro_chat_messages_archive'"
+                ))
+                if not arch_msgs_exists.fetchone():
+                    log.info("➕ Создание таблицы neuro_chat_messages_archive")
+                    await conn.execute(text("""
+                        CREATE TABLE neuro_chat_messages_archive (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            original_id INTEGER NOT NULL,
+                            account_id INTEGER NOT NULL,
+                            peer_user_id BIGINT NOT NULL,
+                            role VARCHAR(20) NOT NULL,
+                            content TEXT NOT NULL,
+                            created_at DATETIME NOT NULL,
+                            archived_at DATETIME NOT NULL DEFAULT (datetime('now'))
+                        )
+                    """))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_neuro_archive_account_peer "
+                        "ON neuro_chat_messages_archive(account_id, peer_user_id, created_at)"
+                    ))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_neuro_archive_archived_at "
+                        "ON neuro_chat_messages_archive(archived_at)"
+                    ))
+                    log.info("✅ Таблица neuro_chat_messages_archive создана")
+
+                arch_inter_exists = await conn.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='client_interactions_archive'"
+                ))
+                if not arch_inter_exists.fetchone():
+                    log.info("➕ Создание таблицы client_interactions_archive")
+                    await conn.execute(text("""
+                        CREATE TABLE client_interactions_archive (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            original_id INTEGER NOT NULL,
+                            client_id INTEGER NOT NULL,
+                            account_id INTEGER,
+                            mailing_id INTEGER,
+                            direction VARCHAR(8) NOT NULL,
+                            kind VARCHAR(64) NOT NULL,
+                            body TEXT,
+                            payload_json TEXT,
+                            telegram_message_id BIGINT,
+                            created_at DATETIME NOT NULL,
+                            archived_at DATETIME NOT NULL DEFAULT (datetime('now'))
+                        )
+                    """))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_client_inter_archive_client_created "
+                        "ON client_interactions_archive(client_id, created_at)"
+                    ))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_client_inter_archive_archived_at "
+                        "ON client_interactions_archive(archived_at)"
+                    ))
+                    log.info("✅ Таблица client_interactions_archive создана")
+
+                # --- bot_commands (web-panel → bot) ---
+                bc_exists = await conn.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_commands'"
+                ))
+                if not bc_exists.fetchone():
+                    log.info("➕ Создание таблицы bot_commands")
+                    await conn.execute(text("""
+                        CREATE TABLE bot_commands (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            command VARCHAR(64) NOT NULL,
+                            args_json TEXT,
+                            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                            error TEXT,
+                            requested_by VARCHAR(120),
+                            created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+                            processed_at DATETIME
+                        )
+                    """))
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_bot_commands_status_created "
+                        "ON bot_commands(status, created_at)"
+                    ))
+                    log.info("✅ Таблица bot_commands создана")
+
                 log.info("✅ Все миграции завершены")
 
         except Exception as e:

@@ -213,6 +213,46 @@
 - Поведение: внутри одного запуска каждый клиент получает ровно одно сообщение -> очередь становится пустой -> срабатывает `_notify_owner_html` о завершении. Между запусками тест-список снова полный.
 - Проверка: `python -m pytest -q tests/test_backlog_fixes.py` -> ожидается `10 passed`.
 
+### 2026-04-25 (web-panel v4: UI «на всё основное» + bugfix двух нюансов)
+- Bugfix #1 («сообщения исчезают после ручной отправки»): `loadDialogMessages()` сбрасывает `state.current.messageMaxId = 0` ПЕРЕД повторным рендером ленты. Раньше дедуп `appendMessageToChat` отбрасывал «старые» сообщения как уже виденные, оставляя только новые/queue.
+- Bugfix #2 («экран логина прокручивается над приложением»): `.hidden` теперь `display: none !important`, и `enterApp()/handleLogout()` дополнительно ставят инлайн `style.display = "none"/"flex"`. Inline-стиль на `#loginScreen` (для отказоустойчивости) больше не побеждает класс.
+- Backend (новые роуты, всего +18 эндпоинтов в `/business/`):
+  - `control_plane/business/instance.py` — `GET/PATCH /business/instance/settings`, `POST/DELETE /business/instance/openrouter-key` (Fernet-шифрование через `utils/crypto_openrouter`).
+  - `control_plane/business/groups.py` — CRUD `/business/groups` + many-to-many `/business/groups/{id}/accounts` (`GET/PUT/POST/DELETE`). Очистка привязок при удалении.
+  - `control_plane/business/proxies.py` — CRUD `/business/proxies`, `/business/proxy-groups`, быстрая TCP-проверка `/business/proxies/{id}/test` (без SOCKS-handshake — для глубокой проверки кнопка «Спам-чек» в боте).
+  - Расширен `control_plane/routes/business.py`: `GET/PATCH/DELETE /business/accounts/{id}` (включая замену `group_ids`, выбор `proxy_id`, статус/membership/limits/warmup/tags). При удалении — каскад вручную по таблицам без CASCADE-FK (MailingLog/NeuroActionLog/NeuroStopList/ClientMailSession), и SET NULL для `client_interactions.account_id`.
+  - Расширен `control_plane/business/mailings.py`: `PATCH /business/mailings/{id}` (текст/варианты/задержки/лимиты/группа/community_link/нейрочат/модель/sampling JSON, с проверкой формата). Запрещено редактировать в RUNNING — попросит сначала pause/stop. `GET/PUT/DELETE /business/mailings/{id}/prompt` — редактор system-промпта нейрочата по конкретной кампании (файл `data/neuro/mailings/{id}/system.txt`, fallback на `DEFAULT_NEURO_SYSTEM_PROMPT`).
+  - Все новые схемы — в `control_plane/business/schemas.py` (валидация Pydantic, ограничения длин, паттерны, диапазоны).
+- Frontend:
+  - `index.html` — добавлены пункты меню «Группы» и «Прокси».
+  - `main.js` — новые секции: `renderGroups(id?)`, `renderProxies()` (с inline-формой создания/правки и кнопкой Тест), полностью новый `loadAccountEditor(id)` (открывается под таблицей при `#/accounts/<id>` или клике «✎ Изменить»), редактор рассылки (форма всех параметров + textarea системного промпта с кнопками «Сохранить» / «Сбросить к DEFAULT»), новая «Инстанс»-карточка в Settings (включение/отключение нейрочата, базовый UTC-сдвиг, ключ OpenRouter с маской и шифр-бейджем).
+  - Контроль доступа: PATCH рассылки в RUNNING заблокирован формой (disabled+подсказка), backend всё равно ответит 400.
+- Безопасность/целостность:
+  - InstanceSettings/Account/Group/Proxy/Mailing PATCH идут через FastAPI-схемы (длины/паттерны/диапазоны).
+  - Удаление аккаунта чистит зависимые таблицы явно (там, где FK без CASCADE) → не падаем по `FOREIGN KEY constraint failed` на SQLite WAL.
+  - Test прокси — таймаут 5 c, статус сохраняется в `is_working/last_checked`, не зависит от Telethon (ничего лишнего не трогает).
+- Не сломаны: ingest-стрим, бизнес-стрим SSE, OutboundConsumer, BotCommandConsumer, нейрочат, рассылки, прокси-роутинг. Все изменения — аддитивные.
+- Проверка:
+  - `python -m pytest -q tests/` → `10 passed`.
+  - In-process FastAPI smoke: создание/переименование/удаление группы, назначение `group_ids` на аккаунте и обратное снятие, CRUD прокси с тестом 127.0.0.1:9 (`ok=False, ConnectionRefused` — корректно), GET/PATCH `instance.settings`, GET промпта реальной рассылки → 3.2 KB. Всего 54 `/business/*` роута зарегистрировано.
+
+### 2026-04-25 (web-panel v3: бизнес-дашборд + CRUD рассылок/клиентов + soft-cleanup)
+- Дашборд переписан с generic agent stats на бизнес-метрики бота. Карточки: аккаунты (total/AI/Manual/authorized), диалоги (total/24h), клиенты, очередь ручных, входящие/исходящие/ручные за 24 ч, рассылки (running/paused/completed_24h, mailing sent/failed). Внутри: 24-часовой stacked-bar (input/AI/manual), распределение клиентских классов (горизонтальные бары), топ-аккаунты по активности, активные рассылки с прогрессом, last-20 из БД и live-feed после входа.
+- Backend: новый пакет `control_plane/business/dashboard.py` со схемами `DashboardSummary/TimePoint/TopAccount/RecentMessage/ClassDistributionItem/MailingItem`. SQLite-friendly bucket `strftime('%Y-%m-%d %H:00', ...)` для тайм-серии.
+- Soft-delete: новые модели `NeuroChatMessageArchive`, `ClientInteractionArchive` + автомиграции (CREATE TABLE IF NOT EXISTS, индексы по `(account_id, peer_user_id, created_at)` и `archived_at`). Поле `original_id` для аудита/idempotent restore.
+- Cleanup v2: `POST /business/cleanup/v2 { mode: 'archive'|'hard' }` — в режиме `archive` сначала INSERT в `*_archive`, затем DELETE батчами; в режиме `hard` — старое поведение. `dry_run` поддержан. Новые роуты:
+  - `GET /business/archive/dialogs?account_id=...` — список архивных диалогов;
+  - `POST /business/archive/restore { account_id?, peer_user_id?, archived_after?, archived_before? }` — восстановление в основные таблицы.
+  - Старый `/business/cleanup` оставлен для обратной совместимости (по умолчанию hard).
+- CRUD рассылок: `GET /business/mailings`, `GET /business/mailings/{id}`. Управление через очередь команд:
+  - новая таблица `bot_commands(id, command, args_json, status, error, requested_by, created_at, processed_at)`;
+  - в `main.py` стартует `workers/bot_command_consumer.py` (поллит таблицу раз в ~2 c, исполняет `mailing.start | mailing.pause | mailing.stop` через `worker_manager`);
+  - роуты `POST /business/mailings/{id}/{start|pause|stop}` пишут команду и сразу возвращают `MailingActionResult{ command_id, status='queued' }`. Контрол-плейн НЕ дёргает Telethon напрямую — единая точка управления остаётся внутри процесса бота.
+- CRUD клиентов: `GET /business/clients?q=&class_key=&status=`, `GET /business/clients/{id}`, `GET /business/clients/{id}/interactions`, `POST /business/clients/{id}/class { class_key, delta | set_value }`, `DELETE /business/clients/{id}`. Cascade FK подчищает `class_counters/tags/interactions` (NeuroChat исторически привязан к `peer_user_id`, не трогается — для него отдельный cleanup).
+- Frontend: `web-panel/index.html` — новые пункты меню «Рассылки», «Клиенты», «Архив». `main.js` — функции `renderMailings(id?)`, `renderClients(id?)`, `renderArchive()`, плюс полностью новый `renderDashboard()` с KPI-карточками, тайм-серией, классовыми барами, топ-аккаунтами и live-feed. Cleanup-форма получила селектор `mode` (archive по умолчанию) и зовёт `/business/cleanup/v2`. `styles.css` — `.cb-bar`, `.ts-chart/.ts-col/.ts-bar`, цветовые `cls-*` для классов.
+- Не сломаны: рассылки/прокси/классовая система/существующий ingest/dashboard/SSE/нейрочат. Все изменения базы — аддитивные.
+- Проверка: `python -m pytest -q tests/` → `10 passed`. Локальный smoke `db.connect()` поднимает все новые таблицы и индексы. Импорты `control_plane.business.dashboard|archive|mailings|clients` и `workers.bot_command_consumer` — OK.
+
 ### 2026-04-25 (web-panel v2.2: workers always-on + lazy reconnect)
 - Симптом: ручные отправки из веб-панели уходили в `failed: worker not connected`. Воркеры (Telethon-клиенты) подключались только при старте рассылки (`bot/main.py::cmd_start_mailing → worker_manager.connect_all()`), вне рассылки `is_connected=False`.
 - Фикс A — `bot/main.py::run_bot()`: перед `dp.start_polling(bot)` делаем `worker_manager.load_accounts()` + `worker_manager.connect_all(quiet_unauthorized=True)`. Все Telethon-клиенты подняты сразу при старте бота → ручная отправка/нейрочат работают мгновенно. Прогрев в try/except — не валит запуск бота, если что-то пошло не так с конкретным аккаунтом.

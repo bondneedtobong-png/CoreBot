@@ -15,6 +15,13 @@ from control_plane.routes.dashboard import router as dashboard_router
 from control_plane.routes.admin import router as admin_router
 from control_plane.routes.business import router as business_router
 from control_plane.routes.stream import router as stream_router
+from control_plane.business.dashboard import router as biz_dashboard_router
+from control_plane.business.archive import router as biz_archive_router
+from control_plane.business.mailings import router as biz_mailings_router
+from control_plane.business.clients import router as biz_clients_router
+from control_plane.business.instance import router as biz_instance_router
+from control_plane.business.groups import router as biz_groups_router
+from control_plane.business.proxies import router as biz_proxies_router
 
 
 app = FastAPI(title="CoreBot Control Plane", version="0.1.0")
@@ -32,6 +39,13 @@ app.include_router(dashboard_router)
 app.include_router(admin_router)
 app.include_router(business_router)
 app.include_router(stream_router)
+app.include_router(biz_dashboard_router)
+app.include_router(biz_archive_router)
+app.include_router(biz_mailings_router)
+app.include_router(biz_clients_router)
+app.include_router(biz_instance_router)
+app.include_router(biz_groups_router)
+app.include_router(biz_proxies_router)
 
 web_dir = Path(__file__).parent.parent / "web-panel"
 if web_dir.exists():
