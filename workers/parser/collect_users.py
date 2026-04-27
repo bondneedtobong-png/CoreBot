@@ -1,10 +1,21 @@
 """Сценарий сбора пользователей из групп/каналов (members / active / commenters)."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 from telethon import TelegramClient
-from telethon.tl.types import Channel, User, ChannelParticipantsRecent
+from telethon.tl.functions.channels import GetFullChannelRequest
+from telethon.tl.types import (
+    Channel,
+    User,
+    ChannelParticipantsRecent,
+    UserStatusLastMonth,
+    UserStatusLastWeek,
+    UserStatusOffline,
+    UserStatusOnline,
+    UserStatusRecently,
+)
 
 from database.models import ParsingTask
 from workers.parser import filters, querygen, storage
@@ -17,6 +28,47 @@ def _display_name(u: User) -> str:
     fn = (getattr(u, "first_name", None) or "").strip()
     ln = (getattr(u, "last_name", None) or "").strip()
     return (fn + " " + ln).strip() or (u.username or str(u.id))
+
+
+def _extract_last_seen_at(u: User) -> Optional[datetime]:
+    st = getattr(u, "status", None)
+    now = datetime.now(timezone.utc)
+    if isinstance(st, UserStatusOnline):
+        return now
+    if isinstance(st, UserStatusOffline):
+        ws = getattr(st, "was_online", None)
+        if isinstance(ws, datetime):
+            return ws if ws.tzinfo else ws.replace(tzinfo=timezone.utc)
+    if isinstance(st, UserStatusRecently):
+        return now - timedelta(days=1)
+    if isinstance(st, UserStatusLastWeek):
+        return now - timedelta(days=5)
+    if isinstance(st, UserStatusLastMonth):
+        return now - timedelta(days=20)
+    return None
+
+
+def _build_user_row(u: User) -> dict[str, Any]:
+    un = u.username
+    dn = _display_name(u)
+    has_photo = bool(getattr(u, "photo", None))
+    lang = filters.detect_lang_approx(dn + " " + (un or ""))
+    last_seen_at = _extract_last_seen_at(u)
+    susp = filters.user_looks_suspicious(
+        username=un,
+        telegram_id=int(u.id),
+        has_avatar=has_photo,
+    )
+    return {
+        "telegram_id": int(u.id),
+        "username": un,
+        "display_name": dn,
+        "has_avatar": has_photo,
+        "last_seen_at": last_seen_at,
+        "lang_guess": lang,
+        "is_deleted": bool(getattr(u, "deleted", False)),
+        "is_suspicious": susp,
+    }
 
 
 async def _collect_from_messages(
@@ -47,24 +99,7 @@ async def _collect_from_messages(
             continue
         if not isinstance(u, User) or u.bot:
             continue
-        un = u.username
-        dn = _display_name(u)
-        has_photo = bool(getattr(u, "photo", None))
-        lang = filters.detect_lang_approx(dn + " " + (un or ""))
-        susp = filters.user_looks_suspicious(
-            username=un,
-            telegram_id=int(u.id),
-            has_avatar=has_photo,
-        )
-        row = {
-            "telegram_id": int(u.id),
-            "username": un,
-            "display_name": dn,
-            "has_avatar": has_photo,
-            "lang_guess": lang,
-            "is_deleted": bool(getattr(u, "deleted", False)),
-            "is_suspicious": susp,
-        }
+        row = _build_user_row(u)
         ok, _reason = filters.user_passes_filters(row, user_flt)
         if not ok:
             await storage.bump_task_counters(session, task_id, filtered_delta=1)
@@ -105,24 +140,7 @@ async def _collect_participants(
     async for u in client.iter_participants(entity, **kwargs):
         if not isinstance(u, User) or u.bot:
             continue
-        un = u.username
-        dn = _display_name(u)
-        has_photo = bool(getattr(u, "photo", None))
-        lang = filters.detect_lang_approx(dn + " " + (un or ""))
-        susp = filters.user_looks_suspicious(
-            username=un,
-            telegram_id=int(u.id),
-            has_avatar=has_photo,
-        )
-        row = {
-            "telegram_id": int(u.id),
-            "username": un,
-            "display_name": dn,
-            "has_avatar": has_photo,
-            "lang_guess": lang,
-            "is_deleted": bool(getattr(u, "deleted", False)),
-            "is_suspicious": susp,
-        }
+        row = _build_user_row(u)
         ok, _reason = filters.user_passes_filters(row, user_flt)
         if not ok:
             await storage.bump_task_counters(session, task_id, filtered_delta=1)
@@ -153,43 +171,54 @@ async def run_users_task(
     if not isinstance(user_flt, dict):
         user_flt = {}
     mode = (task.mode or "max_coverage").lower()
-    raw_sources = params.get("sources") or []
-    if not isinstance(raw_sources, list):
-        raw_sources = []
     manual = querygen.manual_queries_from_txt(str(params.get("manual_usernames_text") or ""))
+    peers = querygen.manual_queries_from_txt(str(params.get("user_inputs_text") or ""))
+    if not peers:
+        peers = querygen.manual_queries_from_txt(str(params.get("peers_text") or ""))
+    peers = querygen.merge_query_lists(peers, manual)
     max_per_source = int(params.get("max_users_per_source") or 250)
+    source_opts = params.get("source_options") or {}
+    if not isinstance(source_opts, dict):
+        source_opts = {}
+    group_members = bool(source_opts.get("group_members", True))
+    group_active = bool(source_opts.get("group_active", True))
+    channel_commenters = bool(source_opts.get("channel_commenters", True))
+    channel_active_if_discussion = bool(source_opts.get("channel_active_if_discussion", True))
 
-    specs: list[dict[str, Any]] = []
-    for s in raw_sources:
-        if isinstance(s, dict) and (s.get("peer") or "").strip():
-            specs.append(s)
-    for p in manual:
-        specs.append(
-            {
-                "peer": p,
-                "modes": ["members", "active", "commenters"],
-            }
-        )
+    if not peers:
+        await log(None, "error", "empty_sources", "Добавьте @username / t.me ссылки или загрузите txt")
+        raise ValueError("empty_sources: peers text is empty")
 
-    if not specs:
-        await log(None, "error", "empty_sources", "Добавьте sources[] с peer или manual_usernames_text")
-        raise ValueError("empty_sources: sources[].peer или manual_usernames_text")
-
-    async def handle_spec(peer: str, modes: list[str], account_id: int, client: TelegramClient) -> None:
+    async def handle_peer(peer: str, account_id: int, client: TelegramClient) -> None:
         await log(account_id, "info", "resolve", f"peer={peer}")
         ent = await client.get_entity(peer)
         src_id = int(ent.id)
         is_mg = isinstance(ent, Channel) and bool(getattr(ent, "megagroup", False))
         is_bc = isinstance(ent, Channel) and bool(getattr(ent, "broadcast", False)) and not is_mg
+        has_discussion = False
+        if is_bc:
+            try:
+                inp = await client.get_input_entity(ent)
+                full = await client(GetFullChannelRequest(channel=inp))
+                has_discussion = bool(getattr(full.full_chat, "linked_chat_id", None))
+            except Exception:
+                has_discussion = False
 
-        if not isinstance(modes, list) or not modes:
-            modes = ["members"]
+        modes: list[str] = []
+        if is_mg:
+            if group_members:
+                modes.append("members")
+            if group_active:
+                modes.append("active")
+        elif is_bc:
+            if channel_commenters:
+                modes.append("commenters")
+            if channel_active_if_discussion and has_discussion:
+                modes.append("active")
         if mode == "active_only":
             modes = [m for m in modes if m in ("active", "commenters")]
-            if not modes:
-                modes = ["active"]
 
-        for mname in modes:
+        for mname in dict.fromkeys(modes):
             t2 = await session.get(ParsingTask, task.id)
             if t2 and t2.status == "cancelled":
                 return
@@ -239,25 +268,23 @@ async def run_users_task(
             else:
                 await log(account_id, "warn", "skip_entity", f"unsupported entity for {peer}")
 
-    total = max(len(specs), 1)
-    for idx, spec in enumerate(specs):
-        peer = str(spec.get("peer") or "").strip()
+    total = max(len(peers), 1)
+    for idx, peer in enumerate(peers):
         if not peer:
             continue
-        modes = spec.get("modes") or ["members", "active"]
         aid, client = await pool.next_client()
         prog = min(95, int(10 + (idx + 1) / total * 80))
         await storage.bump_task_counters(
             session,
             task.id,
             progress_percent=prog,
-            current_stage="users",
+            current_stage="collect",
             current_account_id=aid,
             current_query=peer,
         )
         await session.commit()
         try:
-            await handle_spec(peer, modes, aid, client)
+            await handle_peer(peer, aid, client)
         except Exception as e:
             await storage.bump_task_counters(session, task.id, error_delta=1)
             await session.commit()

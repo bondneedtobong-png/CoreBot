@@ -91,8 +91,25 @@ def user_passes_filters(row: dict[str, Any], flt: dict[str, Any]) -> tuple[bool,
         return True, ""
     if flt.get("require_username") and not (row.get("username") or "").strip():
         return False, "no_username"
+    if flt.get("require_avatar") and not bool(row.get("has_avatar")):
+        return False, "no_avatar"
+    if flt.get("exclude_deleted") and bool(row.get("is_deleted")):
+        return False, "deleted"
+    if flt.get("anti_bot"):
+        if bool(row.get("is_deleted")):
+            return False, "deleted"
+        if not (row.get("username") or "").strip() and not bool(row.get("has_avatar")):
+            return False, "empty_profile"
     if flt.get("skip_suspicious") and row.get("is_suspicious"):
         return False, "suspicious"
+    if flt.get("recent_online_7d"):
+        last_seen_at = row.get("last_seen_at")
+        if not last_seen_at:
+            return False, "not_recent_online"
+        if isinstance(last_seen_at, datetime):
+            ls = last_seen_at if last_seen_at.tzinfo else last_seen_at.replace(tzinfo=timezone.utc)
+            if ls < _utcnow() - timedelta(days=7):
+                return False, "not_recent_online"
     lang = flt.get("lang")
     if lang and row.get("lang_guess") and row["lang_guess"] != lang:
         return False, "lang"

@@ -529,7 +529,7 @@ class ParsingTaskCreate(BaseModel):
 
     kind: str = Field(pattern="^(channels|groups|users)$")
     account_ids: list[int] = Field(min_length=1, max_length=50)
-    depth: int = Field(default=1, ge=1, le=2)
+    depth: int = Field(default=1, ge=1, le=3)
     mode: str = Field(default="max_coverage", pattern="^(max_coverage|active_only)$")
     params: dict = Field(default_factory=dict)
 

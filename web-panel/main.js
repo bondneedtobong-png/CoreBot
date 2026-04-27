@@ -484,7 +484,7 @@ async function renderParsing(tabSeg) {
         <button data-ptab="channels" class="px-3 py-1.5 rounded-lg border ${tab === "channels" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Каналы</button>
         <button data-ptab="groups" class="px-3 py-1.5 rounded-lg border ${tab === "groups" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Группы</button>
         <button data-ptab="users" class="px-3 py-1.5 rounded-lg border ${tab === "users" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Пользователи</button>
-        <span class="text-xs text-slate-500 ml-auto self-center">Нужен запущенный <code class="text-slate-400">python -m workers.parser_worker</code></span>
+        <span class="text-xs text-slate-500 ml-auto self-center">Парсер запускается вместе с веб-панелью</span>
       </div>
 
       <div id="pFormCard" class="card space-y-3 text-sm"></div>
@@ -498,10 +498,10 @@ async function renderParsing(tabSeg) {
           <table class="cb-table text-xs">
             <thead>
               <tr>
-                <th>ID</th><th>Тип</th><th>Статус</th><th>%</th><th>Этап</th><th>Акк</th><th>Found</th><th>Filt</th><th>Err</th><th>Создана</th><th></th>
+                <th>ID</th><th>Тип</th><th>Статус</th><th>%</th><th>Этап</th><th>Акк</th><th>Запрос</th><th>Found</th><th>Filt</th><th>Err</th><th>Создана</th><th></th>
               </tr>
             </thead>
-            <tbody id="pTaskBody"><tr><td colspan="11" class="text-center text-slate-500 py-6">Загрузка…</td></tr></tbody>
+            <tbody id="pTaskBody"><tr><td colspan="12" class="text-center text-slate-500 py-6">Загрузка…</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -538,19 +538,47 @@ async function renderParsing(tabSeg) {
   if (tab === "channels" || tab === "groups") {
     formCard.innerHTML = `
       <div class="font-medium text-slate-200">${tab === "channels" ? "Каналы" : "Группы"}: новая задача</div>
-      <div class="grid md:grid-cols-2 gap-3">
-        <label class="block">Ключевое слово
-          <input id="pKeyword" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" placeholder="crypto" />
+      <div class="grid md:grid-cols-2 gap-3 text-xs">
+        <label class="block">Ключевые слова (по одному в строке)
+          <textarea id="pKeywords" rows="4" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono" placeholder="crypto&#10;defi"></textarea>
         </label>
-        <label class="block">Depth (1–2)
+        <label class="block">Окончания (по одному в строке)
+          <textarea id="pEndings" rows="4" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono" placeholder="news&#10;chat&#10;channel"></textarea>
+        </label>
+      </div>
+      <div class="grid md:grid-cols-3 gap-3 text-xs">
+        <label class="block">Depth (1–3)
           <select id="pDepth" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
-            <option value="1">1</option><option value="2">2</option>
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+          </select>
+        </label>
+        <label class="block">Режим задачи
+          <select id="pMode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
+            <option value="max_coverage">max_coverage</option>
+            <option value="active_only">active_only</option>
+          </select>
+        </label>
+        <label class="block flex items-end gap-2">
+          <input id="pExpandedSearch" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked />
+          <span>Расширенный поиск</span>
+        </label>
+      </div>
+      <div class="grid md:grid-cols-3 gap-3 text-xs">
+        <label class="inline-flex items-center gap-2"><input id="fActive7d" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> Только активные (≥1 пост/7д)</label>
+        <label class="inline-flex items-center gap-2"><input id="fDiscussion" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> Только открытые комментарии</label>
+        <label class="inline-flex items-center gap-2"><input id="fPublic" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> Только открытые каналы</label>
+        <label class="block">Подписчики min
+          <input id="fSubsMin" type="number" min="0" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" />
+        </label>
+        <label class="block">Подписчики max
+          <input id="fSubsMax" type="number" min="0" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" />
+        </label>
+        <label class="block">Язык
+          <select id="fLang" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
+            <option value="">любая</option><option value="ru">ru</option><option value="en">en</option>
           </select>
         </label>
       </div>
-      <label class="block">Ручной список (@name / ссылки), опционально
-        <textarea id="pManual" rows="2" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono text-xs" placeholder="@channel1"></textarea>
-      </label>
       <div><span class="text-slate-400">Аккаунты:</span><div class="mt-1 flex flex-wrap">${accOpts || "<span class='text-slate-500'>нет аккаунтов</span>"}</div></div>
       <button id="pSubmit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Запустить</button>
     `;
@@ -561,13 +589,22 @@ async function renderParsing(tabSeg) {
         toast("Выберите хотя бы один аккаунт", "error");
         return;
       }
-      const keyword = ($("#pKeyword")?.value || "").trim();
-      const manual = ($("#pManual")?.value || "").trim();
-      if (!keyword && !manual) {
-        toast("Укажите keyword или ручной список", "error");
+      const keywords = ($("#pKeywords")?.value || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+      if (!keywords.length) {
+        toast("Добавьте хотя бы одно ключевое слово", "error");
         return;
       }
+      const endings = ($("#pEndings")?.value || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
       const depth = Number($("#pDepth")?.value || "1");
+      const mode = ($("#pMode")?.value || "max_coverage").trim();
+      const filters = {
+        is_active_7d: !!$("#fActive7d")?.checked,
+        has_discussion: !!$("#fDiscussion")?.checked,
+        is_public: !!$("#fPublic")?.checked,
+        subscribers_min: ($("#fSubsMin")?.value || "").trim() ? Number($("#fSubsMin")?.value || 0) : null,
+        subscribers_max: ($("#fSubsMax")?.value || "").trim() ? Number($("#fSubsMax")?.value || 0) : null,
+        lang: ($("#fLang")?.value || "").trim() || null,
+      };
       try {
         await api("/business/parsing/tasks", {
           method: "POST",
@@ -575,8 +612,13 @@ async function renderParsing(tabSeg) {
             kind: tab,
             account_ids: ids,
             depth,
-            mode: "max_coverage",
-            params: { keyword, manual_usernames_text: manual },
+            mode,
+            params: {
+              keywords,
+              endings,
+              expanded_search: !!$("#pExpandedSearch")?.checked,
+              filters,
+            },
           },
         });
         toast("Задача создана", "success");
@@ -588,25 +630,56 @@ async function renderParsing(tabSeg) {
   } else {
     formCard.innerHTML = `
       <div class="font-medium text-slate-200">Пользователи: новая задача</div>
-      <p class="text-xs text-slate-500">Источник: peer группы/канала + режимы. JSON массива <code class="text-slate-400">sources</code> (см. DATABASE_MODULE_SPEC / план).</p>
-      <label class="block text-xs">sources JSON
-        <textarea id="pSourcesJson" rows="4" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono text-xs"
-        placeholder='[{"peer":"mygroup","modes":["members","active"]}]'></textarea>
+      <label class="block text-xs">Ввод источников (@username или t.me ссылки), по одной строке
+        <textarea id="pUserInputs" rows="5" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono text-xs"
+        placeholder="@group_one&#10;https://t.me/channel_one"></textarea>
       </label>
-      <label class="block text-xs">Ручные @username / ссылки (доп.)
-        <textarea id="pManualUsers" rows="2" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono text-xs"></textarea>
+      <label class="block text-xs">Загрузка .txt
+        <input id="pUsersTxtFile" type="file" accept=".txt,text/plain" class="mt-1 block w-full text-slate-300 text-xs" />
       </label>
-      <div class="grid md:grid-cols-2 gap-3">
+      <div class="grid md:grid-cols-2 gap-3 text-xs">
+        <div class="space-y-2 border border-ink-700 rounded p-2">
+          <div class="text-slate-300">Источники (группы)</div>
+          <label class="inline-flex items-center gap-2"><input id="srcGroupMembers" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> участники</label>
+          <label class="inline-flex items-center gap-2"><input id="srcGroupActive" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> активные (писали)</label>
+        </div>
+        <div class="space-y-2 border border-ink-700 rounded p-2">
+          <div class="text-slate-300">Источники (каналы)</div>
+          <label class="inline-flex items-center gap-2"><input id="srcChanCommenters" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> комментаторы</label>
+          <label class="inline-flex items-center gap-2"><input id="srcChanActiveDiscussion" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> активные (если есть чат)</label>
+        </div>
+      </div>
+      <div class="grid md:grid-cols-3 gap-3 text-xs">
         <label class="block">Режим задачи
           <select id="pUserMode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
             <option value="max_coverage">max_coverage</option>
             <option value="active_only">active_only</option>
           </select>
         </label>
+        <label class="inline-flex items-center gap-2"><input id="ufUsername" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> только с username</label>
+        <label class="inline-flex items-center gap-2"><input id="ufAvatar" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> только с аватаром</label>
+        <label class="inline-flex items-center gap-2"><input id="ufRecentOnline" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> только недавно онлайн</label>
+        <label class="inline-flex items-center gap-2"><input id="ufAntiBot" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> анти-бот (удалённые/пустые)</label>
+        <label class="block">Язык
+          <select id="ufLang" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
+            <option value="">любой</option><option value="ru">ru</option><option value="en">en</option>
+          </select>
+        </label>
       </div>
       <div><span class="text-slate-400">Аккаунты:</span><div class="mt-1 flex flex-wrap">${accOpts || "<span class='text-slate-500'>нет аккаунтов</span>"}</div></div>
       <button id="pSubmitUsers" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Запустить</button>
     `;
+    let txtUploaded = "";
+    $("#pUsersTxtFile")?.addEventListener("change", async (ev) => {
+      const f = ev?.target?.files?.[0];
+      if (!f) return;
+      try {
+        txtUploaded = await f.text();
+        toast(`Загружен ${f.name}`, "success");
+      } catch {
+        toast("Не удалось прочитать файл", "error");
+      }
+    });
     $("#pSubmitUsers")?.addEventListener("click", async () => {
       if (readOnly) return;
       const ids = $$(".p-acc:checked").map((c) => Number(c.value)).filter((n) => n > 0);
@@ -614,19 +687,26 @@ async function renderParsing(tabSeg) {
         toast("Выберите хотя бы один аккаунт", "error");
         return;
       }
-      let sources = [];
-      try {
-        sources = JSON.parse($("#pSourcesJson")?.value || "[]");
-      } catch {
-        toast("Некорректный JSON в sources", "error");
+      const manualText = [($("#pUserInputs")?.value || "").trim(), txtUploaded.trim()].filter(Boolean).join("\n");
+      if (!manualText) {
+        toast("Добавьте список источников вручную или через txt", "error");
         return;
       }
-      if (!Array.isArray(sources)) {
-        toast("sources должен быть массивом", "error");
-        return;
-      }
-      const manual = ($("#pManualUsers")?.value || "").trim();
       const mode = ($("#pUserMode")?.value || "max_coverage").trim();
+      const userFilters = {
+        require_username: !!$("#ufUsername")?.checked,
+        require_avatar: !!$("#ufAvatar")?.checked,
+        recent_online_7d: !!$("#ufRecentOnline")?.checked,
+        anti_bot: !!$("#ufAntiBot")?.checked,
+        exclude_deleted: !!$("#ufAntiBot")?.checked,
+        lang: ($("#ufLang")?.value || "").trim() || null,
+      };
+      const sourceOptions = {
+        group_members: !!$("#srcGroupMembers")?.checked,
+        group_active: !!$("#srcGroupActive")?.checked,
+        channel_commenters: !!$("#srcChanCommenters")?.checked,
+        channel_active_if_discussion: !!$("#srcChanActiveDiscussion")?.checked,
+      };
       try {
         await api("/business/parsing/tasks", {
           method: "POST",
@@ -635,7 +715,11 @@ async function renderParsing(tabSeg) {
             account_ids: ids,
             depth: 1,
             mode,
-            params: { sources, manual_usernames_text: manual },
+            params: {
+              user_inputs_text: manualText,
+              source_options: sourceOptions,
+              filters: userFilters,
+            },
           },
         });
         toast("Задача создана", "success");
@@ -653,17 +737,19 @@ async function renderParsing(tabSeg) {
       const list = await api("/business/parsing/tasks?limit=100");
       const tbody = $("#pTaskBody");
       if (!list.length) {
-        tbody.innerHTML = `<tr><td colspan="11" class="text-center text-slate-500 py-6">Нет задач</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="12" class="text-center text-slate-500 py-6">Нет задач</td></tr>`;
         return;
       }
+      const stageMap = { search: "поиск", collect: "сбор", filter: "фильтрация", done: "завершено" };
       tbody.innerHTML = list.map((t) => `
         <tr class="cursor-pointer hover:bg-ink-800/80" data-pselect="${t.id}">
           <td class="text-slate-400">#${t.id}</td>
           <td>${escapeHTML(t.kind)}</td>
           <td>${escapeHTML(t.status)}</td>
           <td>${t.progress_percent ?? 0}</td>
-          <td class="max-w-[140px] truncate" title="${escapeHTML(t.current_stage || "")}">${escapeHTML(t.current_stage || "—")}</td>
+          <td class="max-w-[140px] truncate" title="${escapeHTML(t.current_stage || "")}">${escapeHTML(stageMap[t.current_stage] || t.current_stage || "—")}</td>
           <td>${t.current_account_id ?? "—"}</td>
+          <td class="max-w-[200px] truncate" title="${escapeHTML(t.current_query || "")}">${escapeHTML(t.current_query || "—")}</td>
           <td>${t.found_count ?? 0}</td>
           <td>${t.filtered_count ?? 0}</td>
           <td>${t.error_count ?? 0}</td>

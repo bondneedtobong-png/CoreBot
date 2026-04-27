@@ -17,29 +17,65 @@ def normalize_keyword(k: str) -> str:
     return s[:200]
 
 
+def _normalize_list_items(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    out: list[str] = []
+    for v in values:
+        s = normalize_keyword(str(v or ""))
+        if s:
+            out.append(s)
+    return out
+
+
+def _split_csv_like(text: str) -> list[str]:
+    if not text:
+        return []
+    raw = re.split(r"[\n,;]+", text)
+    return [normalize_keyword(x) for x in raw if normalize_keyword(x)]
+
+
 def build_channel_or_group_queries(params: dict[str, Any]) -> list[str]:
     """
     params:
-      keyword: str (required)
-      keyword_endings: list[str] optional — доп. суффиксы к keyword
+      keywords: list[str] preferred (multi-input)
+      keyword: str fallback
+      endings: list[str] preferred (multi-input)
+      keyword_endings: list[str] fallback
     """
-    kw = normalize_keyword(str(params.get("keyword") or ""))
-    if not kw:
+    keywords = _normalize_list_items(params.get("keywords"))
+    if not keywords:
+        keywords = _split_csv_like(str(params.get("keywords_text") or ""))
+    if not keywords:
+        one = normalize_keyword(str(params.get("keyword") or ""))
+        if one:
+            keywords = [one]
+    if not keywords:
         return []
-    endings = params.get("keyword_endings")
-    if endings is None or not isinstance(endings, list):
-        endings = list(_DEFAULT_ENDINGS)
-    else:
-        endings = [str(e) if e is not None else "" for e in endings]
-    if "" not in endings:
-        endings = [""] + endings
+
+    endings = _normalize_list_items(params.get("endings"))
+    if not endings:
+        endings = _split_csv_like(str(params.get("endings_text") or ""))
+    if not endings:
+        raw_old = params.get("keyword_endings")
+        endings = [normalize_keyword(str(e or "")) for e in raw_old] if isinstance(raw_old, list) else []
+        endings = [x for x in endings if x]
+    if not endings:
+        endings = [x for x in _DEFAULT_ENDINGS if x]
+
     seen: set[str] = set()
     out: list[str] = []
-    for e in endings:
-        q = (kw + str(e)).strip()
-        if q and q not in seen:
-            seen.add(q)
-            out.append(q)
+    for kw in keywords:
+        # 1) keyword itself
+        if kw not in seen:
+            seen.add(kw)
+            out.append(kw)
+        # 2) keyword + ending
+        for e in endings:
+            q = f"{kw} {e}".strip()
+            if q and q not in seen:
+                seen.add(q)
+                out.append(q)
     return out
 
 
