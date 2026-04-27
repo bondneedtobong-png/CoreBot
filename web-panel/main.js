@@ -473,6 +473,8 @@ async function downloadParsingExport(path) {
 }
 
 async function renderParsing(tabSeg) {
+  try { state.parsing.stream?.close(); } catch {}
+  state.parsing.stream = null;
   const tab = _parsingTabValid(tabSeg || state.parsing.tab);
   state.parsing.tab = tab;
   setHeader("Парсинг", "Задачи Telethon (parser-worker) — каналы, группы, пользователи");
@@ -559,7 +561,7 @@ async function renderParsing(tabSeg) {
           </select>
         </label>
         <label class="block flex items-end gap-2">
-          <input id="pExpandedSearch" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked />
+          <input id="pExpandedSearch" type="checkbox" class="rounded border-ink-600 bg-ink-800" />
           <span>Расширенный поиск</span>
         </label>
       </div>
@@ -820,17 +822,37 @@ async function renderParsing(tabSeg) {
   });
 
   await loadParsingTasks();
-  // Live-refresh: задачи + логи без кнопки "Обновить"
-  const liveTimer = setInterval(async () => {
-    if (state.route !== "parsing") {
-      clearInterval(liveTimer);
-      return;
-    }
-    await loadParsingTasks();
-    if (selectedTaskId) {
-      await loadParsingLogs(selectedTaskId);
-    }
-  }, 2000);
+
+  // Realtime без дёрганья UI: события приходят по SSE только при изменениях.
+  try {
+    const url = `${API}/business/parsing/stream?token=${encodeURIComponent(state.token)}`;
+    const es = new EventSource(url);
+    state.parsing.stream = es;
+
+    es.addEventListener("tasks_changed", async () => {
+      if (state.route !== "parsing") return;
+      await loadParsingTasks();
+    });
+    es.addEventListener("log", async (ev) => {
+      if (state.route !== "parsing") return;
+      let x = null;
+      try { x = JSON.parse(ev.data || "{}"); } catch { x = null; }
+      if (!x || !selectedTaskId) return;
+      if (Number(x.task_id) !== Number(selectedTaskId)) return;
+      const pre = $("#pLogs");
+      if (!pre) return;
+      const line = `[${fmtDate(x.created_at)}] ${x.level} ${x.event}: ${x.message || ""}`;
+      const nearBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+      pre.textContent = (pre.textContent ? `${pre.textContent}\n` : "") + line;
+      if (nearBottom) pre.scrollTop = pre.scrollHeight;
+    });
+    es.onerror = () => {
+      // Мягкий fallback: перерисуем один раз по ошибке стрима.
+      if (state.route === "parsing") loadParsingTasks();
+    };
+  } catch {
+    // fallback only
+  }
 }
 
 

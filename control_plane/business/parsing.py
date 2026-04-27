@@ -7,14 +7,19 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+import asyncio
+import json
+from typing import Optional, AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from control_plane.auth import decode_token
 from control_plane.business.db import get_bot_db
+from control_plane.database import get_db as get_cp_db
+from control_plane.models import User as CpUser
 from control_plane.business.schemas import (
     ParsedChannelRow,
     ParsedGroupRow,
@@ -36,6 +41,24 @@ from database.models import (
 
 
 router = APIRouter(prefix="/business/parsing", tags=["business-parsing"])
+
+
+def _resolve_user_from_jwt(token: str, cp_db: Session) -> CpUser:
+    try:
+        payload = decode_token(token)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"invalid token: {e}") from e
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="wrong token type")
+    uid = int(payload.get("sub"))
+    u = cp_db.query(CpUser).filter(CpUser.id == uid, CpUser.is_active == True).first()  # noqa: E712
+    if not u:
+        raise HTTPException(status_code=401, detail="user not found")
+    return u
+
+
+def _sse_event(event: str, payload: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n".encode("utf-8")
 
 
 def _task_to_out(t: ParsingTask) -> ParsingTaskOut:
@@ -382,3 +405,87 @@ def parsing_stats(
         "parsed_users": int(us),
         "tasks_by_status": {str(k): int(v) for k, v in by_status.items()},
     }
+
+
+@router.get("/stream")
+async def parsing_stream(
+    request: Request,
+    token: Optional[str] = Query(default=None),
+    cp_db: Session = Depends(get_cp_db),
+):
+    auth_header = request.headers.get("authorization", "")
+    raw_token = ""
+    if auth_header.lower().startswith("bearer "):
+        raw_token = auth_header.split(" ", 1)[1].strip()
+    if not raw_token and token:
+        raw_token = token.strip()
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="missing token")
+    _resolve_user_from_jwt(raw_token, cp_db)
+
+    async def gen() -> AsyncGenerator[bytes, None]:
+        last_log_id = 0
+        last_tasks_sig = ""
+        yield _sse_event("hello", {"ts": datetime.utcnow().isoformat()})
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                rows = (
+                    cp_db.execute(
+                        select(
+                            ParsingTask.id,
+                            ParsingTask.status,
+                            ParsingTask.progress_percent,
+                            ParsingTask.current_stage,
+                            ParsingTask.current_account_id,
+                            ParsingTask.current_query,
+                            ParsingTask.found_count,
+                            ParsingTask.filtered_count,
+                            ParsingTask.error_count,
+                            ParsingTask.started_at,
+                            ParsingTask.finished_at,
+                        )
+                        .order_by(ParsingTask.id.desc())
+                        .limit(120)
+                    )
+                    .all()
+                )
+                sig = json.dumps([tuple(r) for r in rows], default=str, ensure_ascii=False)
+                if sig != last_tasks_sig:
+                    last_tasks_sig = sig
+                    yield _sse_event("tasks_changed", {"count": len(rows)})
+
+                logs = (
+                    cp_db.execute(
+                        select(ParsingTaskLog)
+                        .where(ParsingTaskLog.id > last_log_id)
+                        .order_by(ParsingTaskLog.id.asc())
+                        .limit(400)
+                    )
+                    .scalars()
+                    .all()
+                )
+                for lg in logs:
+                    last_log_id = max(last_log_id, int(lg.id))
+                    yield _sse_event(
+                        "log",
+                        {
+                            "id": int(lg.id),
+                            "task_id": int(lg.task_id),
+                            "level": lg.level,
+                            "event": lg.event,
+                            "message": lg.message,
+                            "account_id": lg.account_id,
+                            "created_at": lg.created_at.isoformat() if lg.created_at else None,
+                        },
+                    )
+            except Exception:
+                yield _sse_event("warn", {"message": "stream_error"})
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
+from sqlalchemy import select
 from telethon import TelegramClient
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.types import (
@@ -191,6 +192,12 @@ async def run_users_task(
 
     async def handle_peer(peer: str, account_id: int, client: TelegramClient) -> None:
         await log(account_id, "info", "resolve", f"peer={peer}")
+        cur_status = await session.scalar(
+            select(ParsingTask.status).where(ParsingTask.id == task.id)
+        )
+        if cur_status == "cancelled":
+            await log(account_id, "info", "cancelled", "Task cancelled before resolve")
+            return
         ent = await client.get_entity(peer)
         src_id = int(ent.id)
         is_mg = isinstance(ent, Channel) and bool(getattr(ent, "megagroup", False))
@@ -219,8 +226,10 @@ async def run_users_task(
             modes = [m for m in modes if m in ("active", "commenters")]
 
         for mname in dict.fromkeys(modes):
-            t2 = await session.get(ParsingTask, task.id)
-            if t2 and t2.status == "cancelled":
+            cur_status = await session.scalar(
+                select(ParsingTask.status).where(ParsingTask.id == task.id)
+            )
+            if cur_status == "cancelled":
                 return
             if is_mg:
                 if mname in ("members", "active"):

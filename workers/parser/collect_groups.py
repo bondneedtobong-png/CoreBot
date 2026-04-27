@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
+from sqlalchemy import select
 from telethon import TelegramClient
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.functions.contacts import SearchRequest
@@ -84,7 +85,7 @@ async def run_group_task(
     max_entities = int(params.get("max_entities_per_task") or 500)
     max_depth2 = int(params.get("max_nodes_depth2") or 30)
     max_depth3 = int(params.get("max_nodes_depth3") or 20)
-    expanded_search = bool(params.get("expanded_search", True))
+    expanded_search = bool(params.get("expanded_search", False))
 
     queries = querygen.build_channel_or_group_queries(params)
     queries.extend(querygen.manual_queries_from_txt(str(params.get("manual_usernames_text") or "")))
@@ -110,7 +111,14 @@ async def run_group_task(
                 {"query": q, "seconds": sec},
             ),
         )
-        for chat in result.chats:
+        for idx, chat in enumerate(result.chats):
+            if idx % 5 == 0:
+                cur_status = await session.scalar(
+                    select(ParsingTask.status).where(ParsingTask.id == task.id)
+                )
+                if cur_status == "cancelled":
+                    await log(account_id, "info", "cancelled", "Task cancelled during search")
+                    return
             if not isinstance(chat, Channel):
                 continue
             if not _is_megagroup(chat):
@@ -167,8 +175,10 @@ async def run_group_task(
             current_query=q,
         )
         await session.commit()
-        t2 = await session.get(ParsingTask, task.id)
-        if t2 and t2.status == "cancelled":
+        cur_status = await session.scalar(
+            select(ParsingTask.status).where(ParsingTask.id == task.id)
+        )
+        if cur_status == "cancelled":
             return
         try:
             await search_query(q, aid, client)
@@ -196,8 +206,10 @@ async def run_group_task(
                 current_query=q,
             )
             await session.commit()
-            t2 = await session.get(ParsingTask, task.id)
-            if t2 and t2.status == "cancelled":
+            cur_status = await session.scalar(
+                select(ParsingTask.status).where(ParsingTask.id == task.id)
+            )
+            if cur_status == "cancelled":
                 return
             try:
                 await search_query(q, aid, client)
@@ -225,8 +237,10 @@ async def run_group_task(
                 current_query=q,
             )
             await session.commit()
-            t2 = await session.get(ParsingTask, task.id)
-            if t2 and t2.status == "cancelled":
+            cur_status = await session.scalar(
+                select(ParsingTask.status).where(ParsingTask.id == task.id)
+            )
+            if cur_status == "cancelled":
                 return
             try:
                 await search_query(q, aid, client)
