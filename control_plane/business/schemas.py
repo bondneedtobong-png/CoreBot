@@ -519,3 +519,91 @@ class MailingPromptOut(BaseModel):
 
 class MailingPromptIn(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
+
+
+# ===== Parsing (Telegram parser-worker) =====
+
+
+class ParsingTaskCreate(BaseModel):
+    """Создание задачи парсинга."""
+
+    kind: str = Field(pattern="^(channels|groups|users)$")
+    account_ids: list[int] = Field(min_length=1, max_length=50)
+    depth: int = Field(default=1, ge=1, le=2)
+    mode: str = Field(default="max_coverage", pattern="^(max_coverage|active_only)$")
+    params: dict = Field(default_factory=dict)
+
+
+class ParsingTaskOut(BaseModel):
+    id: int
+    kind: str
+    status: str
+    params: dict
+    account_ids: list[int]
+    progress_percent: int
+    current_stage: Optional[str] = None
+    current_account_id: Optional[int] = None
+    current_query: Optional[str] = None
+    found_count: int
+    filtered_count: int
+    error_count: int
+    depth: int
+    mode: str
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    requested_by: Optional[str] = None
+    last_error: Optional[str] = None
+
+
+class ParsingTaskLogOut(BaseModel):
+    id: int
+    task_id: int
+    level: str
+    account_id: Optional[int] = None
+    event: str
+    message: Optional[str] = None
+    payload: Optional[dict] = None
+    created_at: datetime
+
+
+class ParsedChannelRow(BaseModel):
+    id: int
+    telegram_id: int
+    username: Optional[str] = None
+    title: Optional[str] = None
+    subscribers: Optional[int] = None
+    is_public: Optional[bool] = None
+    has_discussion: Optional[bool] = None
+    lang: Optional[str] = None
+    last_post_at: Optional[datetime] = None
+    is_active_7d: Optional[bool] = None
+    source_task_id: Optional[int] = None
+    updated_at: Optional[datetime] = None
+
+
+class ParsedGroupRow(BaseModel):
+    id: int
+    telegram_id: int
+    username: Optional[str] = None
+    title: Optional[str] = None
+    members_count: Optional[int] = None
+    group_type: Optional[str] = None
+    lang: Optional[str] = None
+    is_active_7d: Optional[bool] = None
+    source_task_id: Optional[int] = None
+    updated_at: Optional[datetime] = None
+
+
+class ParsedUserRow(BaseModel):
+    id: int
+    telegram_id: int
+    username: Optional[str] = None
+    display_name: Optional[str] = None
+    has_avatar: Optional[bool] = None
+    last_seen_at: Optional[datetime] = None
+    lang_guess: Optional[str] = None
+    is_deleted: bool = False
+    is_suspicious: bool = False
+    source_task_id: Optional[int] = None
+    updated_at: Optional[datetime] = None

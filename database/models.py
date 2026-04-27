@@ -16,6 +16,7 @@ from sqlalchemy import (
     Table,
     Index,
     UniqueConstraint,
+    JSON,
 )
 from sqlalchemy.orm import declarative_base, relationship
 import enum
@@ -851,3 +852,167 @@ class BotCommand(Base):
 
     def __repr__(self):
         return f"<BotCommand id={self.id} {self.command} {self.status}>"
+
+
+# ==================== Telegram parsing (parser-worker + web panel) ====================
+
+
+class ParsingTask(Base):
+    """
+    Задача парсинга Telegram (очередь для parser-worker).
+
+    kind: channels | groups | users
+    status: pending | running | completed | failed | cancelled
+    mode: max_coverage | active_only (для users; для channels/groups — резерв)
+    """
+
+    __tablename__ = "parsing_tasks"
+    __table_args__ = (
+        Index("ix_parsing_tasks_status_created", "status", "created_at"),
+        Index("ix_parsing_tasks_kind_status", "kind", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(32), nullable=False)
+    status = Column(String(32), nullable=False, default="pending")
+
+    params_json = Column(JSON, nullable=False, default=dict)
+    accounts_json = Column(JSON, nullable=False, default=list)
+
+    progress_percent = Column(Integer, nullable=False, default=0)
+    current_stage = Column(String(255), nullable=True)
+    current_account_id = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    current_query = Column(String(512), nullable=True)
+
+    found_count = Column(Integer, nullable=False, default=0)
+    filtered_count = Column(Integer, nullable=False, default=0)
+    error_count = Column(Integer, nullable=False, default=0)
+
+    depth = Column(Integer, nullable=False, default=1)
+    mode = Column(String(32), nullable=False, default="max_coverage")
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    requested_by = Column(String(120), nullable=True)
+    last_error = Column(Text, nullable=True)
+
+    def __repr__(self):
+        return f"<ParsingTask id={self.id} {self.kind} {self.status}>"
+
+
+class ParsingTaskLog(Base):
+    """Структурированные логи выполнения parsing task."""
+
+    __tablename__ = "parsing_task_logs"
+    __table_args__ = (
+        Index("ix_parsing_task_logs_task_created", "task_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="CASCADE"), nullable=False)
+    level = Column(String(16), nullable=False, default="info")  # info | warn | error
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    event = Column(String(64), nullable=False)
+    message = Column(Text, nullable=True)
+    payload_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    task = relationship("ParsingTask", backref="logs", foreign_keys=[task_id])
+
+
+class ParsedChannel(Base):
+    __tablename__ = "parsed_channels"
+    __table_args__ = (
+        UniqueConstraint("telegram_id", name="uq_parsed_channels_telegram_id"),
+        Index("ix_parsed_channels_source_task", "source_task_id"),
+        Index("ix_parsed_channels_active", "is_active_7d"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, nullable=False)
+    username = Column(String(255), nullable=True)
+    title = Column(String(512), nullable=True)
+    subscribers = Column(Integer, nullable=True)
+    is_public = Column(Boolean, nullable=True)
+    has_discussion = Column(Boolean, nullable=True)
+    lang = Column(String(16), nullable=True)
+    last_post_at = Column(DateTime, nullable=True)
+    is_active_7d = Column(Boolean, nullable=True)
+    source_task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="SET NULL"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<ParsedChannel {self.telegram_id} @{self.username}>"
+
+
+class ParsedGroup(Base):
+    __tablename__ = "parsed_groups"
+    __table_args__ = (
+        UniqueConstraint("telegram_id", name="uq_parsed_groups_telegram_id"),
+        Index("ix_parsed_groups_source_task", "source_task_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, nullable=False)
+    username = Column(String(255), nullable=True)
+    title = Column(String(512), nullable=True)
+    members_count = Column(Integer, nullable=True)
+    group_type = Column(String(32), nullable=True)  # public | private
+    lang = Column(String(16), nullable=True)
+    is_active_7d = Column(Boolean, nullable=True)
+    source_task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="SET NULL"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<ParsedGroup {self.telegram_id}>"
+
+
+class ParsedUser(Base):
+    __tablename__ = "parsed_users"
+    __table_args__ = (
+        UniqueConstraint("telegram_id", name="uq_parsed_users_telegram_id"),
+        Index("ix_parsed_users_source_task", "source_task_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, nullable=False)
+    username = Column(String(255), nullable=True)
+    display_name = Column(String(512), nullable=True)
+    has_avatar = Column(Boolean, nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
+    lang_guess = Column(String(16), nullable=True)
+    is_deleted = Column(Boolean, nullable=False, default=False)
+    is_suspicious = Column(Boolean, nullable=False, default=False)
+    source_task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="SET NULL"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<ParsedUser {self.telegram_id}>"
+
+
+class ParsedUserSource(Base):
+    """Связь пользователя с источником (канал/группа) и ролью сбора."""
+
+    __tablename__ = "parsed_user_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "parsed_user_id",
+            "source_entity_id",
+            "source_entity_kind",
+            "source_kind",
+            name="uq_parsed_user_source_edge",
+        ),
+        Index("ix_parsed_user_sources_user", "parsed_user_id"),
+        Index("ix_parsed_user_sources_source", "source_entity_id", "source_entity_kind"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    parsed_user_id = Column(Integer, ForeignKey("parsed_users.id", ondelete="CASCADE"), nullable=False)
+    source_entity_id = Column(BigInteger, nullable=False)
+    source_entity_kind = Column(String(16), nullable=False)  # channel | group
+    source_kind = Column(String(32), nullable=False)  # member | active | commenter
+    source_task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("ParsedUser", backref="sources", foreign_keys=[parsed_user_id])

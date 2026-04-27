@@ -33,6 +33,7 @@ Control Bot   Worker accounts (Telethon)
 | Control Bot | Telegram-бот владельца, управление | `main.py` → `bot/main.py` |
 | Workers | Пул Telethon-клиентов: рассылка, нейрочат, ручные ответы | `workers/manager.py` |
 | OutboundConsumer | Поллит `outbound_queue`, шлёт ручные ответы из веба | `workers/outbound_consumer.py` |
+| ParserWorker | Поллит `parsing_tasks`, Telethon-парсинг каналов/групп/пользователей → `parsed_*` | `python -m workers.parser_worker` |
 | BotCommandConsumer | Поллит `bot_commands`, исполняет start/pause/stop рассылки из веба | `workers/bot_command_consumer.py` |
 | NeuroIncoming | Thin-adapter входящих → `services/neurochat/*` | `workers/neuro_incoming.py` |
 | Services / neurochat | Сервисный слой нейрочата | `services/neurochat/` |

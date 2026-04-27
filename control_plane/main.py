@@ -1,5 +1,9 @@
+import asyncio
+import os
+from contextlib import suppress
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,7 +26,13 @@ from control_plane.business.clients import router as biz_clients_router
 from control_plane.business.instance import router as biz_instance_router
 from control_plane.business.groups import router as biz_groups_router
 from control_plane.business.proxies import router as biz_proxies_router
+from control_plane.business.parsing import router as biz_parsing_router
+from database.repository import db as bot_db
+from utils.logger import log
+from workers.parser.task_runner import run_forever as run_parser_forever
 
+
+load_dotenv()
 
 app = FastAPI(title="CoreBot Control Plane", version="0.1.0")
 app.add_middleware(
@@ -46,6 +56,7 @@ app.include_router(biz_clients_router)
 app.include_router(biz_instance_router)
 app.include_router(biz_groups_router)
 app.include_router(biz_proxies_router)
+app.include_router(biz_parsing_router)
 
 web_dir = Path(__file__).parent.parent / "web-panel"
 if web_dir.exists():
@@ -84,3 +95,37 @@ def bootstrap_defaults() -> None:
 
 
 bootstrap_defaults()
+
+
+@app.on_event("startup")
+async def startup_parser_embedded() -> None:
+    """
+    Встроенный parser-loop: запускается вместе с веб-панелью/Control Plane.
+    Отключение при необходимости: PARSER_EMBEDDED=0.
+    """
+    enabled = str(os.getenv("PARSER_EMBEDDED", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "off",
+        "no",
+    }
+    if not enabled:
+        log.info("Embedded parser is disabled (PARSER_EMBEDDED=0)")
+        app.state.parser_task = None
+        return
+
+    # Нужен async-движок corebot.db для workers/parser/*
+    await bot_db.connect()
+    app.state.parser_task = asyncio.create_task(run_parser_forever(), name="embedded-parser-loop")
+    log.info("Embedded parser started with Control Plane")
+
+
+@app.on_event("shutdown")
+async def shutdown_parser_embedded() -> None:
+    t = getattr(app.state, "parser_task", None)
+    if t is not None:
+        t.cancel()
+        with suppress(asyncio.CancelledError):
+            await t
+    with suppress(Exception):
+        await bot_db.disconnect()

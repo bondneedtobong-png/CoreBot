@@ -37,6 +37,7 @@ const state = {
     sort: "id_desc",
   },
   listeners: {},
+  parsing: { tab: "channels" },
 };
 
 function safeJSON(s) { try { return s ? JSON.parse(s) : null; } catch { return null; } }
@@ -283,6 +284,7 @@ function navigate(hash) {
     case "accounts":  return renderAccounts(segments[1]);
     case "dialogs":   return renderDialogs(segments[1], segments[2]);
     case "queue":     return renderQueue();
+    case "parsing":   return renderParsing(segments[1]);
     case "mailings":  return renderMailings(segments[1]);
     case "clients":   return renderClients(segments[1]);
     case "groups":    return renderGroups(segments[1]);
@@ -436,6 +438,303 @@ async function runQueueBulk(action) {
   } catch (e) {
     toast(`Bulk ${action}: ${e.message}`, "error");
   }
+}
+
+/* ------------------------------ Parsing (Telegram) ---------------------- */
+
+function _parsingTabValid(t) {
+  return t === "channels" || t === "groups" || t === "users" ? t : "channels";
+}
+
+async function downloadParsingExport(path) {
+  const url = path.startsWith("http") ? path : API + path;
+  const r = await fetch(url, {
+    headers: { Authorization: `Bearer ${state.token}`, Accept: "text/plain,*/*" },
+  });
+  if (r.status === 401) {
+    handleLogout(true);
+    throw new Error("Unauthorized");
+  }
+  if (!r.ok) {
+    let d = `HTTP ${r.status}`;
+    try {
+      const j = await r.json();
+      if (j.detail) d = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+    } catch { /* plain */ }
+    throw new Error(d);
+  }
+  const blob = await r.blob();
+  const a = document.createElement("a");
+  const name = (path.split("?")[0].split("/").pop() || "export.txt");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+async function renderParsing(tabSeg) {
+  const tab = _parsingTabValid(tabSeg || state.parsing.tab);
+  state.parsing.tab = tab;
+  setHeader("Парсинг", "Задачи Telethon (parser-worker) — каналы, группы, пользователи");
+  const readOnly = isReadOnlyRole();
+  const root = $("#pageRoot");
+  root.innerHTML = `
+    <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
+      <div class="flex flex-wrap gap-2 text-sm">
+        <button data-ptab="channels" class="px-3 py-1.5 rounded-lg border ${tab === "channels" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Каналы</button>
+        <button data-ptab="groups" class="px-3 py-1.5 rounded-lg border ${tab === "groups" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Группы</button>
+        <button data-ptab="users" class="px-3 py-1.5 rounded-lg border ${tab === "users" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Пользователи</button>
+        <span class="text-xs text-slate-500 ml-auto self-center">Нужен запущенный <code class="text-slate-400">python -m workers.parser_worker</code></span>
+      </div>
+
+      <div id="pFormCard" class="card space-y-3 text-sm"></div>
+
+      <div class="card">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="font-semibold text-white">Задачи</h3>
+          <button id="pRefreshTasks" class="text-xs px-2 py-1 rounded bg-ink-700 border border-ink-600">Обновить</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="cb-table text-xs">
+            <thead>
+              <tr>
+                <th>ID</th><th>Тип</th><th>Статус</th><th>%</th><th>Этап</th><th>Акк</th><th>Found</th><th>Filt</th><th>Err</th><th>Создана</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="pTaskBody"><tr><td colspan="11" class="text-center text-slate-500 py-6">Загрузка…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" id="pDetailCard" style="display:none">
+        <div class="flex flex-wrap items-center gap-2 mb-2">
+          <h3 class="font-semibold text-white">Задача #<span id="pDetailId">—</span></h3>
+          <button id="pCancelTask" class="text-xs px-2 py-1 rounded bg-rose-800 border border-rose-600 ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Отменить</button>
+          <div class="ml-auto flex flex-wrap gap-2 text-xs">
+            <button type="button" data-pex="channels" class="px-2 py-1 rounded bg-ink-700 border border-ink-600">export channels.txt</button>
+            <button type="button" data-pex="groups" class="px-2 py-1 rounded bg-ink-700 border border-ink-600">export groups.txt</button>
+            <button type="button" data-pex="users" class="px-2 py-1 rounded bg-ink-700 border border-ink-600">export users.txt</button>
+          </div>
+        </div>
+        <pre id="pLogs" class="text-xs bg-ink-950 border border-ink-700 rounded p-3 max-h-64 overflow-y-auto text-slate-300 whitespace-pre-wrap"></pre>
+      </div>
+    </div>
+  `;
+
+  $$("button[data-ptab]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const t = b.getAttribute("data-ptab");
+      navigate(`#/parsing/${t}`);
+    });
+  });
+
+  const formCard = $("#pFormCard");
+  const accList = await api("/business/accounts").catch(() => []);
+  const accOpts = (accList || []).map((a) => {
+    const cap = escapeHTML(a.list_label || a.username || a.phone || `#${a.id}`);
+    return `<label class="flex items-center gap-2 mr-3 mb-1"><input type="checkbox" class="p-acc rounded border-ink-600 bg-ink-800" value="${a.id}" /> <span>${cap} <span class="text-slate-500">#${a.id}</span></span></label>`;
+  }).join("");
+
+  if (tab === "channels" || tab === "groups") {
+    formCard.innerHTML = `
+      <div class="font-medium text-slate-200">${tab === "channels" ? "Каналы" : "Группы"}: новая задача</div>
+      <div class="grid md:grid-cols-2 gap-3">
+        <label class="block">Ключевое слово
+          <input id="pKeyword" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" placeholder="crypto" />
+        </label>
+        <label class="block">Depth (1–2)
+          <select id="pDepth" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
+            <option value="1">1</option><option value="2">2</option>
+          </select>
+        </label>
+      </div>
+      <label class="block">Ручной список (@name / ссылки), опционально
+        <textarea id="pManual" rows="2" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono text-xs" placeholder="@channel1"></textarea>
+      </label>
+      <div><span class="text-slate-400">Аккаунты:</span><div class="mt-1 flex flex-wrap">${accOpts || "<span class='text-slate-500'>нет аккаунтов</span>"}</div></div>
+      <button id="pSubmit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Запустить</button>
+    `;
+    $("#pSubmit")?.addEventListener("click", async () => {
+      if (readOnly) return;
+      const ids = $$(".p-acc:checked").map((c) => Number(c.value)).filter((n) => n > 0);
+      if (!ids.length) {
+        toast("Выберите хотя бы один аккаунт", "error");
+        return;
+      }
+      const keyword = ($("#pKeyword")?.value || "").trim();
+      const manual = ($("#pManual")?.value || "").trim();
+      if (!keyword && !manual) {
+        toast("Укажите keyword или ручной список", "error");
+        return;
+      }
+      const depth = Number($("#pDepth")?.value || "1");
+      try {
+        await api("/business/parsing/tasks", {
+          method: "POST",
+          body: {
+            kind: tab,
+            account_ids: ids,
+            depth,
+            mode: "max_coverage",
+            params: { keyword, manual_usernames_text: manual },
+          },
+        });
+        toast("Задача создана", "success");
+        await loadParsingTasks();
+      } catch (e) {
+        toast(e.message, "error");
+      }
+    });
+  } else {
+    formCard.innerHTML = `
+      <div class="font-medium text-slate-200">Пользователи: новая задача</div>
+      <p class="text-xs text-slate-500">Источник: peer группы/канала + режимы. JSON массива <code class="text-slate-400">sources</code> (см. DATABASE_MODULE_SPEC / план).</p>
+      <label class="block text-xs">sources JSON
+        <textarea id="pSourcesJson" rows="4" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono text-xs"
+        placeholder='[{"peer":"mygroup","modes":["members","active"]}]'></textarea>
+      </label>
+      <label class="block text-xs">Ручные @username / ссылки (доп.)
+        <textarea id="pManualUsers" rows="2" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono text-xs"></textarea>
+      </label>
+      <div class="grid md:grid-cols-2 gap-3">
+        <label class="block">Режим задачи
+          <select id="pUserMode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
+            <option value="max_coverage">max_coverage</option>
+            <option value="active_only">active_only</option>
+          </select>
+        </label>
+      </div>
+      <div><span class="text-slate-400">Аккаунты:</span><div class="mt-1 flex flex-wrap">${accOpts || "<span class='text-slate-500'>нет аккаунтов</span>"}</div></div>
+      <button id="pSubmitUsers" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Запустить</button>
+    `;
+    $("#pSubmitUsers")?.addEventListener("click", async () => {
+      if (readOnly) return;
+      const ids = $$(".p-acc:checked").map((c) => Number(c.value)).filter((n) => n > 0);
+      if (!ids.length) {
+        toast("Выберите хотя бы один аккаунт", "error");
+        return;
+      }
+      let sources = [];
+      try {
+        sources = JSON.parse($("#pSourcesJson")?.value || "[]");
+      } catch {
+        toast("Некорректный JSON в sources", "error");
+        return;
+      }
+      if (!Array.isArray(sources)) {
+        toast("sources должен быть массивом", "error");
+        return;
+      }
+      const manual = ($("#pManualUsers")?.value || "").trim();
+      const mode = ($("#pUserMode")?.value || "max_coverage").trim();
+      try {
+        await api("/business/parsing/tasks", {
+          method: "POST",
+          body: {
+            kind: "users",
+            account_ids: ids,
+            depth: 1,
+            mode,
+            params: { sources, manual_usernames_text: manual },
+          },
+        });
+        toast("Задача создана", "success");
+        await loadParsingTasks();
+      } catch (e) {
+        toast(e.message, "error");
+      }
+    });
+  }
+
+  let selectedTaskId = null;
+
+  async function loadParsingTasks() {
+    try {
+      const list = await api("/business/parsing/tasks?limit=100");
+      const tbody = $("#pTaskBody");
+      if (!list.length) {
+        tbody.innerHTML = `<tr><td colspan="11" class="text-center text-slate-500 py-6">Нет задач</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = list.map((t) => `
+        <tr class="cursor-pointer hover:bg-ink-800/80" data-pselect="${t.id}">
+          <td class="text-slate-400">#${t.id}</td>
+          <td>${escapeHTML(t.kind)}</td>
+          <td>${escapeHTML(t.status)}</td>
+          <td>${t.progress_percent ?? 0}</td>
+          <td class="max-w-[140px] truncate" title="${escapeHTML(t.current_stage || "")}">${escapeHTML(t.current_stage || "—")}</td>
+          <td>${t.current_account_id ?? "—"}</td>
+          <td>${t.found_count ?? 0}</td>
+          <td>${t.filtered_count ?? 0}</td>
+          <td>${t.error_count ?? 0}</td>
+          <td class="text-slate-400">${fmtDate(t.created_at)}</td>
+          <td><button data-plogs="${t.id}" class="text-xs text-accent-400 hover:text-accent-300">логи</button></td>
+        </tr>
+      `).join("");
+      tbody.querySelectorAll("tr[data-pselect]").forEach((row) => {
+        row.addEventListener("click", (ev) => {
+          if (ev.target.closest("button[data-plogs]")) return;
+          selectedTaskId = Number(row.dataset.pselect);
+          loadParsingLogs(selectedTaskId);
+        });
+      });
+      tbody.querySelectorAll("button[data-plogs]").forEach((b) => {
+        b.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          selectedTaskId = Number(b.dataset.plogs);
+          loadParsingLogs(selectedTaskId);
+        });
+      });
+    } catch (e) {
+      toast(`Парсинг: ${e.message}`, "error");
+    }
+  }
+
+  async function loadParsingLogs(taskId) {
+    if (!taskId) return;
+    const card = $("#pDetailCard");
+    const pre = $("#pLogs");
+    $("#pDetailId").textContent = String(taskId);
+    card.style.display = "block";
+    pre.textContent = "Загрузка…";
+    try {
+      const logs = await api(`/business/parsing/tasks/${taskId}/logs?limit=300`);
+      pre.textContent = (logs || []).map((l) =>
+        `[${fmtDate(l.created_at)}] ${l.level} ${l.event}: ${l.message || ""}`
+      ).join("\n");
+    } catch (e) {
+      pre.textContent = "Ошибка: " + e.message;
+    }
+  }
+
+  $("#pRefreshTasks")?.addEventListener("click", () => loadParsingTasks());
+  $("#pCancelTask")?.addEventListener("click", async () => {
+    if (readOnly || !selectedTaskId) return;
+    try {
+      await api(`/business/parsing/tasks/${selectedTaskId}/cancel`, { method: "POST" });
+      toast("Отмена запрошена", "success");
+      await loadParsingTasks();
+    } catch (e) {
+      toast(e.message, "error");
+    }
+  });
+  $$("button[data-pex]").forEach((b) => {
+    b.addEventListener("click", async () => {
+      if (!selectedTaskId) {
+        toast("Выберите задачу (строка таблицы)", "info");
+        return;
+      }
+      const kind = b.getAttribute("data-pex");
+      const path = `/business/parsing/export/${kind}.txt?task_id=${selectedTaskId}`;
+      try {
+        await downloadParsingExport(path);
+      } catch (e) {
+        toast(e.message, "error");
+      }
+    });
+  });
+
+  await loadParsingTasks();
 }
 
 
