@@ -3,6 +3,21 @@
 html, body { height: 100%; }
 body { font-family: 'Inter', system-ui, sans-serif; }
 
+/* App shell должен жить в пределах viewport без внешнего скролла страницы.
+   Скролл — только во внутренних контейнерах (cb-scroll). */
+#appShell {
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+#appShell main {
+  min-height: 0;
+}
+#pageRoot {
+  min-height: 0;
+}
+
 /* Tailwind .hidden ставит display:none, но у нас на loginScreen есть inline
    style="display:flex;" для отказоустойчивости (на случай, если CDN/JS
    упадёт). Поэтому собственный .hidden должен побеждать inline, иначе

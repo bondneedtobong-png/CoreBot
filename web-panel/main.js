@@ -1148,8 +1148,8 @@ async function renderDialogs(accountIdStr, peerStr) {
 
   const root = $("#pageRoot");
   root.innerHTML = `
-    <div class="grid grid-cols-12 h-full">
-      <aside class="col-span-3 min-w-0 border-r border-ink-700 flex flex-col">
+    <div class="grid grid-cols-12 h-full min-h-0">
+      <aside class="col-span-3 min-w-0 min-h-0 border-r border-ink-700 flex flex-col">
         <div class="px-4 py-3 border-b border-ink-700 flex items-center justify-between gap-2">
           <h3 class="font-medium text-slate-200 text-sm">Диалоги</h3>
           <button id="dlgAccountsRefresh" class="text-xs text-slate-400 hover:text-slate-200">⟳</button>
@@ -1174,7 +1174,7 @@ async function renderDialogs(accountIdStr, peerStr) {
           <div class="p-4 text-slate-500 text-sm">Загрузка…</div>
         </div>
       </aside>
-      <section class="col-span-${peerId ? '4' : '9'} min-w-0 border-r border-ink-700 flex flex-col">
+      <section class="col-span-${peerId ? '4' : '9'} min-w-0 min-h-0 border-r border-ink-700 flex flex-col">
         <div class="px-4 py-3 border-b border-ink-700 flex items-center justify-between">
           <h3 id="dlgListTitle" class="font-medium text-slate-200 text-sm">${accountId ? `Диалоги аккаунта #${accountId}` : 'Выберите аккаунт'}</h3>
           <button id="dlgListRefresh" class="text-xs text-slate-400 hover:text-slate-200">⟳</button>
@@ -1184,7 +1184,7 @@ async function renderDialogs(accountIdStr, peerStr) {
         </div>
       </section>
       ${peerId ? `
-        <section class="col-span-5 min-w-0 flex flex-col">
+        <section class="col-span-5 min-w-0 min-h-0 flex flex-col">
           <div class="px-4 py-3 border-b border-ink-700 flex items-center justify-between gap-2">
             <div class="min-w-0">
               <h3 class="font-medium text-slate-200 text-sm truncate" id="dlgChatTitle">Диалог с ${peerId}</h3>
