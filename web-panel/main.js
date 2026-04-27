@@ -342,6 +342,10 @@ async function renderQueue() {
   await loadQueueList();
 }
 
+function queueStatusPill(status) {
+  return _queueStatusBadge(status);
+}
+
 async function loadQueueList() {
   try {
     const params = new URLSearchParams();
