@@ -113,7 +113,7 @@ async def run_channel_task(
         nonlocal seeds
         await log(account_id, "info", "search", f"Query: {q}", {"query": q})
         result = await floodwait.run_with_floodwait(
-            lambda: client(SearchRequest(q=q, limit=25)),
+            lambda: client(SearchRequest(q=q, limit=100)),
             on_flood_seconds=lambda sec: log(
                 account_id,
                 "warn",

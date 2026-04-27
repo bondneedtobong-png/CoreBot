@@ -304,8 +304,7 @@ def _export_lines_channels(rows) -> str:
         un = (r.username or "").strip()
         if un:
             lines.append(f"@{un.lstrip('@')}")
-        else:
-            lines.append(str(int(r.telegram_id)))
+    # Экспортируем только username-строки; приватные сущности без @ пропускаем.
     return "\n".join(lines) + ("\n" if lines else "")
 
 

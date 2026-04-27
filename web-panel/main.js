@@ -492,7 +492,7 @@ async function renderParsing(tabSeg) {
       <div class="card">
         <div class="flex items-center justify-between mb-2">
           <h3 class="font-semibold text-white">Задачи</h3>
-          <button id="pRefreshTasks" class="text-xs px-2 py-1 rounded bg-ink-700 border border-ink-600">Обновить</button>
+          <span class="text-xs text-emerald-400">live</span>
         </div>
         <div class="overflow-x-auto">
           <table class="cb-table text-xs">
@@ -598,9 +598,9 @@ async function renderParsing(tabSeg) {
       const depth = Number($("#pDepth")?.value || "1");
       const mode = ($("#pMode")?.value || "max_coverage").trim();
       const filters = {
-        is_active_7d: !!$("#fActive7d")?.checked,
-        has_discussion: !!$("#fDiscussion")?.checked,
-        is_public: !!$("#fPublic")?.checked,
+        is_active_7d: $("#fActive7d")?.checked ? true : null,
+        has_discussion: $("#fDiscussion")?.checked ? true : null,
+        is_public: $("#fPublic")?.checked ? true : null,
         subscribers_min: ($("#fSubsMin")?.value || "").trim() ? Number($("#fSubsMin")?.value || 0) : null,
         subscribers_max: ($("#fSubsMax")?.value || "").trim() ? Number($("#fSubsMax")?.value || 0) : null,
         lang: ($("#fLang")?.value || "").trim() || null,
@@ -793,7 +793,6 @@ async function renderParsing(tabSeg) {
     }
   }
 
-  $("#pRefreshTasks")?.addEventListener("click", () => loadParsingTasks());
   $("#pCancelTask")?.addEventListener("click", async () => {
     if (readOnly || !selectedTaskId) return;
     try {
@@ -821,6 +820,17 @@ async function renderParsing(tabSeg) {
   });
 
   await loadParsingTasks();
+  // Live-refresh: задачи + логи без кнопки "Обновить"
+  const liveTimer = setInterval(async () => {
+    if (state.route !== "parsing") {
+      clearInterval(liveTimer);
+      return;
+    }
+    await loadParsingTasks();
+    if (selectedTaskId) {
+      await loadParsingLogs(selectedTaskId);
+    }
+  }, 2000);
 }
 
 
