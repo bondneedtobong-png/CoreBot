@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from control_plane.business.db import get_bot_db
 from control_plane.business.schemas import (
+    AccountCreate,
     AccountDetail,
     AccountListItem,
     AccountModeIn,
@@ -28,10 +29,13 @@ from control_plane.business.schemas import (
     CleanupResult,
     DialogListItem,
     MessageOut,
+    QueueBulkActionIn,
+    QueueBulkActionOut,
+    QueueListItem,
     SendMessageIn,
     SendMessageOut,
 )
-from control_plane.deps import get_current_user
+from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
 from database.models import (
     Account,
@@ -61,6 +65,7 @@ def _serialize_account(
     *,
     dialogs_count: int = 0,
     pending_outbound: int = 0,
+    last_dialog_at: Optional[datetime] = None,
 ) -> AccountListItem:
     status_val = None
     if a.status is not None:
@@ -81,6 +86,7 @@ def _serialize_account(
         last_activity=a.last_activity,
         dialogs_count=int(dialogs_count),
         pending_outbound=int(pending_outbound),
+        last_dialog_at=last_dialog_at,
     )
 
 
@@ -107,14 +113,107 @@ def list_accounts(
         ).all()
     )
 
+    # Время последнего сообщения в любом из диалогов аккаунта.
+    # Учитываем как входящие/исходящие из NeuroChatMessage,
+    # так и pending/sent ручные сообщения из OutboundQueue,
+    # чтобы UI «Диалоги» сортировал список как мессенджер.
+    last_neuro: dict[int, datetime] = dict(
+        db.execute(
+            select(NeuroChatMessage.account_id, func.max(NeuroChatMessage.created_at))
+            .group_by(NeuroChatMessage.account_id)
+        ).all()
+    )
+    last_outbound: dict[int, datetime] = dict(
+        db.execute(
+            select(OutboundQueue.account_id, func.max(OutboundQueue.created_at))
+            .group_by(OutboundQueue.account_id)
+        ).all()
+    )
+
+    def _max_dialog(account_id: int) -> Optional[datetime]:
+        candidates = [
+            v for v in (last_neuro.get(account_id), last_outbound.get(account_id)) if v
+        ]
+        return max(candidates) if candidates else None
+
     return [
         _serialize_account(
             a,
             dialogs_count=dialog_counts.get(a.id, 0),
             pending_outbound=pending_counts.get(a.id, 0),
+            last_dialog_at=_max_dialog(a.id),
         )
         for a in accounts
     ]
+
+
+@router.post("/accounts", response_model=AccountDetail, status_code=status.HTTP_201_CREATED)
+def create_account(
+    payload: AccountCreate,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(require_operator_write),
+):
+    phone = (payload.phone or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="phone is required")
+    existing_phone = db.execute(select(Account.id).where(Account.phone == phone)).first()
+    if existing_phone:
+        raise HTTPException(status_code=400, detail="phone already exists")
+
+    session_name = (payload.session_name or "").strip()
+    if not session_name:
+        # Если аккаунт создаётся из веба без Tdata, создаём "пустой" session_name,
+        # чтобы запись была валидной в БД; подключение воркера произойдёт только
+        # когда в data/sessions появится реальная .session с тем же именем.
+        cleaned_phone = "".join(ch for ch in phone if ch.isdigit()) or "acc"
+        session_name = f"web_{cleaned_phone}_{int(datetime.utcnow().timestamp())}"
+    existing_session = db.execute(
+        select(Account.id).where(Account.session_name == session_name)
+    ).first()
+    if existing_session:
+        raise HTTPException(status_code=400, detail="session_name already exists")
+
+    proxy_id = None
+    if payload.proxy_id is not None and int(payload.proxy_id) > 0:
+        proxy = db.get(Proxy, int(payload.proxy_id))
+        if not proxy:
+            raise HTTPException(status_code=400, detail="proxy not found")
+        proxy_id = int(payload.proxy_id)
+
+    try:
+        status_value = AccountStatus(payload.status)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid status")
+    try:
+        membership_value = Membership(payload.membership)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid membership")
+
+    row = Account(
+        phone=phone,
+        session_name=session_name,
+        username=(payload.username or "").strip() or None,
+        list_label=(payload.list_label or "").strip() or None,
+        first_name=(payload.first_name or "").strip() or None,
+        last_name=(payload.last_name or "").strip() or None,
+        status=status_value,
+        membership=membership_value,
+        ai_mode=(payload.ai_mode or "MANUAL").upper(),
+        proxy_id=proxy_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    desired_groups = sorted({int(x) for x in (payload.group_ids or []) if int(x) > 0})
+    if desired_groups:
+        db.execute(
+            insert(account_groups),
+            [{"account_id": int(row.id), "group_id": gid} for gid in desired_groups],
+        )
+        db.commit()
+
+    return _serialize_account_detail(db, row)
 
 
 @router.post("/accounts/{account_id}/mode", response_model=AccountListItem)
@@ -122,7 +221,7 @@ def set_account_mode(
     account_id: int,
     payload: AccountModeIn,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     account = db.get(Account, account_id)
     if not account:
@@ -192,7 +291,7 @@ def patch_account(
     account_id: int,
     payload: AccountPatch,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     a = db.get(Account, account_id)
     if not a:
@@ -258,7 +357,7 @@ def patch_account(
 def delete_account(
     account_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     a = db.get(Account, account_id)
     if not a:
@@ -290,6 +389,119 @@ def _ensure_account(db: Session, account_id: int) -> Account:
     if not account:
         raise HTTPException(status_code=404, detail="account not found")
     return account
+
+
+def _queue_item_to_out(db: Session, row: OutboundQueue) -> QueueListItem:
+    account = db.get(Account, int(row.account_id))
+    client_username = None
+    if getattr(row, "client_id", None):
+        cl = db.get(Client, int(row.client_id))
+        client_username = cl.username if cl else None
+    title = (
+        (account.list_label or account.username or account.phone or f"#{row.account_id}")
+        if account
+        else f"#{row.account_id}"
+    )
+    return QueueListItem(
+        queue_id=int(row.id),
+        account_id=int(row.account_id),
+        account_title=title,
+        peer_user_id=int(row.peer_user_id),
+        client_id=int(row.client_id) if row.client_id else None,
+        client_username=client_username,
+        text=row.text or "",
+        status=row.status or "pending",
+        error=row.error,
+        attempts=int(getattr(row, "attempts", 0) or 0),
+        requested_by=row.requested_by,
+        created_at=row.created_at or datetime.utcnow(),
+        next_attempt_at=row.next_attempt_at,
+        sent_at=row.sent_at,
+    )
+
+
+@router.get("/queue", response_model=list[QueueListItem])
+def list_outbound_queue(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    account_id: Optional[int] = Query(default=None),
+    peer_user_id: Optional[int] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(get_current_user),
+):
+    stmt = select(OutboundQueue)
+    if status_filter:
+        stmt = stmt.where(OutboundQueue.status == status_filter.strip().lower())
+    if account_id is not None:
+        stmt = stmt.where(OutboundQueue.account_id == int(account_id))
+    if peer_user_id is not None:
+        stmt = stmt.where(OutboundQueue.peer_user_id == int(peer_user_id))
+    rows = (
+        db.execute(stmt.order_by(OutboundQueue.id.desc()).limit(limit).offset(offset))
+        .scalars()
+        .all()
+    )
+    return [_queue_item_to_out(db, r) for r in rows]
+
+
+@router.post("/queue/bulk", response_model=QueueBulkActionOut)
+def queue_bulk_action(
+    payload: QueueBulkActionIn,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(require_operator_write),
+):
+    qids = sorted({int(x) for x in payload.queue_ids if int(x) > 0})
+    if not qids:
+        raise HTTPException(status_code=400, detail="queue_ids is empty")
+    rows = (
+        db.execute(select(OutboundQueue).where(OutboundQueue.id.in_(qids)))
+        .scalars()
+        .all()
+    )
+    by_id = {int(r.id): r for r in rows}
+    updated = 0
+    skipped = 0
+    for qid in qids:
+        row = by_id.get(qid)
+        if not row:
+            skipped += 1
+            continue
+        if payload.action == "retry":
+            if row.status not in ("failed", "cancelled"):
+                skipped += 1
+                continue
+            db.execute(
+                update(OutboundQueue)
+                .where(OutboundQueue.id == qid)
+                .values(
+                    status="pending",
+                    error=None,
+                    attempts=0,
+                    next_attempt_at=None,
+                    sent_at=None,
+                )
+            )
+            updated += 1
+            continue
+        if payload.action == "cancel":
+            if row.status not in ("pending", "failed"):
+                skipped += 1
+                continue
+            db.execute(
+                update(OutboundQueue)
+                .where(OutboundQueue.id == qid)
+                .values(status="cancelled", next_attempt_at=None)
+            )
+            updated += 1
+            continue
+        skipped += 1
+    db.commit()
+    return QueueBulkActionOut(
+        requested=len(qids),
+        updated=updated,
+        skipped=skipped,
+    )
 
 
 @router.get(
@@ -459,7 +671,7 @@ def enqueue_manual_send(
     peer_user_id: int,
     payload: SendMessageIn,
     db: Session = Depends(get_bot_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator_write),
 ):
     _ensure_account(db, account_id)
     text_clean = (payload.text or "").strip()
@@ -496,7 +708,7 @@ def enqueue_manual_send(
 def retry_queue_item(
     queue_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     row = db.get(OutboundQueue, queue_id)
     if not row:
@@ -531,7 +743,7 @@ def retry_queue_item(
 def cancel_queue_item(
     queue_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     row = db.get(OutboundQueue, queue_id)
     if not row:
@@ -557,7 +769,7 @@ def delete_dialog(
     account_id: int,
     peer_user_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     _ensure_account(db, account_id)
     db.execute(
@@ -583,7 +795,7 @@ def delete_dialog(
 def cleanup_dialogs(
     payload: CleanupRequest,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     if not any(
         [

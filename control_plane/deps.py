@@ -35,6 +35,15 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def require_operator_write(user: User = Depends(get_current_user)) -> User:
+    if user.role in ("tenant_viewer",):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Read-only role: write operations are not allowed",
+        )
+    return user
+
+
 def require_super_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "super_admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin only")

@@ -3,10 +3,11 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from control_plane.auth import hash_password, hash_agent_token
+from control_plane.auth import hash_password, hash_agent_token, verify_password
 from control_plane.database import get_db
-from control_plane.deps import require_admin, require_super_admin
+from control_plane.deps import get_current_user, require_admin, require_super_admin
 from control_plane.models import Tenant, User, Agent, AgentToken, AuditLog
+from control_plane.schemas import AdminUserCreateIn, AdminUserOut, PasswordChangeIn
 from control_plane.tasks import cleanup_retention, make_backup
 
 
@@ -73,6 +74,133 @@ def create_user(
         target_id=str(row.id),
     )
     return {"id": row.id, "username": row.username, "role": row.role}
+
+
+@router.get("/users", response_model=list[AdminUserOut])
+def list_users(
+    tenant_id: int | None = None,
+    db: Session = Depends(get_db),
+    actor=Depends(require_admin),
+):
+    q = db.query(User)
+    if actor.role == "super_admin":
+        if tenant_id is not None:
+            q = q.filter(User.tenant_id == int(tenant_id))
+    else:
+        q = q.filter(User.tenant_id == actor.tenant_id)
+    rows = q.order_by(User.created_at.desc(), User.id.desc()).limit(200).all()
+    return [
+        AdminUserOut(
+            id=int(r.id),
+            tenant_id=int(r.tenant_id),
+            username=r.username,
+            role=r.role,
+            is_active=bool(r.is_active),
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post("/users/create", response_model=AdminUserOut)
+def create_user_json(
+    payload: AdminUserCreateIn,
+    db: Session = Depends(get_db),
+    actor=Depends(require_admin),
+):
+    requested_tenant = int(payload.tenant_id or actor.tenant_id)
+    if actor.role != "super_admin" and requested_tenant != actor.tenant_id:
+        raise HTTPException(status_code=403, detail="Cross-tenant denied")
+
+    role = (payload.role or "tenant_viewer").strip()
+    if actor.role != "super_admin" and role not in ("tenant_admin", "tenant_viewer"):
+        raise HTTPException(status_code=403, detail="Role not allowed")
+    if actor.role == "super_admin" and role not in (
+        "super_admin",
+        "tenant_admin",
+        "tenant_viewer",
+    ):
+        raise HTTPException(status_code=400, detail="Unknown role")
+
+    username = payload.username.strip()
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(status_code=400, detail="Username exists")
+    row = User(
+        tenant_id=requested_tenant,
+        username=username,
+        password_hash=hash_password(payload.password),
+        role=role,
+        is_active=True,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    _safe_audit(
+        db,
+        actor_user_id=actor.id,
+        tenant_id=requested_tenant,
+        action="create_user",
+        target_type="user",
+        target_id=str(row.id),
+    )
+    return AdminUserOut(
+        id=int(row.id),
+        tenant_id=int(row.tenant_id),
+        username=row.username,
+        role=row.role,
+        is_active=bool(row.is_active),
+        created_at=row.created_at,
+    )
+
+
+@router.post("/me/password")
+def change_my_password(
+    payload: PasswordChangeIn,
+    db: Session = Depends(get_db),
+    actor=Depends(get_current_user),
+):
+    if not payload.current_password:
+        raise HTTPException(status_code=400, detail="current_password required")
+    if not verify_password(payload.current_password, actor.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is invalid")
+    actor.password_hash = hash_password(payload.new_password)
+    db.commit()
+    _safe_audit(
+        db,
+        actor_user_id=actor.id,
+        tenant_id=actor.tenant_id,
+        action="change_my_password",
+        target_type="user",
+        target_id=str(actor.id),
+    )
+    return {"ok": True}
+
+
+@router.post("/users/{user_id}/password")
+def reset_user_password(
+    user_id: int,
+    payload: PasswordChangeIn,
+    db: Session = Depends(get_db),
+    actor=Depends(require_admin),
+):
+    target = db.query(User).filter(User.id == int(user_id)).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if actor.role != "super_admin" and target.tenant_id != actor.tenant_id:
+        raise HTTPException(status_code=403, detail="Cross-tenant denied")
+    if actor.role != "super_admin" and target.role == "super_admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    target.password_hash = hash_password(payload.new_password)
+    db.commit()
+    _safe_audit(
+        db,
+        actor_user_id=actor.id,
+        tenant_id=target.tenant_id,
+        action="reset_user_password",
+        target_type="user",
+        target_id=str(target.id),
+    )
+    return {"ok": True}
 
 
 @router.post("/agents")

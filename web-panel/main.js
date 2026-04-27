@@ -25,6 +25,17 @@ const state = {
     peerId: null,
     messageMaxId: 0,
   },
+  dialogs: {
+    accountSearch: "",
+    leftTab: "accounts", // accounts | groups
+    selectedGroupId: null, // null = all
+    selectedGroupName: "Все",
+    groupAccountIds: null, // Set<int> | null
+  },
+  accounts: {
+    q: "",
+    sort: "id_desc",
+  },
   listeners: {},
 };
 
@@ -58,6 +69,7 @@ function escapeHTML(s) {
 }
 function $(sel, root = document) { return root.querySelector(sel); }
 function $$(sel, root = document) { return Array.from(root.querySelectorAll(sel)); }
+function isReadOnlyRole() { return (state.user?.role || "") === "tenant_viewer"; }
 
 function toast(message, kind = "info", ttl = 3000) {
   const el = $("#toast");
@@ -122,10 +134,15 @@ async function loginFlow(ev) {
     }
     const data = await r.json();
     state.token = data.access_token;
-    state.user = { username };
+    try {
+      const me = await fetchMeByToken(state.token);
+      state.user = me || { username };
+    } catch {
+      state.user = { username };
+    }
     localStorage.setItem(TOKEN_KEY, state.token);
     localStorage.setItem(USER_KEY, JSON.stringify(state.user));
-    enterApp();
+    await enterApp();
   } catch (e) {
     msg.textContent = "Ошибка сети";
     msg.classList.remove("hidden");
@@ -148,7 +165,7 @@ function handleLogout(silent = false) {
   if (!silent) toast("Сессия завершена");
 }
 
-function enterApp() {
+async function enterApp() {
   const app = $("#appShell");
   const lg = $("#loginScreen");
   // Гасим экран логина и его inline style="display:flex" — иначе он
@@ -158,9 +175,32 @@ function enterApp() {
   lg.style.display = "none";
   app.classList.remove("hidden");
   app.style.display = "flex";
-  $("#userBadge").textContent = state.user?.username || "—";
+  if (!state.user?.role) {
+    try {
+      const me = await fetchMeByToken(state.token);
+      if (me) {
+        state.user = me;
+        localStorage.setItem(USER_KEY, JSON.stringify(state.user));
+      }
+    } catch {}
+  }
+  const roleSuffix = state.user?.role ? ` (${state.user.role})` : "";
+  $("#userBadge").textContent = (state.user?.username || "—") + roleSuffix;
   openSSE();
   navigate(window.location.hash || "#/dashboard");
+}
+
+async function fetchMeByToken(token) {
+  if (!token) return null;
+  const r = await fetch(API + "/auth/me", {
+    method: "GET",
+    headers: {
+      "Accept": "application/json",
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+  if (!r.ok) return null;
+  return r.json();
 }
 
 /* ------------------------------- SSE live ------------------------------ */
@@ -238,6 +278,7 @@ function navigate(hash) {
     case "dashboard": return renderDashboard();
     case "accounts":  return renderAccounts(segments[1]);
     case "dialogs":   return renderDialogs(segments[1], segments[2]);
+    case "queue":     return renderQueue();
     case "mailings":  return renderMailings(segments[1]);
     case "clients":   return renderClients(segments[1]);
     case "groups":    return renderGroups(segments[1]);
@@ -248,6 +289,147 @@ function navigate(hash) {
     default: return renderNotFound();
   }
 }
+/* ------------------------------ Queue view ----------------------------- */
+
+async function renderQueue() {
+  setHeader("Очередь", "Ручные исходящие из веба (outbound_queue)");
+  const readOnly = isReadOnlyRole();
+  const root = $("#pageRoot");
+  root.innerHTML = `
+    <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
+      <div class="card">
+        <div class="flex items-center gap-3 text-sm flex-wrap">
+          <label class="text-slate-400">Статус:</label>
+          <select id="qStatus" class="bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100">
+            <option value="">все</option>
+            <option value="pending">pending</option>
+            <option value="sending">sending</option>
+            <option value="sent">sent</option>
+            <option value="failed">failed</option>
+            <option value="cancelled">cancelled</option>
+          </select>
+          <input id="qAccount" type="number" min="1" placeholder="account_id"
+                 class="w-32 bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" />
+          <input id="qPeer" type="number" min="1" placeholder="peer_user_id"
+                 class="w-40 bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" />
+          <input id="qLimit" type="number" min="1" max="1000" value="200"
+                 class="w-24 bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" />
+          <button id="qApply" class="px-3 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white">Применить</button>
+          <button id="qBulkRetry" class="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>↻ Retry выбранных</button>
+          <button id="qBulkCancel" class="px-3 py-1 rounded bg-rose-700 hover:bg-rose-600 text-white ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>✕ Cancel выбранных</button>
+          <span id="qCount" class="text-xs text-slate-500 ml-auto"></span>
+        </div>
+      </div>
+      <div class="card p-0 overflow-hidden">
+        <table class="cb-table">
+          <thead>
+            <tr>
+              <th><input id="qSelectAll" type="checkbox" class="rounded border-ink-600 bg-ink-800" ${readOnly ? "disabled" : ""} /></th>
+              <th>ID</th><th>Аккаунт</th><th>Peer</th><th>Текст</th><th>Статус</th><th>Attempts</th><th>Ошибка</th><th>Время</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="qBody"><tr><td colspan="10" class="text-center text-slate-500 py-8">Загрузка…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  $("#qApply").addEventListener("click", loadQueueList);
+  $("#qBulkRetry").addEventListener("click", () => runQueueBulk("retry"));
+  $("#qBulkCancel").addEventListener("click", () => runQueueBulk("cancel"));
+  $("#qSelectAll").addEventListener("change", (ev) => {
+    $$("#qBody input[type='checkbox'][data-qid]").forEach((c) => { c.checked = !!ev.currentTarget.checked; });
+  });
+  await loadQueueList();
+}
+
+async function loadQueueList() {
+  try {
+    const params = new URLSearchParams();
+    const st = ($("#qStatus")?.value || "").trim();
+    const acc = ($("#qAccount")?.value || "").trim();
+    const peer = ($("#qPeer")?.value || "").trim();
+    const limit = ($("#qLimit")?.value || "200").trim();
+    if (st) params.set("status", st);
+    if (acc) params.set("account_id", acc);
+    if (peer) params.set("peer_user_id", peer);
+    params.set("limit", limit || "200");
+    const list = await api(`/business/queue?${params.toString()}`);
+    const tbody = $("#qBody");
+    $("#qCount").textContent = `найдено: ${list.length}`;
+    if (!list.length) {
+      tbody.innerHTML = `<tr><td colspan="10" class="text-center text-slate-500 py-8">Очередь пуста по фильтру.</td></tr>`;
+      return;
+    }
+    const readOnly = isReadOnlyRole();
+    tbody.innerHTML = list.map((q) => `
+      <tr>
+        <td><input type="checkbox" data-qid="${q.queue_id}" class="rounded border-ink-600 bg-ink-800" ${readOnly ? "disabled" : ""} /></td>
+        <td class="text-slate-500">#${q.queue_id}</td>
+        <td><a href="#/dialogs/${q.account_id}/${q.peer_user_id}" class="text-slate-100 hover:text-accent-500">${escapeHTML(q.account_title)}</a></td>
+        <td class="text-xs text-slate-300">${q.client_username ? '@' + escapeHTML(q.client_username) : q.peer_user_id}</td>
+        <td class="max-w-[360px] truncate text-slate-200" title="${escapeHTML(q.text || "")}">${escapeHTML(q.text || "")}</td>
+        <td>${queueStatusPill(q.status)}</td>
+        <td class="text-slate-300">${q.attempts ?? 0}</td>
+        <td class="max-w-[260px] truncate text-xs text-rose-300" title="${escapeHTML(q.error || "")}">${escapeHTML(q.error || "—")}</td>
+        <td class="text-xs text-slate-400">${fmtDate(q.created_at)}</td>
+        <td class="text-right whitespace-nowrap">
+          <button data-q-act="retry" data-qid="${q.queue_id}" class="px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>↻</button>
+          <button data-q-act="cancel" data-qid="${q.queue_id}" class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs ml-1 ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>✕</button>
+        </td>
+      </tr>
+    `).join("");
+    if (!readOnly) {
+      tbody.querySelectorAll("button[data-q-act]").forEach((b) => {
+        b.addEventListener("click", () => onQueueItemAction(Number(b.dataset.qid), b.dataset.qAct));
+      });
+    }
+  } catch (e) {
+    toast(`Очередь: ${e.message}`, "error");
+  }
+}
+
+async function onQueueItemAction(queueId, action) {
+  if (!queueId || !action) return;
+  if (isReadOnlyRole()) {
+    toast("Роль read-only: действие запрещено", "error");
+    return;
+  }
+  try {
+    if (action === "retry") {
+      await api(`/business/queue/${queueId}/retry`, { method: "POST" });
+    } else if (action === "cancel") {
+      await api(`/business/queue/${queueId}/cancel`, { method: "POST", raw: true });
+    }
+    await loadQueueList();
+  } catch (e) {
+    toast(`Очередь ${action}: ${e.message}`, "error");
+  }
+}
+
+async function runQueueBulk(action) {
+  if (isReadOnlyRole()) {
+    toast("Роль read-only: массовые действия запрещены", "error");
+    return;
+  }
+  const ids = $$("#qBody input[type='checkbox'][data-qid]:checked")
+    .map((c) => Number(c.dataset.qid))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) {
+    toast("Отметьте элементы очереди", "info");
+    return;
+  }
+  try {
+    const r = await api("/business/queue/bulk", {
+      method: "POST",
+      body: { action, queue_ids: ids },
+    });
+    toast(`Bulk ${action}: updated=${r.updated}, skipped=${r.skipped}`, "success");
+    await loadQueueList();
+  } catch (e) {
+    toast(`Bulk ${action}: ${e.message}`, "error");
+  }
+}
+
 
 window.addEventListener("hashchange", () => navigate(window.location.hash));
 
@@ -528,7 +710,77 @@ async function renderAccounts(accountIdStr) {
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full">
+      <div class="card mb-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-slate-100">Новый аккаунт (быстрое создание)</h3>
+          <span class="text-xs text-slate-500">Tdata/.session всё ещё импортируются в Telegram-боте</span>
+        </div>
+        <form id="accountCreateForm" class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+          <label class="block">
+            <span class="text-slate-400 text-xs">Телефон *</span>
+            <input name="phone" required placeholder="+79990001122"
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+          </label>
+          <label class="block">
+            <span class="text-slate-400 text-xs">Название в боте (list_label)</span>
+            <input name="list_label" placeholder="sales-01"
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+          </label>
+          <label class="block">
+            <span class="text-slate-400 text-xs">Session name (опц.)</span>
+            <input name="session_name" placeholder="web_7999..."
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono" />
+          </label>
+          <label class="block">
+            <span class="text-slate-400 text-xs">Username (опц.)</span>
+            <input name="username" placeholder="username"
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+          </label>
+          <label class="block">
+            <span class="text-slate-400 text-xs">Имя</span>
+            <input name="first_name"
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+          </label>
+          <label class="block">
+            <span class="text-slate-400 text-xs">Фамилия</span>
+            <input name="last_name"
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+          </label>
+          <label class="block">
+            <span class="text-slate-400 text-xs">Membership</span>
+            <select name="membership" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
+              <option value="TEST">TEST</option>
+              <option value="READY">READY</option>
+              <option value="WARMUP">WARMUP</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-slate-400 text-xs">Режим</span>
+            <select name="ai_mode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
+              <option value="MANUAL">MANUAL</option>
+              <option value="AI_ACTIVE">AI_ACTIVE</option>
+            </select>
+          </label>
+          <div class="md:col-span-4 flex items-center gap-3">
+            <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Создать аккаунт</button>
+            <span id="accCreateMsg" class="text-xs text-slate-400"></span>
+          </div>
+        </form>
+      </div>
       <div class="card overflow-hidden p-0">
+        <div class="px-4 py-3 border-b border-ink-700 flex items-center gap-3 text-sm flex-wrap">
+          <input id="accSearch" placeholder="Поиск: list_label / @username / phone / #id"
+                 value="${escapeHTML(state.accounts?.q || "")}"
+                 class="px-3 py-1.5 rounded bg-ink-800 border border-ink-600 text-slate-100 w-80 max-w-full" />
+          <select id="accSort" class="bg-ink-800 border border-ink-600 rounded px-2 py-1.5 text-slate-100">
+            <option value="id_desc" ${(state.accounts?.sort || "id_desc") === "id_desc" ? "selected" : ""}>Сначала новые (#id ↓)</option>
+            <option value="id_asc" ${(state.accounts?.sort || "id_desc") === "id_asc" ? "selected" : ""}>Сначала старые (#id ↑)</option>
+            <option value="dialogs_desc" ${(state.accounts?.sort || "id_desc") === "dialogs_desc" ? "selected" : ""}>По диалогам (больше → меньше)</option>
+            <option value="last_dialog_desc" ${(state.accounts?.sort || "id_desc") === "last_dialog_desc" ? "selected" : ""}>Как в мессенджере (последний диалог)</option>
+            <option value="label_asc" ${(state.accounts?.sort || "id_desc") === "label_asc" ? "selected" : ""}>По названию (A→Я)</option>
+          </select>
+          <span id="accCount" class="text-slate-500 text-xs ml-auto"></span>
+        </div>
         <table class="cb-table">
           <thead>
             <tr>
@@ -547,8 +799,47 @@ async function renderAccounts(accountIdStr) {
       </div>
     </div>
   `;
+  $("#accountCreateForm")?.addEventListener("submit", onCreateAccountSubmit);
+  $("#accSearch")?.addEventListener("input", (ev) => {
+    state.accounts.q = (ev.currentTarget.value || "").toString();
+    refreshAccountsTable();
+  });
+  $("#accSort")?.addEventListener("change", (ev) => {
+    state.accounts.sort = (ev.currentTarget.value || "id_desc").toString();
+    refreshAccountsTable();
+  });
   await refreshAccountsTable();
   if (accountId) await loadAccountEditor(accountId);
+}
+
+async function onCreateAccountSubmit(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.currentTarget);
+  const body = {
+    phone: (fd.get("phone") || "").toString().trim(),
+    list_label: (fd.get("list_label") || "").toString().trim(),
+    session_name: (fd.get("session_name") || "").toString().trim(),
+    username: (fd.get("username") || "").toString().trim(),
+    first_name: (fd.get("first_name") || "").toString().trim(),
+    last_name: (fd.get("last_name") || "").toString().trim(),
+    membership: (fd.get("membership") || "TEST").toString(),
+    ai_mode: (fd.get("ai_mode") || "MANUAL").toString(),
+    status: "inactive",
+  };
+  const out = $("#accCreateMsg");
+  out.textContent = "…";
+  try {
+    const created = await api("/business/accounts", { method: "POST", body });
+    toast(`Аккаунт #${created.id} создан`, "success");
+    out.textContent = `ok (#${created.id})`;
+    out.className = "text-xs text-emerald-300";
+    ev.currentTarget.reset();
+    await refreshAccountsTable();
+    window.location.hash = `#/accounts/${created.id}`;
+  } catch (e) {
+    out.textContent = e.message;
+    out.className = "text-xs text-rose-400";
+  }
 }
 
 async function refreshAccountsTable() {
@@ -556,14 +847,50 @@ async function refreshAccountsTable() {
     const list = await api("/business/accounts");
     state.cache.accounts = list;
     state.cache.accountById = new Map(list.map(a => [a.id, a]));
+    const q = (state.accounts?.q || "").trim().toLowerCase();
+    const sortMode = (state.accounts?.sort || "id_desc").toLowerCase();
+    let rows = list.filter((a) => {
+      if (!q) return true;
+      const hay = [
+        a.list_label || "",
+        a.username || "",
+        a.phone || "",
+        `#${a.id}`,
+      ].join(" ").toLowerCase();
+      return hay.includes(q);
+    });
+    const byDateDesc = (x, y) => {
+      const xt = x ? Date.parse(x) : NaN;
+      const yt = y ? Date.parse(y) : NaN;
+      if (Number.isNaN(xt) && Number.isNaN(yt)) return 0;
+      if (Number.isNaN(xt)) return 1;
+      if (Number.isNaN(yt)) return -1;
+      return yt - xt;
+    };
+    rows.sort((a, b) => {
+      if (sortMode === "id_asc") return a.id - b.id;
+      if (sortMode === "dialogs_desc") return (b.dialogs_count || 0) - (a.dialogs_count || 0);
+      if (sortMode === "last_dialog_desc") {
+        const cmp = byDateDesc(a.last_dialog_at, b.last_dialog_at);
+        return cmp || (b.id - a.id);
+      }
+      if (sortMode === "label_asc") {
+        const at = (a.list_label || a.username || a.phone || `#${a.id}`).toLowerCase();
+        const bt = (b.list_label || b.username || b.phone || `#${b.id}`).toLowerCase();
+        return at.localeCompare(bt, "ru");
+      }
+      return b.id - a.id;
+    });
+    const accCount = $("#accCount");
+    if (accCount) accCount.textContent = `показано: ${rows.length} / ${list.length}`;
 
     const tbody = $("#accountsBody");
     if (!tbody) return;
-    if (!list.length) {
+    if (!rows.length) {
       tbody.innerHTML = `<tr><td colspan="9" class="text-center text-slate-500 py-8">Нет аккаунтов в БД.</td></tr>`;
       return;
     }
-    tbody.innerHTML = list.map(a => {
+    tbody.innerHTML = rows.map(a => {
       const title = escapeHTML(a.list_label || a.username || a.phone || `#${a.id}`);
       const fullName = [a.first_name, a.last_name].filter(Boolean).join(" ");
       const statusPill = accountStatusPill(a.status);
@@ -819,11 +1146,27 @@ async function renderDialogs(accountIdStr, peerStr) {
   root.innerHTML = `
     <div class="grid grid-cols-12 h-full">
       <aside class="col-span-3 min-w-0 border-r border-ink-700 flex flex-col">
-        <div class="px-4 py-3 border-b border-ink-700 flex items-center justify-between">
-          <h3 class="font-medium text-slate-200 text-sm">Аккаунты</h3>
+        <div class="px-4 py-3 border-b border-ink-700 flex items-center justify-between gap-2">
+          <h3 class="font-medium text-slate-200 text-sm">Диалоги</h3>
           <button id="dlgAccountsRefresh" class="text-xs text-slate-400 hover:text-slate-200">⟳</button>
         </div>
-        <div id="dlgAccountsList" class="flex-1 overflow-y-auto cb-scroll">
+        <div class="px-3 py-2 border-b border-ink-700 flex items-center gap-2">
+          <button id="dlgTabAccounts" class="px-2 py-1 rounded text-xs ${state.dialogs.leftTab === 'accounts' ? 'bg-accent-600 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}">Аккаунты</button>
+          <button id="dlgTabGroups" class="px-2 py-1 rounded text-xs ${state.dialogs.leftTab === 'groups' ? 'bg-accent-600 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}">Группы</button>
+        </div>
+        <div class="px-3 py-2 border-b border-ink-700">
+          <input
+            id="dlgAccountsSearch"
+            type="text"
+            placeholder="Поиск по названию аккаунта…"
+            value="${escapeHTML(state.dialogs?.accountSearch || '')}"
+            class="w-full bg-ink-800 border border-ink-700 rounded px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500 ${state.dialogs.leftTab === 'accounts' ? '' : 'hidden'}"
+          />
+        </div>
+        <div id="dlgAccountsList" class="flex-1 overflow-y-auto cb-scroll ${state.dialogs.leftTab === 'accounts' ? '' : 'hidden'}">
+          <div class="p-4 text-slate-500 text-sm">Загрузка…</div>
+        </div>
+        <div id="dlgGroupsList" class="flex-1 overflow-y-auto cb-scroll ${state.dialogs.leftTab === 'groups' ? '' : 'hidden'}">
           <div class="p-4 text-slate-500 text-sm">Загрузка…</div>
         </div>
       </aside>
@@ -856,7 +1199,21 @@ async function renderDialogs(accountIdStr, peerStr) {
     </div>
   `;
 
-  $("#dlgAccountsRefresh").addEventListener("click", () => loadDialogsAccounts(accountId, peerId));
+  $("#dlgAccountsRefresh").addEventListener("click", () => loadDialogsAccounts(accountId, peerId, { force: true }));
+  $("#dlgTabAccounts")?.addEventListener("click", () => switchDialogsLeftTab("accounts", accountId));
+  $("#dlgTabGroups")?.addEventListener("click", () => switchDialogsLeftTab("groups", accountId));
+  const searchInput = $("#dlgAccountsSearch");
+  if (searchInput) {
+    searchInput.addEventListener("input", (ev) => {
+      state.dialogs.accountSearch = ev.target.value || "";
+      paintDialogsAccounts(state.cache.accounts || [], accountId);
+    });
+    // Курсор в конец, чтобы при перерисовке не «прыгал».
+    requestAnimationFrame(() => {
+      const v = searchInput.value;
+      try { searchInput.setSelectionRange(v.length, v.length); } catch (_) {}
+    });
+  }
   if ($("#dlgListRefresh") && accountId) {
     $("#dlgListRefresh").addEventListener("click", () => loadDialogsList(accountId, peerId));
   }
@@ -864,40 +1221,167 @@ async function renderDialogs(accountIdStr, peerStr) {
     $("#dlgDeleteBtn").addEventListener("click", () => deleteCurrentDialog(accountId, peerId));
   }
 
-  await loadDialogsAccounts(accountId, peerId);
+  // force=true: при заходе в раздел всегда тянем актуальные last_dialog_at,
+  // чтобы порядок «как в мессенджере» отражал свежие сообщения.
+  await loadDialogsAccounts(accountId, peerId, { force: true });
+  await loadDialogsGroups();
   if (accountId) await loadDialogsList(accountId, peerId);
   if (accountId && peerId) await loadDialogMessages(accountId, peerId);
 }
 
-async function loadDialogsAccounts(activeAccountId, activePeerId) {
+function switchDialogsLeftTab(tab, activeAccountId) {
+  state.dialogs.leftTab = tab === "groups" ? "groups" : "accounts";
+  const accList = $("#dlgAccountsList");
+  const grpList = $("#dlgGroupsList");
+  const inp = $("#dlgAccountsSearch");
+  const tAcc = $("#dlgTabAccounts");
+  const tGrp = $("#dlgTabGroups");
+  if (accList) accList.classList.toggle("hidden", state.dialogs.leftTab !== "accounts");
+  if (grpList) grpList.classList.toggle("hidden", state.dialogs.leftTab !== "groups");
+  if (inp) inp.classList.toggle("hidden", state.dialogs.leftTab !== "accounts");
+  if (tAcc) tAcc.className = `px-2 py-1 rounded text-xs ${state.dialogs.leftTab === "accounts" ? "bg-accent-600 text-white" : "bg-ink-800 text-slate-300 hover:bg-ink-700"}`;
+  if (tGrp) tGrp.className = `px-2 py-1 rounded text-xs ${state.dialogs.leftTab === "groups" ? "bg-accent-600 text-white" : "bg-ink-800 text-slate-300 hover:bg-ink-700"}`;
+  if (state.dialogs.leftTab === "accounts") {
+    paintDialogsAccounts(state.cache.accounts || [], activeAccountId);
+  }
+}
+
+async function loadDialogsAccounts(activeAccountId, activePeerId, opts = {}) {
   const el = $("#dlgAccountsList");
   if (!el) return;
   try {
-    const list = state.cache.accounts || await api("/business/accounts");
+    // Всегда тянем свежий список, чтобы last_dialog_at был актуальным
+    // и порядок «как в мессенджере» не врал. Кэш используем только
+    // для синхронных перерисовок при наборе текста в поиске.
+    const list = (!opts.force && state.cache.accounts)
+      ? state.cache.accounts
+      : await api("/business/accounts");
     state.cache.accounts = list;
     state.cache.accountById = new Map(list.map(a => [a.id, a]));
-    if (!list.length) {
-      el.innerHTML = `<div class="p-4 text-slate-500 text-sm">Нет аккаунтов.</div>`;
-      return;
+    paintDialogsAccounts(list, activeAccountId);
+  } catch (e) {
+    el.innerHTML = `<div class="p-4 text-rose-400 text-sm">Ошибка: ${escapeHTML(e.message)}</div>`;
+  }
+}
+
+function paintDialogsAccounts(list, activeAccountId) {
+  const el = $("#dlgAccountsList");
+  if (!el) return;
+  if (!list.length) {
+    el.innerHTML = `<div class="p-4 text-slate-500 text-sm">Нет аккаунтов.</div>`;
+    return;
+  }
+
+  let scoped = list.slice();
+  if (state.dialogs.selectedGroupId !== null && state.dialogs.groupAccountIds instanceof Set) {
+    scoped = scoped.filter((a) => state.dialogs.groupAccountIds.has(Number(a.id)));
+  }
+
+  const q = (state.dialogs.accountSearch || "").trim().toLowerCase();
+  const filtered = q
+    ? scoped.filter(a => {
+        // Поиск по «имени аккаунта внутри бота» (list_label) — приоритет,
+        // плюс fallback на username/phone, чтобы пользователь
+        // мог найти безымянные аккаунты.
+        const hay = [a.list_label, a.username, a.phone, `#${a.id}`]
+          .filter(Boolean).join(" ").toLowerCase();
+        return hay.includes(q);
+      })
+    : scoped.slice();
+
+  // Сортировка «как в Telegram»: сначала свежие диалоги.
+  // Аккаунты без диалогов — в самом низу, среди них стабильный порядок по id.
+  filtered.sort((a, b) => {
+    const ta = a.last_dialog_at ? Date.parse(a.last_dialog_at) : 0;
+    const tb = b.last_dialog_at ? Date.parse(b.last_dialog_at) : 0;
+    if (tb !== ta) return tb - ta;
+    return (a.id || 0) - (b.id || 0);
+  });
+
+  if (!filtered.length) {
+    el.innerHTML = `<div class="p-4 text-slate-500 text-sm">Ничего не найдено.</div>`;
+    return;
+  }
+
+  el.innerHTML = filtered.map(a => {
+    // Имя «как в боте»: list_label, fallback на username/phone/#id —
+    // именно по нему ведётся поиск.
+    const internalTitle = a.list_label || a.username || a.phone || `#${a.id}`;
+    // Имя «как в Telegram»: first_name + last_name, либо @username.
+    const tgFull = [a.first_name, a.last_name].filter(Boolean).join(" ").trim();
+    const tgHandle = a.username ? `@${a.username}` : "";
+    let tgLabel = tgFull || tgHandle;
+    if (tgLabel && tgLabel === internalTitle) tgLabel = "";
+    if (tgLabel && tgFull && tgHandle && tgLabel === tgFull && a.username && a.username !== a.list_label) {
+      tgLabel = `${tgFull} · ${tgHandle}`;
     }
-    el.innerHTML = list.map(a => {
-      const title = a.list_label || a.username || a.phone || `#${a.id}`;
-      const isActive = a.id === activeAccountId;
-      const modePill = a.ai_mode === "MANUAL"
-        ? '<span class="pill pill-amber">M</span>'
-        : '<span class="pill pill-green">AI</span>';
-      const pendingBadge = a.pending_outbound > 0
-        ? `<span class="pill pill-amber">↑${a.pending_outbound}</span>` : '';
-      return `
-        <a href="#/dialogs/${a.id}" class="block px-4 py-2 border-b border-ink-700 ${isActive ? 'bg-ink-800' : 'hover:bg-ink-800/60'}">
-          <div class="flex items-center justify-between gap-2">
-            <div class="text-sm text-slate-100 truncate">${escapeHTML(title)}</div>
-            <div class="flex items-center gap-1 shrink-0">${modePill}${pendingBadge}</div>
+
+    const isActive = a.id === activeAccountId;
+    const modePill = a.ai_mode === "MANUAL"
+      ? '<span class="pill pill-amber">M</span>'
+      : '<span class="pill pill-green">AI</span>';
+    const pendingBadge = a.pending_outbound > 0
+      ? `<span class="pill pill-amber">↑${a.pending_outbound}</span>` : '';
+    const lastWhen = a.last_dialog_at ? fmtRelative(a.last_dialog_at) : '';
+    return `
+      <a href="#/dialogs/${a.id}" class="block px-4 py-2 border-b border-ink-700 ${isActive ? 'bg-ink-800' : 'hover:bg-ink-800/60'}">
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0 text-sm text-slate-100 truncate">
+            ${escapeHTML(internalTitle)}
+            ${tgLabel ? `<span class="text-[11px] text-slate-400 ml-1">· ${escapeHTML(tgLabel)}</span>` : ''}
           </div>
+          <div class="flex items-center gap-1 shrink-0">${modePill}${pendingBadge}</div>
+        </div>
+        <div class="flex items-center justify-between gap-2 mt-0.5">
           <div class="text-[11px] text-slate-500 truncate">диалогов: ${a.dialogs_count}</div>
-        </a>
+          <div class="text-[11px] text-slate-500 shrink-0">${lastWhen}</div>
+        </div>
+      </a>
+    `;
+  }).join("");
+}
+
+async function loadDialogsGroups() {
+  const el = $("#dlgGroupsList");
+  if (!el) return;
+  try {
+    const groups = await api("/business/groups");
+    const selected = state.dialogs.selectedGroupId;
+    const rows = [
+      { id: null, name: "Все", accounts_count: state.cache.accounts?.length || 0 },
+      ...(groups || []),
+    ];
+    el.innerHTML = rows.map((g) => {
+      const isActive = selected === g.id;
+      return `
+        <button data-dlg-group-id="${g.id === null ? "all" : g.id}"
+          class="w-full text-left block px-4 py-2 border-b border-ink-700 ${isActive ? 'bg-ink-800' : 'hover:bg-ink-800/60'}">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-sm text-slate-100 truncate">${escapeHTML(g.name)}</div>
+            <span class="text-[11px] text-slate-500">${g.accounts_count ?? 0}</span>
+          </div>
+        </button>
       `;
     }).join("");
+    el.querySelectorAll("button[data-dlg-group-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const raw = btn.dataset.dlgGroupId;
+        if (raw === "all") {
+          state.dialogs.selectedGroupId = null;
+          state.dialogs.selectedGroupName = "Все";
+          state.dialogs.groupAccountIds = null;
+        } else {
+          const gid = Number(raw);
+          const groupRows = await api(`/business/groups/${gid}/accounts`);
+          state.dialogs.selectedGroupId = gid;
+          state.dialogs.selectedGroupName = (groups.find((x) => x.id === gid)?.name || `#${gid}`);
+          state.dialogs.groupAccountIds = new Set((groupRows || []).map((x) => Number(x.id)));
+        }
+        paintDialogsAccounts(state.cache.accounts || [], state.current.accountId);
+        loadDialogsGroups();
+        switchDialogsLeftTab("accounts", state.current.accountId);
+      });
+    });
   } catch (e) {
     el.innerHTML = `<div class="p-4 text-rose-400 text-sm">Ошибка: ${escapeHTML(e.message)}</div>`;
   }
@@ -1093,6 +1577,40 @@ async function renderMailings(idStr) {
   if (!id) {
     root.innerHTML = `
       <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
+        <div class="card">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-semibold text-slate-100">Новая рассылка</h3>
+            <span class="text-xs text-slate-500">Создаётся как draft, дальше — настройка в карточке</span>
+          </div>
+          <form id="mailCreateForm" class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+            <label class="block md:col-span-2">
+              <span class="text-slate-400 text-xs">Название *</span>
+              <input name="name" required placeholder="Новая кампания"
+                     class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+            </label>
+            <label class="block">
+              <span class="text-slate-400 text-xs">Аудитория</span>
+              <select name="audience_mode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
+                <option value="classes">classes</option>
+                <option value="test">test</option>
+                <option value="all">all</option>
+              </select>
+            </label>
+            <label class="flex items-center gap-2 mt-6 text-slate-300">
+              <input name="neurochat_enabled" type="checkbox" class="rounded border-ink-600 bg-ink-800" />
+              Нейрочат включён
+            </label>
+            <label class="block md:col-span-4">
+              <span class="text-slate-400 text-xs">Первое сообщение (можно пустое)</span>
+              <textarea name="message_text" rows="2"
+                        class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100"></textarea>
+            </label>
+            <div class="md:col-span-4 flex items-center gap-3">
+              <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Создать рассылку</button>
+              <span id="mailCreateMsg" class="text-xs text-slate-400"></span>
+            </div>
+          </form>
+        </div>
         <div class="flex items-center gap-3 text-sm">
           <label class="text-slate-400">Статус:</label>
           <select id="mailFilter" class="bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100">
@@ -1118,6 +1636,7 @@ async function renderMailings(idStr) {
         </div>
       </div>
     `;
+    $("#mailCreateForm")?.addEventListener("submit", onCreateMailingSubmit);
     $("#mailFilter").addEventListener("change", loadMailingsList);
     $("#mailRefresh").addEventListener("click", loadMailingsList);
     await loadMailingsList();
@@ -1126,6 +1645,31 @@ async function renderMailings(idStr) {
   // detail
   root.innerHTML = `<div id="mailDetail" class="p-6 cb-scroll overflow-y-auto h-full">Загрузка…</div>`;
   await loadMailingDetail(id);
+}
+
+async function onCreateMailingSubmit(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.currentTarget);
+  const body = {
+    name: (fd.get("name") || "").toString().trim(),
+    message_text: (fd.get("message_text") || "").toString(),
+    audience_mode: (fd.get("audience_mode") || "classes").toString(),
+    neurochat_enabled: !!fd.get("neurochat_enabled"),
+  };
+  const out = $("#mailCreateMsg");
+  out.textContent = "…";
+  try {
+    const created = await api("/business/mailings", { method: "POST", body });
+    toast(`Рассылка #${created.id} создана`, "success");
+    out.textContent = `ok (#${created.id})`;
+    out.className = "text-xs text-emerald-300";
+    ev.currentTarget.reset();
+    await loadMailingsList();
+    window.location.hash = `#/mailings/${created.id}`;
+  } catch (e) {
+    out.textContent = e.message;
+    out.className = "text-xs text-rose-400";
+  }
 }
 
 async function loadMailingsList() {
@@ -1223,12 +1767,19 @@ async function loadMailingDetail(id) {
           ${kpi("Финиш", "mdEnd", fmtDate(m.completed_at) || "—", "")}
         </div>
 
+        <!--
+          ВАЖНО: настройки рассылки и настройки нейрочата разнесены
+          в две независимые формы с собственными submit-кнопками,
+          чтобы по визуалу и UX совпадать с разделением «рассылка vs нейрочат».
+          Бэкенд использует один и тот же PATCH /business/mailings/{id}
+          и принимает любой подмножественный набор полей.
+        -->
         <div class="card">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="font-semibold">Параметры рассылки</h3>
+            <h3 class="font-semibold">Настройки рассылки</h3>
             ${editLocked
               ? `<span class="text-xs text-amber-400">RUNNING — поставьте на паузу для редактирования</span>`
-              : `<span class="text-xs text-slate-500">Редактируется только в paused/draft/completed/cancelled</span>`}
+              : `<span class="text-xs text-slate-500">Первое сообщение, аудитория, лимиты и задержки</span>`}
           </div>
           <form id="mailEditForm" class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm" ${editLocked ? "data-locked=1" : ""}>
             <label class="block md:col-span-3">
@@ -1293,7 +1844,23 @@ async function loadMailingDetail(id) {
                 ${["classes","test","all"].map(v => `<option value="${v}" ${m.audience_mode === v ? "selected" : ""}>${v}</option>`).join("")}
               </select>
             </label>
-            <label class="flex items-center gap-2 mt-6 text-slate-300">
+            <div class="md:col-span-3 flex items-center gap-3">
+              <button type="submit" ${editLocked ? "disabled" : ""}
+                class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed">Сохранить рассылку</button>
+              <span id="mailEditMsg" class="text-xs text-slate-400"></span>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-semibold">Настройки нейрочата</h3>
+            ${editLocked
+              ? `<span class="text-xs text-amber-400">RUNNING — поставьте на паузу для редактирования</span>`
+              : `<span class="text-xs text-slate-500">Модель, sampling и system-промпт</span>`}
+          </div>
+          <form id="neuroEditForm" class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm mb-5" ${editLocked ? "data-locked=1" : ""}>
+            <label class="flex items-center gap-2 md:col-span-1 mt-6 text-slate-300">
               <input name="neurochat_enabled" type="checkbox" ${m.neurochat_enabled ? "checked" : ""} ${editLocked ? "disabled" : ""}
                      class="rounded border-ink-600 bg-ink-800" />
               Нейрочат включён
@@ -1310,24 +1877,24 @@ async function loadMailingDetail(id) {
             </label>
             <div class="md:col-span-3 flex items-center gap-3">
               <button type="submit" ${editLocked ? "disabled" : ""}
-                class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed">Сохранить</button>
-              <span id="mailEditMsg" class="text-xs text-slate-400"></span>
+                class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed">Сохранить нейрочат</button>
+              <span id="neuroEditMsg" class="text-xs text-slate-400"></span>
             </div>
           </form>
-        </div>
 
-        <div class="card">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-semibold">System-промпт нейрочата</h3>
-            <div id="mailPromptStatus" class="text-xs text-slate-500">…</div>
-          </div>
-          <p class="text-xs text-slate-500 mb-3">Сохраняется в <code>data/neuro/mailings/${id}/system.txt</code>. Если файла нет — используется значение из <code>DEFAULT_NEURO_SYSTEM_PROMPT</code>. Доступные плейсхолдеры см. в боте.</p>
-          <textarea id="mailPromptText" rows="14"
-            class="w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs">Загрузка…</textarea>
-          <div class="flex items-center gap-3 mt-3">
-            <button id="mailPromptSave" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm">Сохранить промпт</button>
-            <button id="mailPromptReset" class="px-3 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 text-slate-200 text-sm">Сбросить к DEFAULT</button>
-            <span id="mailPromptMsg" class="text-xs text-slate-400"></span>
+          <div class="border-t border-ink-700 pt-4">
+            <div class="flex items-center justify-between mb-2">
+              <h4 class="font-medium text-slate-200">System-промпт</h4>
+              <div id="mailPromptStatus" class="text-xs text-slate-500">…</div>
+            </div>
+            <p class="text-xs text-slate-500 mb-3">Сохраняется в <code>data/neuro/mailings/${id}/system.txt</code>. Если файла нет — используется значение из <code>DEFAULT_NEURO_SYSTEM_PROMPT</code>. Доступные плейсхолдеры см. в боте.</p>
+            <textarea id="mailPromptText" rows="14"
+              class="w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs">Загрузка…</textarea>
+            <div class="flex items-center gap-3 mt-3">
+              <button id="mailPromptSave" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm">Сохранить промпт</button>
+              <button id="mailPromptReset" class="px-3 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 text-slate-200 text-sm">Сбросить к DEFAULT</button>
+              <span id="mailPromptMsg" class="text-xs text-slate-400"></span>
+            </div>
           </div>
         </div>
       </div>
@@ -1355,15 +1922,34 @@ async function loadMailingDetail(id) {
           target_group_id: Number(fd.get("target_group_id") || 0),
           community_link: (fd.get("community_link") || "").toString(),
           audience_mode: (fd.get("audience_mode") || "classes").toString(),
-          neurochat_enabled: !!fd.get("neurochat_enabled"),
-          neuro_model: (fd.get("neuro_model") || "").toString(),
-          neuro_sampling_json: (fd.get("neuro_sampling_json") || "{}").toString(),
         };
         const out = $("#mailEditMsg");
         out.textContent = "…";
         try {
           await api(`/business/mailings/${id}`, { method: "PATCH", body });
           toast("Рассылка сохранена", "success");
+          out.textContent = "ok";
+          out.className = "text-xs text-emerald-300";
+          await loadMailingDetail(id);
+        } catch (e) {
+          out.textContent = e.message;
+          out.className = "text-xs text-rose-400";
+        }
+      });
+
+      $("#neuroEditForm").addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        const fd = new FormData(ev.currentTarget);
+        const body = {
+          neurochat_enabled: !!fd.get("neurochat_enabled"),
+          neuro_model: (fd.get("neuro_model") || "").toString(),
+          neuro_sampling_json: (fd.get("neuro_sampling_json") || "{}").toString(),
+        };
+        const out = $("#neuroEditMsg");
+        out.textContent = "…";
+        try {
+          await api(`/business/mailings/${id}`, { method: "PATCH", body });
+          toast("Нейрочат сохранён", "success");
           out.textContent = "ok";
           out.className = "text-xs text-emerald-300";
           await loadMailingDetail(id);
@@ -1683,7 +2269,12 @@ async function renderLogs() {
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
-      <div class="flex items-center gap-3 text-sm">
+      <div class="flex items-center gap-3 text-sm flex-wrap">
+        <label class="text-slate-400">Канал:</label>
+        <select id="logsChannel" class="bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100">
+          <option value="ingest">ingest (dashboard/logs)</option>
+          <option value="openrouter">openrouter (file log)</option>
+        </select>
         <label class="text-slate-400">Уровень:</label>
         <select id="logsLevel" class="bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100">
           <option value="">все</option>
@@ -1692,41 +2283,95 @@ async function renderLogs() {
           <option value="error">error</option>
           <option value="critical">critical</option>
         </select>
-        <label class="text-slate-400 ml-4">Лимит:</label>
+        <label class="text-slate-400">Лимит:</label>
         <input id="logsLimit" type="number" value="100" min="1" max="500" class="w-20 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
+        <input id="logsProvider" placeholder="provider (напр. openai)" class="hidden w-44 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
+        <input id="logsModel" placeholder="model contains" class="hidden w-56 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
+        <input id="logsPromptId" placeholder="prompt_id" class="hidden w-36 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
+        <input id="logsQ" placeholder="поиск в сообщении" class="hidden w-56 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
         <button id="logsApply" class="px-3 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white">Применить</button>
       </div>
       <div class="card p-0 overflow-hidden">
         <table class="cb-table">
-          <thead><tr><th>Время</th><th>Уровень</th><th>Категория</th><th>Сообщение</th></tr></thead>
+          <thead><tr id="logsHeadRow"><th>Время</th><th>Уровень</th><th>Категория</th><th>Сообщение</th></tr></thead>
           <tbody id="logsBody"><tr><td colspan="4" class="text-center text-slate-500 py-8">Загрузка…</td></tr></tbody>
         </table>
       </div>
     </div>
   `;
+  const toggleMode = () => {
+    const ch = ($("#logsChannel")?.value || "ingest");
+    const openrouter = ch === "openrouter";
+    ["#logsProvider", "#logsModel", "#logsPromptId", "#logsQ"].forEach(sel => {
+      const el = $(sel);
+      if (!el) return;
+      el.classList.toggle("hidden", !openrouter);
+    });
+    const head = $("#logsHeadRow");
+    if (head) {
+      head.innerHTML = openrouter
+        ? "<th>Время</th><th>Уровень</th><th>Provider/Model</th><th>Prompt</th><th>Сообщение</th>"
+        : "<th>Время</th><th>Уровень</th><th>Категория</th><th>Сообщение</th>";
+    }
+  };
+  $("#logsChannel").addEventListener("change", () => { toggleMode(); loadLogs(); });
   $("#logsApply").addEventListener("click", () => loadLogs());
+  toggleMode();
   await loadLogs();
 }
 
 async function loadLogs() {
+  const channel = ($("#logsChannel")?.value || "ingest").trim();
   const level = $("#logsLevel").value;
   const limit = $("#logsLimit").value || 100;
   try {
-    const qs = `limit=${encodeURIComponent(limit)}` + (level ? `&level=${encodeURIComponent(level)}` : "");
-    const list = await api(`/dashboard/logs?${qs}`);
+    let list = [];
+    if (channel === "openrouter") {
+      const provider = ($("#logsProvider")?.value || "").trim();
+      const model = ($("#logsModel")?.value || "").trim();
+      const promptId = ($("#logsPromptId")?.value || "").trim();
+      const q = ($("#logsQ")?.value || "").trim();
+      const qs = new URLSearchParams();
+      qs.set("limit", String(limit));
+      if (level) qs.set("level", level);
+      if (provider) qs.set("provider", provider);
+      if (model) qs.set("model", model);
+      if (promptId) qs.set("prompt_id", promptId);
+      if (q) qs.set("q", q);
+      list = await api(`/dashboard/logs/openrouter?${qs.toString()}`);
+    } else {
+      const qs = `limit=${encodeURIComponent(limit)}` + (level ? `&level=${encodeURIComponent(level)}` : "");
+      list = await api(`/dashboard/logs?${qs}`);
+    }
     const tbody = $("#logsBody");
     if (!list.length) {
       tbody.innerHTML = `<tr><td colspan="4" class="text-center text-slate-500 py-8">Нет записей.</td></tr>`;
       return;
     }
-    tbody.innerHTML = list.map(l => `
-      <tr>
-        <td class="text-xs text-slate-400 whitespace-nowrap">${fmtDate(l.created_at)}</td>
-        <td>${logLevelPill(l.level)}</td>
-        <td class="text-slate-300">${escapeHTML(l.category)}${l.code ? ` <span class="text-slate-500">(${escapeHTML(l.code)})</span>` : ''}</td>
-        <td class="text-slate-200">${escapeHTML(l.message)}</td>
-      </tr>
-    `).join("");
+    if (channel === "openrouter") {
+      tbody.innerHTML = list.map(l => `
+        <tr>
+          <td class="text-xs text-slate-400 whitespace-nowrap">${fmtDate(l.created_at)}</td>
+          <td>${logLevelPill(l.level)}</td>
+          <td class="text-slate-300">
+            <span class="text-slate-400">${escapeHTML(l.provider || "—")}</span>
+            <span class="text-slate-500">/</span>
+            <span class="text-slate-200">${escapeHTML(l.model || "—")}</span>
+          </td>
+          <td class="text-xs text-slate-400">${escapeHTML(l.prompt_id || "—")}</td>
+          <td class="text-slate-200">${escapeHTML(l.message)}</td>
+        </tr>
+      `).join("");
+    } else {
+      tbody.innerHTML = list.map(l => `
+        <tr>
+          <td class="text-xs text-slate-400 whitespace-nowrap">${fmtDate(l.created_at)}</td>
+          <td>${logLevelPill(l.level)}</td>
+          <td class="text-slate-300">${escapeHTML(l.category)}${l.code ? ` <span class="text-slate-500">(${escapeHTML(l.code)})</span>` : ''}</td>
+          <td class="text-slate-200">${escapeHTML(l.message)}</td>
+        </tr>
+      `).join("");
+    }
   } catch (e) {
     toast(`Ошибка логов: ${e.message}`, "error");
   }
@@ -1740,6 +2385,7 @@ function logLevelPill(level) {
 
 async function renderSettings() {
   setHeader("Настройки", "Глобальные настройки инстанса, ключи и обслуживание");
+  const readOnly = isReadOnlyRole();
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-6">
@@ -1752,13 +2398,13 @@ async function renderSettings() {
 
       <div class="card">
         <h3 class="font-semibold mb-1">Ключ OpenRouter</h3>
-        <p class="text-sm text-slate-400 mb-4">Шифруется Fernet-ключом из <code>OPENROUTER_KEY_ENCRYPTION_KEY</code>. Без этой переменной значение хранится в открытом виде с префиксом <code>p:</code>.</p>
+        <p class="text-sm text-slate-400 mb-4">Шифруется Fernet-ключом из <code>OPENROUTER_KEY_ENCRYPTION_KEY</code>. Без этой переменной значение хранится в открытом виде с префиксом <code>p:</code>. ${readOnly ? "Роль read-only: изменение секрета недоступно." : ""}</p>
         <div id="orKeyCard" class="text-sm text-slate-400">Загрузка…</div>
       </div>
 
       <div class="card">
         <h3 class="font-semibold mb-1">Очистка диалогов</h3>
-        <p class="text-sm text-slate-400 mb-4">Удаление выполняется батчами с проверкой ограничений. Системные таблицы (логи рассылок, MailingLog, аккаунты, прокси, классы клиентов) <b>не</b> удаляются — только переписки и client_interactions.</p>
+        <p class="text-sm text-slate-400 mb-4">Удаление выполняется батчами с проверкой ограничений. Системные таблицы (логи рассылок, MailingLog, аккаунты, прокси, классы клиентов) <b>не</b> удаляются — только переписки и client_interactions. ${readOnly ? "Роль read-only: cleanup недоступен." : ""}</p>
         <form id="cleanupForm" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
           <label class="block">
             <span class="text-slate-400 text-xs">Аккаунт ID (опц.)</span>
@@ -1798,13 +2444,66 @@ async function renderSettings() {
       <div class="card">
         <h3 class="font-semibold mb-1">Аккаунт</h3>
         <p class="text-sm text-slate-400 mb-2">Текущий пользователь: <span class="text-slate-200">${escapeHTML(state.user?.username || "—")}</span></p>
-        <p class="text-sm text-slate-500">Смена пароля и приглашение оператора — TODO в следующей итерации (см. corebot v2.md, Этап 6).</p>
+        <form id="myPassForm" class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm mb-4">
+          <label class="block">
+            <span class="text-slate-400 text-xs">Текущий пароль</span>
+            <input name="current_password" type="password" autocomplete="current-password"
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+          </label>
+          <label class="block">
+            <span class="text-slate-400 text-xs">Новый пароль</span>
+            <input name="new_password" type="password" autocomplete="new-password" minlength="6"
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+          </label>
+          <div class="flex items-end gap-3">
+            <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Сменить пароль</button>
+            <span id="myPassMsg" class="text-xs text-slate-400"></span>
+          </div>
+        </form>
+
+          <div class="border-t border-ink-700 pt-4">
+          <h4 class="font-medium text-slate-200 mb-2">Операторы панели</h4>
+            ${readOnly ? `<p class="text-sm text-slate-500 mb-3">Роль read-only: управление операторами недоступно.</p>` : ""}
+          <form id="opCreateForm" class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm mb-4">
+            <label class="block">
+              <span class="text-slate-400 text-xs">Логин</span>
+              <input name="username" minlength="3" required
+                     class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+            </label>
+            <label class="block">
+              <span class="text-slate-400 text-xs">Пароль</span>
+              <input name="password" type="password" minlength="6" required
+                     class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+            </label>
+            <label class="block">
+              <span class="text-slate-400 text-xs">Роль</span>
+              <select name="role" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
+                <option value="tenant_viewer">tenant_viewer (read-only)</option>
+                <option value="tenant_admin">tenant_admin (оператор)</option>
+              </select>
+            </label>
+            <div class="flex items-end gap-3">
+              <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Создать</button>
+              <span id="opCreateMsg" class="text-xs text-slate-400"></span>
+            </div>
+          </form>
+          <div class="card p-0 overflow-hidden">
+            <table class="cb-table">
+              <thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Tenant</th><th>Создан</th><th></th></tr></thead>
+              <tbody id="opUsersBody"><tr><td colspan="6" class="text-center text-slate-500 py-6">Загрузка…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   `;
 
   $("#cleanupForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    if (readOnly) {
+      toast("Роль read-only: cleanup запрещен", "error");
+      return;
+    }
     const fd = new FormData(ev.currentTarget);
     const body = {};
     const acc = fd.get("account_id"); if (acc) body.account_id = Number(acc);
@@ -1831,7 +2530,108 @@ async function renderSettings() {
     }
   });
 
+  $("#myPassForm")?.addEventListener("submit", onChangeMyPassword);
+  if (!readOnly) {
+    $("#opCreateForm")?.addEventListener("submit", onCreateOperator);
+    await loadOperators();
+  } else {
+    const opBody = $("#opUsersBody");
+    if (opBody) {
+      opBody.innerHTML = `<tr><td colspan="6" class="text-center text-slate-500 py-6">Недоступно для роли read-only.</td></tr>`;
+    }
+    $("#opCreateForm")?.querySelectorAll("input,select,button").forEach((el) => { el.disabled = true; });
+    $("#cleanupForm")?.querySelectorAll("input,select,button").forEach((el) => { el.disabled = true; });
+  }
+
   await loadInstanceSettings();
+}
+
+async function onChangeMyPassword(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.currentTarget);
+  const body = {
+    current_password: (fd.get("current_password") || "").toString(),
+    new_password: (fd.get("new_password") || "").toString(),
+  };
+  const out = $("#myPassMsg");
+  out.textContent = "…";
+  try {
+    await api("/admin/me/password", { method: "POST", body });
+    out.textContent = "ok";
+    out.className = "text-xs text-emerald-300";
+    toast("Пароль обновлён", "success");
+    ev.currentTarget.reset();
+  } catch (e) {
+    out.textContent = e.message;
+    out.className = "text-xs text-rose-400";
+  }
+}
+
+async function onCreateOperator(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.currentTarget);
+  const body = {
+    username: (fd.get("username") || "").toString().trim(),
+    password: (fd.get("password") || "").toString(),
+    role: (fd.get("role") || "tenant_viewer").toString(),
+  };
+  const out = $("#opCreateMsg");
+  out.textContent = "…";
+  try {
+    const r = await api("/admin/users/create", { method: "POST", body });
+    out.textContent = `ok (#${r.id})`;
+    out.className = "text-xs text-emerald-300";
+    toast(`Пользователь ${r.username} создан`, "success");
+    ev.currentTarget.reset();
+    await loadOperators();
+  } catch (e) {
+    out.textContent = e.message;
+    out.className = "text-xs text-rose-400";
+  }
+}
+
+async function loadOperators() {
+  const tbody = $("#opUsersBody");
+  if (!tbody) return;
+  try {
+    const users = await api("/admin/users");
+    if (!users.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-slate-500 py-6">Нет пользователей.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = users.map(u => `
+      <tr>
+        <td class="text-slate-500">#${u.id}</td>
+        <td class="text-slate-100">${escapeHTML(u.username)}</td>
+        <td><span class="pill ${u.role === "super_admin" ? "pill-red" : u.role === "tenant_admin" ? "pill-amber" : "pill-gray"}">${escapeHTML(u.role)}</span></td>
+        <td class="text-xs text-slate-400">${u.tenant_id}</td>
+        <td class="text-xs text-slate-400">${fmtDate(u.created_at)}</td>
+        <td class="text-right">
+          <button data-op-reset="${u.id}" data-op-user="${escapeHTML(u.username)}"
+            class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs">Сброс пароля</button>
+        </td>
+      </tr>
+    `).join("");
+    tbody.querySelectorAll("button[data-op-reset]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const uid = Number(b.dataset.opReset);
+        const uname = b.dataset.opUser || `#${uid}`;
+        const pw = prompt(`Новый пароль для ${uname}:`);
+        if (!pw) return;
+        try {
+          await api(`/admin/users/${uid}/password`, {
+            method: "POST",
+            body: { new_password: pw },
+          });
+          toast(`Пароль обновлён: ${uname}`, "success");
+        } catch (e) {
+          toast(`Ошибка: ${e.message}`, "error");
+        }
+      });
+    });
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center text-rose-400 py-6">${escapeHTML(e.message)}</td></tr>`;
+  }
 }
 
 async function loadInstanceSettings() {

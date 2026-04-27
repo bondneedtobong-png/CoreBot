@@ -26,7 +26,7 @@ from control_plane.business.schemas import (
     GroupItem,
     GroupRename,
 )
-from control_plane.deps import get_current_user
+from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
 from database.models import Account, Group, account_groups
 
@@ -71,7 +71,7 @@ def list_groups(
 def create_group(
     payload: GroupCreate,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     name = payload.name.strip()
     if not name:
@@ -92,7 +92,7 @@ def rename_group(
     group_id: int,
     payload: GroupRename,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     g = db.get(Group, group_id)
     if not g:
@@ -122,7 +122,7 @@ def rename_group(
 def delete_group(
     group_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     g = db.get(Group, group_id)
     if not g:
@@ -169,7 +169,7 @@ def set_group_accounts(
     group_id: int,
     payload: GroupAccountsSet,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     g = db.get(Group, group_id)
     if not g:
@@ -205,7 +205,7 @@ def add_group_account(
     group_id: int,
     account_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     g = db.get(Group, group_id)
     if not g:
@@ -235,7 +235,7 @@ def remove_group_account(
     group_id: int,
     account_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     g = db.get(Group, group_id)
     if not g:

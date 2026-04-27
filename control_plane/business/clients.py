@@ -21,7 +21,7 @@ from control_plane.business.schemas import (
     ClientInteractionItem,
     ClientListItem,
 )
-from control_plane.deps import get_current_user
+from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
 from database.models import (
     Client,
@@ -181,7 +181,7 @@ def update_client_class(
     client_id: int,
     payload: ClientClassUpdate,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     if not db.get(Client, client_id):
         raise HTTPException(status_code=404, detail="client not found")
@@ -233,7 +233,7 @@ def update_client_class(
 def delete_client(
     client_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     """
     Удаление клиента. Каскадно зачищает class_counters/tags/interactions.

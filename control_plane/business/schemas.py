@@ -23,6 +23,10 @@ class AccountListItem(BaseModel):
     last_activity: Optional[datetime] = None
     dialogs_count: int = 0
     pending_outbound: int = 0
+    # Время самого свежего сообщения в любом из диалогов аккаунта
+    # (max(neuro_chat_messages.created_at, outbound_queue.created_at)).
+    # Нужно UI «Диалоги», чтобы сортировать аккаунты как мессенджер.
+    last_dialog_at: Optional[datetime] = None
 
 
 class AccountModeIn(BaseModel):
@@ -67,6 +71,34 @@ class SendMessageOut(BaseModel):
     queue_id: int
     status: str = "pending"
     enqueued_at: datetime
+
+
+class QueueListItem(BaseModel):
+    queue_id: int
+    account_id: int
+    account_title: str
+    peer_user_id: int
+    client_id: Optional[int] = None
+    client_username: Optional[str] = None
+    text: str
+    status: str
+    error: Optional[str] = None
+    attempts: int = 0
+    requested_by: Optional[str] = None
+    created_at: datetime
+    next_attempt_at: Optional[datetime] = None
+    sent_at: Optional[datetime] = None
+
+
+class QueueBulkActionIn(BaseModel):
+    action: str = Field(pattern="^(retry|cancel)$")
+    queue_ids: list[int] = Field(default_factory=list, min_length=1, max_length=500)
+
+
+class QueueBulkActionOut(BaseModel):
+    requested: int
+    updated: int
+    skipped: int
 
 
 # ===== Cleanup =====
@@ -351,6 +383,23 @@ class AccountPatch(BaseModel):
     group_ids: Optional[list[int]] = None  # если задано — заменяет список групп
 
 
+class AccountCreate(BaseModel):
+    phone: str = Field(min_length=3, max_length=32)
+    session_name: Optional[str] = Field(default=None, max_length=255)
+    username: Optional[str] = Field(default=None, max_length=100)
+    list_label: Optional[str] = Field(default=None, max_length=64)
+    first_name: Optional[str] = Field(default=None, max_length=100)
+    last_name: Optional[str] = Field(default=None, max_length=100)
+    membership: str = Field(default="TEST", pattern="^(READY|WARMUP|TEST)$")
+    status: str = Field(
+        default="inactive",
+        pattern="^(active|inactive|banned|flood_wait|error|spam_blocked)$",
+    )
+    ai_mode: str = Field(default="MANUAL", pattern="^(AI_ACTIVE|MANUAL)$")
+    proxy_id: Optional[int] = None
+    group_ids: list[int] = []
+
+
 # ===== Groups =====
 
 
@@ -452,6 +501,14 @@ class MailingPatch(BaseModel):
     neuro_model: Optional[str] = Field(default=None, max_length=255)
     neuro_sampling_json: Optional[str] = Field(default=None, max_length=4000)
     audience_mode: Optional[str] = Field(default=None, pattern="^(classes|test|all)$")
+
+
+class MailingCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    message_text: str = Field(default="", max_length=8000)
+    audience_mode: str = Field(default="classes", pattern="^(classes|test|all)$")
+    target_group_id: Optional[int] = None
+    neurochat_enabled: bool = False
 
 
 class MailingPromptOut(BaseModel):

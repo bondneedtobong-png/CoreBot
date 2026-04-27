@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta
+from collections import deque
+from pathlib import Path
+import re
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
@@ -7,10 +10,28 @@ from sqlalchemy.orm import Session
 from control_plane.database import get_db
 from control_plane.deps import get_current_user
 from control_plane.models import Agent, IngestEvent, Alert
-from control_plane.schemas import DashboardSummaryOut, AgentStatusOut, LogItemOut
+from control_plane.schemas import (
+    DashboardSummaryOut,
+    AgentStatusOut,
+    LogItemOut,
+    OpenRouterLogItemOut,
+)
 
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+_FILE_LOG_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| (?P<level>[A-Z]+)\s+\| (?P<src>[^|]+)\| (?P<msg>.*)$"
+)
+_MODEL_RE = re.compile(r"\bmodel=(?P<model>[A-Za-z0-9._:/-]+)")
+_PROMPT_RE = re.compile(r"\bprompt_id=(?P<prompt>[A-Za-z0-9._:-]+)")
+
+
+def _read_tail_lines(path: Path, max_lines: int) -> list[str]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        return list(deque(fh, maxlen=max_lines))
 
 
 def _tenant_scope_id(user):
@@ -88,6 +109,91 @@ def logs(
         )
         for r in rows
     ]
+
+
+@router.get("/logs/openrouter", response_model=list[OpenRouterLogItemOut])
+def openrouter_logs(
+    user=Depends(get_current_user),
+    level: str | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    prompt_id: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    # Только авторизованный пользователь; tenant-scope тут не нужен,
+    # так как это локальные файловые логи инстанса.
+    _ = user
+    logs_path = Path(__file__).resolve().parents[2] / "logs" / "corebot.log"
+    # Читаем с запасом для фильтрации, но не бесконечно.
+    raw_lines = _read_tail_lines(logs_path, max(2000, limit * 12))
+
+    want_level = (level or "").strip().upper()
+    want_provider = (provider or "").strip().lower()
+    want_model = (model or "").strip().lower()
+    want_prompt = (prompt_id or "").strip().lower()
+    want_q = (q or "").strip().lower()
+
+    items: list[OpenRouterLogItemOut] = []
+    seq = 1
+    for line in reversed(raw_lines):
+        m = _FILE_LOG_RE.match(line.strip())
+        if not m:
+            continue
+        msg = m.group("msg")
+        src = m.group("src")
+        lvl = (m.group("level") or "").upper()
+        lower_msg = msg.lower()
+
+        # В OpenRouter-канал берём только релевантные записи.
+        if (
+            "openrouter" not in lower_msg
+            and "neuro llm" not in lower_msg
+            and "openrouter" not in src.lower()
+        ):
+            continue
+        if want_level and lvl != want_level:
+            continue
+
+        model_match = _MODEL_RE.search(msg)
+        model_value = model_match.group("model") if model_match else None
+        provider_value = None
+        if model_value and "/" in model_value:
+            provider_value = model_value.split("/", 1)[0].lower()
+        elif "openrouter" in lower_msg:
+            provider_value = "openrouter"
+
+        prompt_match = _PROMPT_RE.search(msg)
+        prompt_value = prompt_match.group("prompt") if prompt_match else None
+
+        if want_provider and (provider_value or "").lower() != want_provider:
+            continue
+        if want_model and want_model not in (model_value or "").lower():
+            continue
+        if want_prompt and want_prompt != (prompt_value or "").lower():
+            continue
+        if want_q and want_q not in lower_msg:
+            continue
+
+        try:
+            created_at = datetime.strptime(m.group("ts"), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            created_at = datetime.utcnow()
+        items.append(
+            OpenRouterLogItemOut(
+                id=seq,
+                created_at=created_at,
+                level=lvl.lower(),
+                provider=provider_value,
+                model=model_value,
+                prompt_id=prompt_value,
+                message=msg,
+            )
+        )
+        seq += 1
+        if len(items) >= limit:
+            break
+    return items
 
 
 @router.get("/alerts")

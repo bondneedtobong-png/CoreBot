@@ -33,7 +33,7 @@ from control_plane.business.schemas import (
     ProxyPatch,
     ProxyTestResult,
 )
-from control_plane.deps import get_current_user
+from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
 from database.models import Account, Proxy, ProxyGroup, ProxyType
 
@@ -120,7 +120,7 @@ def list_proxies(
 def create_proxy(
     payload: ProxyCreate,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     if payload.group_id is not None and payload.group_id > 0:
         if not db.get(ProxyGroup, int(payload.group_id)):
@@ -155,7 +155,7 @@ def patch_proxy(
     proxy_id: int,
     payload: ProxyPatch,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     p = db.get(Proxy, proxy_id)
     if not p:
@@ -207,7 +207,7 @@ def patch_proxy(
 def delete_proxy(
     proxy_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     p = db.get(Proxy, proxy_id)
     if not p:
@@ -223,7 +223,7 @@ def delete_proxy(
 def test_proxy(
     proxy_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     p = db.get(Proxy, proxy_id)
     if not p:

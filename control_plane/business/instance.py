@@ -27,7 +27,7 @@ from control_plane.business.schemas import (
     InstanceSettingsPatch,
     OpenRouterKeyIn,
 )
-from control_plane.deps import get_current_user
+from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
 from database.models import InstanceSettings
 from utils.crypto_openrouter import (
@@ -50,11 +50,15 @@ def _ensure_row(db: Session) -> InstanceSettings:
     return row
 
 
-def _serialize(row: InstanceSettings) -> InstanceSettingsOut:
+def _serialize(row: InstanceSettings, *, include_secret_meta: bool = True) -> InstanceSettingsOut:
     stored = (row.openrouter_key_ciphertext or "").strip()
     has_key = bool(stored)
     plain = decrypt_openrouter_key(stored) if has_key else ""
-    masked = mask_api_key(plain) if plain else ("•••" if has_key else None)
+    masked = (
+        (mask_api_key(plain) if plain else ("•••" if has_key else None))
+        if include_secret_meta
+        else None
+    )
     encrypted = stored.startswith("e:") if has_key else False
 
     base_offset_db = row.mailing_base_utc_offset
@@ -69,26 +73,26 @@ def _serialize(row: InstanceSettings) -> InstanceSettingsOut:
         neurochat_enabled_effective=nc_eff,
         mailing_base_utc_offset_db=base_offset_db,
         mailing_base_utc_offset_effective=base_offset_eff,
-        openrouter_key_set=has_key,
+        openrouter_key_set=(has_key if include_secret_meta else False),
         openrouter_key_masked=masked,
-        openrouter_key_encrypted=encrypted,
+        openrouter_key_encrypted=(encrypted if include_secret_meta else False),
     )
 
 
 @router.get("/settings", response_model=InstanceSettingsOut)
 def get_settings(
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     row = _ensure_row(db)
-    return _serialize(row)
+    return _serialize(row, include_secret_meta=user.role != "tenant_viewer")
 
 
 @router.patch("/settings", response_model=InstanceSettingsOut)
 def patch_settings(
     payload: InstanceSettingsPatch,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     row = _ensure_row(db)
     changed = False
@@ -121,7 +125,7 @@ def patch_settings(
 def set_openrouter_key(
     payload: OpenRouterKeyIn,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     row = _ensure_row(db)
     plain = (payload.key or "").strip()
@@ -140,7 +144,7 @@ def set_openrouter_key(
 @router.delete("/openrouter-key", status_code=status.HTTP_204_NO_CONTENT)
 def clear_openrouter_key(
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     row = _ensure_row(db)
     row.openrouter_key_ciphertext = None

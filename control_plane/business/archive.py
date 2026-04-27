@@ -26,7 +26,7 @@ from control_plane.business.schemas import (
     CleanupRequestV2,
     CleanupResult,
 )
-from control_plane.deps import get_current_user
+from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
 from database.models import (
     Account,
@@ -101,7 +101,7 @@ def _build_filters(payload: CleanupRequestV2, db: Session):
 def cleanup_v2(
     payload: CleanupRequestV2,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     if not any(
         [
@@ -334,7 +334,7 @@ def list_archived_dialogs(
 def restore_archive(
     payload: ArchiveRestoreRequest,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     if not any(
         [

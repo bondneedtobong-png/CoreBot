@@ -18,15 +18,16 @@ from sqlalchemy.orm import Session
 from control_plane.business.db import get_bot_db
 from control_plane.business.schemas import (
     MailingActionResult,
+    MailingCreate,
     MailingDetail,
     MailingListItem,
     MailingPatch,
     MailingPromptIn,
     MailingPromptOut,
 )
-from control_plane.deps import get_current_user
+from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
-from database.models import BotCommand, Mailing
+from database.models import BotCommand, Mailing, MailingStatus
 from utils.neuro_prompts import (
     load_system_prompt,
     neuro_prompt_file_path,
@@ -117,6 +118,30 @@ def get_mailing(
     return _serialize_detail(m)
 
 
+@router.post("", response_model=MailingDetail, status_code=status.HTTP_201_CREATED)
+def create_mailing(
+    payload: MailingCreate,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(require_operator_write),
+):
+    target_group_id = None
+    if payload.target_group_id is not None and int(payload.target_group_id) > 0:
+        target_group_id = int(payload.target_group_id)
+
+    row = Mailing(
+        name=(payload.name or "").strip(),
+        message_text=(payload.message_text or "").strip(),
+        status=MailingStatus.DRAFT,
+        audience_mode=(payload.audience_mode or "classes"),
+        target_group_id=target_group_id,
+        neurochat_enabled=bool(payload.neurochat_enabled),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _serialize_detail(row)
+
+
 def _enqueue_command(
     db: Session, command: str, mailing_id: int, requested_by: Optional[str]
 ) -> int:
@@ -136,7 +161,7 @@ def _enqueue_command(
 def start_mailing(
     mailing_id: int,
     db: Session = Depends(get_bot_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator_write),
 ):
     m = db.get(Mailing, mailing_id)
     if not m:
@@ -167,7 +192,7 @@ def start_mailing(
 def pause_mailing(
     mailing_id: int,
     db: Session = Depends(get_bot_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator_write),
 ):
     m = db.get(Mailing, mailing_id)
     if not m:
@@ -190,7 +215,7 @@ def pause_mailing(
 def stop_mailing(
     mailing_id: int,
     db: Session = Depends(get_bot_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator_write),
 ):
     m = db.get(Mailing, mailing_id)
     if not m:
@@ -217,7 +242,7 @@ def patch_mailing(
     mailing_id: int,
     payload: MailingPatch,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     m = db.get(Mailing, mailing_id)
     if not m:
@@ -311,7 +336,7 @@ def put_mailing_prompt(
     mailing_id: int,
     payload: MailingPromptIn,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     m = db.get(Mailing, mailing_id)
     if not m:
@@ -336,7 +361,7 @@ def put_mailing_prompt(
 def delete_mailing_prompt(
     mailing_id: int,
     db: Session = Depends(get_bot_db),
-    _user: User = Depends(get_current_user),
+    _user: User = Depends(require_operator_write),
 ):
     m = db.get(Mailing, mailing_id)
     if not m:

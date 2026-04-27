@@ -61,3 +61,41 @@ class LogItemOut(BaseModel):
     category: str
     code: Optional[str] = None
     message: str
+
+
+class OpenRouterLogItemOut(BaseModel):
+    id: int
+    created_at: datetime
+    level: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    prompt_id: Optional[str] = None
+    message: str
+
+
+class AdminUserOut(BaseModel):
+    id: int
+    tenant_id: int
+    username: str
+    role: str
+    is_active: bool
+    created_at: datetime
+
+
+class AdminUserCreateIn(BaseModel):
+    username: str = Field(min_length=3, max_length=120)
+    password: str = Field(min_length=6, max_length=200)
+    role: str = Field(default="tenant_viewer")
+    tenant_id: Optional[int] = None
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: Optional[str] = None
+    new_password: str = Field(min_length=6, max_length=200)
+
+
+class UserMeOut(BaseModel):
+    id: int
+    username: str
+    role: str
+    tenant_id: int

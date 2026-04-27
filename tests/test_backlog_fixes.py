@@ -3,11 +3,21 @@ import re
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+from fastapi import HTTPException
+
 from bot.handlers.accounts.groups import _render_template
 from bot.handlers.mailing import _mailing_list_page_from_data
+from control_plane.business.mailings import patch_mailing
+from control_plane.business.schemas import MailingPatch
+from control_plane.routes.business import retry_queue_item
+from control_plane.business.schemas import SendMessageOut
 from services.neurochat.engagement_service import build_alive_window_key
 from services.neurochat import manager as neuro_manager
 from services.neurochat import post_actions as neuro_post_actions
+from services.neurochat import class_bridge as neuro_class_bridge
+from services.neurochat import engagement_service as neuro_engagement
+from services.neurochat import filters as neuro_filters
 from workers.manager import WorkerManager
 from utils.neuro_sampling import (
     merge_sampling_for_request,
@@ -196,3 +206,269 @@ def test_alive_window_key_hour_bucket():
     k2 = build_alive_window_key(dt_next)
     assert isinstance(k1, int) and isinstance(k2, int)
     assert k2 == k1 + 1
+
+
+def test_apply_neuro_class_commands_accept_decline_hater(monkeypatch):
+    calls = []
+
+    async def _increment(_session, _mailing, client_id, class_key, delta=1):
+        calls.append(("inc", client_id, class_key, delta))
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    class _Mailing:
+        id = 77
+
+    class _Scope:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(neuro_class_bridge, "increment_client_class_for_mailing", _increment)
+    monkeypatch.setattr(
+        neuro_class_bridge.MailingRepository,
+        "get_by_id",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result=_Mailing()),
+    )
+    monkeypatch.setattr(
+        neuro_class_bridge.ClientMailSessionRepository,
+        "get_or_create",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result=SimpleNamespace(id=123)),
+    )
+    monkeypatch.setattr(neuro_class_bridge.ClientMailSessionRepository, "set_success_end", _noop)
+    monkeypatch.setattr(neuro_class_bridge.NeuroActionRepository, "create", _noop)
+    monkeypatch.setattr(neuro_class_bridge.ClientInteractionRepository, "add", _noop)
+    monkeypatch.setattr(neuro_class_bridge, "session_scope", lambda: _Scope())
+
+    def _fake_schedule(_mail_session_id):
+        return None
+
+    import services.database.accept_transcript as accept_transcript
+
+    monkeypatch.setattr(accept_transcript, "schedule_fetch_accept_transcript", _fake_schedule)
+
+    asyncio.run(
+        neuro_class_bridge.apply_neuro_class_commands(
+            account_id=1,
+            client_id=10,
+            mailing_id=77,
+            cmd_accept=True,
+            cmd_decline=True,
+            cmd_hater=True,
+        )
+    )
+    assert ("inc", 10, "accept", 1) in calls
+    assert ("inc", 10, "decline", 1) in calls
+    assert ("inc", 10, "hater", 1) in calls
+
+
+def test_process_stop_command_increments_stop(monkeypatch):
+    calls = []
+
+    async def _increment(_session, _mailing, client_id, class_key, delta=1):
+        calls.append((client_id, class_key, delta))
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    class _Mailing:
+        id = 50
+
+    class _Scope:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(neuro_post_actions, "increment_client_class_for_mailing", _increment)
+    monkeypatch.setattr(
+        neuro_post_actions.MailingRepository,
+        "get_by_id",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result=_Mailing()),
+    )
+    monkeypatch.setattr(neuro_post_actions.NeuroActionRepository, "create", _noop)
+    monkeypatch.setattr(neuro_post_actions.ClientInteractionRepository, "add", _noop)
+    monkeypatch.setattr(neuro_post_actions, "session_scope", lambda: _Scope())
+
+    asyncio.run(
+        neuro_post_actions.process_stop_command(
+            cmd_stop=True,
+            mailing_id=50,
+            account_id=2,
+            client_id=20,
+        )
+    )
+    assert (20, "stop", 1) in calls
+
+
+def test_track_incoming_engagement_pulse_and_alive_dedup(monkeypatch):
+    class _Mailing:
+        id = 88
+
+    increments = []
+    interactions = []
+    alive_created = {"value": True}
+
+    async def _increment(_session, _mailing, client_id, class_key, delta=1):
+        increments.append((client_id, class_key, delta))
+
+    async def _add_interaction(*_args, **kwargs):
+        interactions.append(kwargs.get("kind"))
+        return None
+
+    async def _create_if_absent(*_args, **_kwargs):
+        return alive_created["value"]
+
+    monkeypatch.setattr(neuro_engagement, "increment_client_class_for_mailing", _increment)
+    monkeypatch.setattr(neuro_engagement.ClientInteractionRepository, "add", _add_interaction)
+    monkeypatch.setattr(
+        neuro_engagement.ClientAliveWindowRepository, "create_if_absent", _create_if_absent
+    )
+
+    asyncio.run(
+        neuro_engagement.track_incoming_engagement(
+            session=object(),
+            mailing=_Mailing(),
+            account_id=3,
+            client_id=30,
+            body="hello",
+            telegram_message_id=123,
+        )
+    )
+    assert (30, "pulse", 1) in increments
+    assert (30, "alive", 1) in increments
+    assert "pulse" in interactions and "alive" in interactions
+
+    alive_created["value"] = False
+    interactions.clear()
+    increments.clear()
+    asyncio.run(
+        neuro_engagement.track_incoming_engagement(
+            session=object(),
+            mailing=_Mailing(),
+            account_id=3,
+            client_id=30,
+            body="hello again",
+            telegram_message_id=124,
+        )
+    )
+    assert (30, "pulse", 1) in increments
+    assert (30, "alive", 1) not in increments
+    assert "pulse" in interactions and "alive" not in interactions
+
+
+def test_check_client_filters_blocks_bl(monkeypatch):
+    async def _counts(_session, _client_id):
+        return {"bl": 1, "stop": 1}
+
+    monkeypatch.setattr(
+        neuro_filters.ClientClassCounterRepository, "get_counts", _counts
+    )
+    ok, reason = asyncio.run(neuro_filters.check_client_filters(session=None, client_id=44))
+    assert ok is False
+    assert reason == "client_class_bl"
+
+
+def test_prepare_incoming_context_denies_on_stop_class(monkeypatch):
+    async def _allowed(*_args, **_kwargs):
+        return True, "ok"
+
+    async def _key(*_args, **_kwargs):
+        return "key"
+
+    async def _has_stop(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(neuro_manager, "check_incoming_allowed", _allowed)
+    monkeypatch.setattr(
+        neuro_manager.InstanceSettingsRepository,
+        "get_effective_openrouter_key",
+        _key,
+    )
+    monkeypatch.setattr(neuro_manager, "client_has_positive_class", _has_stop)
+
+    ctx, reason = asyncio.run(
+        neuro_manager.prepare_incoming_context(
+            session=object(),
+            worker=SimpleNamespace(is_connected=True, account=SimpleNamespace(id=1)),
+            sender=None,
+            client=SimpleNamespace(id=2, telegram_user_id=100),
+            mailing=SimpleNamespace(
+                id=3,
+                neurochat_enabled=True,
+                neuro_model="",
+                community_link="",
+                neuro_sampling_json="{}",
+                use_typing=True,
+            ),
+            text="hi",
+            peer_uid=100,
+        )
+    )
+    assert ctx is None
+    assert reason == "client_class_stop"
+
+
+def test_patch_mailing_locked_when_running():
+    class _Mailing:
+        status = "RUNNING"
+
+    class _DB:
+        def get(self, _model, _id):
+            return _Mailing()
+
+    with pytest.raises(HTTPException) as ex:
+        patch_mailing(
+            mailing_id=1,
+            payload=MailingPatch(name="new name"),
+            db=_DB(),
+            _user=None,
+        )
+    assert ex.value.status_code == 400
+    assert "RUNNING" in str(ex.value.detail)
+
+
+def test_retry_queue_item_resets_failed_to_pending():
+    class _Row:
+        id = 42
+        status = "failed"
+        error = "x"
+        attempts = 3
+        next_attempt_at = datetime.now(timezone.utc)
+        sent_at = datetime.now(timezone.utc)
+        created_at = datetime.now(timezone.utc)
+
+    class _DB:
+        def __init__(self):
+            self.row = _Row()
+
+        def get(self, _model, queue_id):
+            return self.row if queue_id == 42 else None
+
+        def execute(self, _stmt):
+            # Имитируем SQL UPDATE из retry_queue_item.
+            self.row.status = "pending"
+            self.row.error = None
+            self.row.attempts = 0
+            self.row.next_attempt_at = None
+            self.row.sent_at = None
+            return None
+
+        def commit(self):
+            return None
+
+        def refresh(self, _row):
+            return None
+
+    out = retry_queue_item(
+        queue_id=42,
+        db=_DB(),
+        _user=None,
+    )
+    assert isinstance(out, SendMessageOut)
+    assert out.queue_id == 42
+    assert out.status == "pending"
