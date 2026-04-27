@@ -273,6 +273,10 @@ function navigate(hash) {
   $$("#sideNav .nav-link").forEach(a => {
     a.classList.toggle("active", a.dataset.route === route);
   });
+  const pageRoot = $("#pageRoot");
+  if (pageRoot) {
+    pageRoot.classList.toggle("dialogs-no-scroll", route === "dialogs");
+  }
 
   switch (route) {
     case "dashboard": return renderDashboard();

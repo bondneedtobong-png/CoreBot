@@ -10,6 +10,8 @@ body {
 /* App shell должен жить в пределах viewport без внешнего скролла страницы.
    Скролл — только во внутренних контейнерах (cb-scroll). */
 #appShell {
+  position: fixed;
+  inset: 0;
   height: 100vh;
   height: 100dvh;
   max-height: 100dvh;
@@ -20,6 +22,12 @@ body {
 }
 #pageRoot {
   min-height: 0;
+}
+
+/* В режиме диалогов запрещаем внешний скролл у контента страницы:
+   скролл только внутри списков и ленты сообщений. */
+#pageRoot.dialogs-no-scroll {
+  overflow: hidden !important;
 }
 
 /* Tailwind .hidden ставит display:none, но у нас на loginScreen есть inline
