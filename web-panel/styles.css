@@ -2,6 +2,10 @@
 
 html, body { height: 100%; }
 body { font-family: 'Inter', system-ui, sans-serif; }
+body {
+  margin: 0;
+  overflow: hidden; /* страница не скроллится целиком; скролл только внутри секций */
+}
 
 /* App shell должен жить в пределах viewport без внешнего скролла страницы.
    Скролл — только во внутренних контейнерах (cb-scroll). */
