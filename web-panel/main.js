@@ -847,11 +847,11 @@ async function renderParsing(tabSeg) {
       if (nearBottom) pre.scrollTop = pre.scrollHeight;
     });
     es.onerror = () => {
-      // Мягкий fallback: перерисуем один раз по ошибке стрима.
-      if (state.route === "parsing") loadParsingTasks();
+      // Оставляем только SSE-путь, без отката на ручной polling.
     };
   } catch {
-    // fallback only
+    // SSE недоступен — покажем предупреждение.
+    toast("Realtime stream parsing недоступен", "error");
   }
 }
 

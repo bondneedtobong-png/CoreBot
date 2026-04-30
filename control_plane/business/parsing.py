@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from control_plane.auth import decode_token
-from control_plane.business.db import get_bot_db
+from control_plane.business.db import get_bot_db, BotSession
 from control_plane.database import get_db as get_cp_db
 from control_plane.models import User as CpUser
 from control_plane.business.schemas import (
@@ -431,57 +431,59 @@ async def parsing_stream(
             if await request.is_disconnected():
                 break
             try:
-                rows = (
-                    cp_db.execute(
-                        select(
-                            ParsingTask.id,
-                            ParsingTask.status,
-                            ParsingTask.progress_percent,
-                            ParsingTask.current_stage,
-                            ParsingTask.current_account_id,
-                            ParsingTask.current_query,
-                            ParsingTask.found_count,
-                            ParsingTask.filtered_count,
-                            ParsingTask.error_count,
-                            ParsingTask.started_at,
-                            ParsingTask.finished_at,
+                with BotSession() as bot_db:
+                    rows = (
+                        bot_db.execute(
+                            select(
+                                ParsingTask.id,
+                                ParsingTask.status,
+                                ParsingTask.progress_percent,
+                                ParsingTask.current_stage,
+                                ParsingTask.current_account_id,
+                                ParsingTask.current_query,
+                                ParsingTask.found_count,
+                                ParsingTask.filtered_count,
+                                ParsingTask.error_count,
+                                ParsingTask.started_at,
+                                ParsingTask.finished_at,
+                            )
+                            .order_by(ParsingTask.id.desc())
+                            .limit(120)
                         )
-                        .order_by(ParsingTask.id.desc())
-                        .limit(120)
                     )
                     .all()
-                )
-                sig = json.dumps([tuple(r) for r in rows], default=str, ensure_ascii=False)
-                if sig != last_tasks_sig:
-                    last_tasks_sig = sig
-                    yield _sse_event("tasks_changed", {"count": len(rows)})
+                    )
+                    sig = json.dumps([tuple(r) for r in rows], default=str, ensure_ascii=False)
+                    if sig != last_tasks_sig:
+                        last_tasks_sig = sig
+                        yield _sse_event("tasks_changed", {"count": len(rows)})
 
-                logs = (
-                    cp_db.execute(
-                        select(ParsingTaskLog)
-                        .where(ParsingTaskLog.id > last_log_id)
-                        .order_by(ParsingTaskLog.id.asc())
-                        .limit(400)
+                    logs = (
+                        bot_db.execute(
+                            select(ParsingTaskLog)
+                            .where(ParsingTaskLog.id > last_log_id)
+                            .order_by(ParsingTaskLog.id.asc())
+                            .limit(400)
+                        )
+                        .scalars()
+                        .all()
                     )
-                    .scalars()
-                    .all()
-                )
-                for lg in logs:
-                    last_log_id = max(last_log_id, int(lg.id))
-                    yield _sse_event(
-                        "log",
-                        {
-                            "id": int(lg.id),
-                            "task_id": int(lg.task_id),
-                            "level": lg.level,
-                            "event": lg.event,
-                            "message": lg.message,
-                            "account_id": lg.account_id,
-                            "created_at": lg.created_at.isoformat() if lg.created_at else None,
-                        },
-                    )
-            except Exception:
-                yield _sse_event("warn", {"message": "stream_error"})
+                    for lg in logs:
+                        last_log_id = max(last_log_id, int(lg.id))
+                        yield _sse_event(
+                            "log",
+                            {
+                                "id": int(lg.id),
+                                "task_id": int(lg.task_id),
+                                "level": lg.level,
+                                "event": lg.event,
+                                "message": lg.message,
+                                "account_id": lg.account_id,
+                                "created_at": lg.created_at.isoformat() if lg.created_at else None,
+                            },
+                        )
+            except Exception as e:
+                yield _sse_event("warn", {"message": f"stream_error: {e}"})
             await asyncio.sleep(1.0)
 
     return StreamingResponse(

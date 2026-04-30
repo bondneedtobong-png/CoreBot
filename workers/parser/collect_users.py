@@ -281,20 +281,20 @@ async def run_users_task(
     for idx, peer in enumerate(peers):
         if not peer:
             continue
-        aid, client = await pool.next_client()
-        prog = min(95, int(10 + (idx + 1) / total * 80))
-        await storage.bump_task_counters(
-            session,
-            task.id,
-            progress_percent=prog,
-            current_stage="collect",
-            current_account_id=aid,
-            current_query=peer,
-        )
-        await session.commit()
         try:
+            aid, client = await pool.next_client()
+            prog = min(95, int(10 + (idx + 1) / total * 80))
+            await storage.bump_task_counters(
+                session,
+                task.id,
+                progress_percent=prog,
+                current_stage="collect",
+                current_account_id=aid,
+                current_query=peer,
+            )
+            await session.commit()
             await handle_peer(peer, aid, client)
         except Exception as e:
             await storage.bump_task_counters(session, task.id, error_delta=1)
             await session.commit()
-            await log(aid, "error", "peer_failed", str(e)[:500], {"peer": peer})
+            await log(None, "error", "peer_failed", str(e)[:500], {"peer": peer})

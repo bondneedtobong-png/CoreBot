@@ -164,28 +164,28 @@ async def run_group_task(
 
     nq = len(queries) or 1
     for i, q in enumerate(queries):
-        aid, client = await pool.next_client()
-        prog = min(92, int(8 + (i + 1) / nq * 52))
-        await storage.bump_task_counters(
-            session,
-            task.id,
-            progress_percent=prog,
-            current_stage="search",
-            current_account_id=aid,
-            current_query=q,
-        )
-        await session.commit()
-        cur_status = await session.scalar(
-            select(ParsingTask.status).where(ParsingTask.id == task.id)
-        )
-        if cur_status == "cancelled":
-            return
         try:
+            aid, client = await pool.next_client()
+            prog = min(92, int(8 + (i + 1) / nq * 52))
+            await storage.bump_task_counters(
+                session,
+                task.id,
+                progress_percent=prog,
+                current_stage="search",
+                current_account_id=aid,
+                current_query=q,
+            )
+            await session.commit()
+            cur_status = await session.scalar(
+                select(ParsingTask.status).where(ParsingTask.id == task.id)
+            )
+            if cur_status == "cancelled":
+                return
             await search_query(q, aid, client)
         except Exception as e:
             await storage.bump_task_counters(session, task.id, error_delta=1)
             await session.commit()
-            await log(aid, "error", "search_failed", str(e)[:500], {"query": q})
+            await log(None, "error", "search_failed", str(e)[:500], {"query": q})
 
     if depth >= 2 and expanded_search:
         extra = depth_expand.expand_queries_from_seeds(
@@ -195,28 +195,28 @@ async def run_group_task(
         )
         extra = [x for x in extra if x not in queries]
         for j, q in enumerate(extra):
-            aid, client = await pool.next_client()
-            prog = min(97, 60 + int((j + 1) / max(len(extra), 1) * 24))
-            await storage.bump_task_counters(
-                session,
-                task.id,
-                progress_percent=prog,
-                current_stage="search",
-                current_account_id=aid,
-                current_query=q,
-            )
-            await session.commit()
-            cur_status = await session.scalar(
-                select(ParsingTask.status).where(ParsingTask.id == task.id)
-            )
-            if cur_status == "cancelled":
-                return
             try:
+                aid, client = await pool.next_client()
+                prog = min(97, 60 + int((j + 1) / max(len(extra), 1) * 24))
+                await storage.bump_task_counters(
+                    session,
+                    task.id,
+                    progress_percent=prog,
+                    current_stage="search",
+                    current_account_id=aid,
+                    current_query=q,
+                )
+                await session.commit()
+                cur_status = await session.scalar(
+                    select(ParsingTask.status).where(ParsingTask.id == task.id)
+                )
+                if cur_status == "cancelled":
+                    return
                 await search_query(q, aid, client)
             except Exception as e:
                 await storage.bump_task_counters(session, task.id, error_delta=1)
                 await session.commit()
-                await log(aid, "warn", "depth2_failed", str(e)[:400], {"query": q})
+                await log(None, "warn", "depth2_failed", str(e)[:400], {"query": q})
 
     if depth >= 3 and expanded_search:
         extra2 = depth_expand.expand_queries_from_seeds(
@@ -226,25 +226,25 @@ async def run_group_task(
         )
         extra2 = [x for x in extra2 if x not in queries]
         for k, q in enumerate(extra2):
-            aid, client = await pool.next_client()
-            prog = min(99, 84 + int((k + 1) / max(len(extra2), 1) * 14))
-            await storage.bump_task_counters(
-                session,
-                task.id,
-                progress_percent=prog,
-                current_stage="search",
-                current_account_id=aid,
-                current_query=q,
-            )
-            await session.commit()
-            cur_status = await session.scalar(
-                select(ParsingTask.status).where(ParsingTask.id == task.id)
-            )
-            if cur_status == "cancelled":
-                return
             try:
+                aid, client = await pool.next_client()
+                prog = min(99, 84 + int((k + 1) / max(len(extra2), 1) * 14))
+                await storage.bump_task_counters(
+                    session,
+                    task.id,
+                    progress_percent=prog,
+                    current_stage="search",
+                    current_account_id=aid,
+                    current_query=q,
+                )
+                await session.commit()
+                cur_status = await session.scalar(
+                    select(ParsingTask.status).where(ParsingTask.id == task.id)
+                )
+                if cur_status == "cancelled":
+                    return
                 await search_query(q, aid, client)
             except Exception as e:
                 await storage.bump_task_counters(session, task.id, error_delta=1)
                 await session.commit()
-                await log(aid, "warn", "depth3_failed", str(e)[:400], {"query": q})
+                await log(None, "warn", "depth3_failed", str(e)[:400], {"query": q})
