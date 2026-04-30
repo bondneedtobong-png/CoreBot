@@ -449,9 +449,7 @@ async def parsing_stream(
                             )
                             .order_by(ParsingTask.id.desc())
                             .limit(120)
-                        )
-                    )
-                    .all()
+                        ).all()
                     )
                     sig = json.dumps([tuple(r) for r in rows], default=str, ensure_ascii=False)
                     if sig != last_tasks_sig:
