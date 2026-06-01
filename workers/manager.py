@@ -1138,6 +1138,151 @@ class WorkerManager:
         )
         return result
     
+    async def _run_test_mailing(
+        self,
+        mailing_id: int,
+        *,
+        variants: List[str],
+        variant_mode: str,
+        mailing_name: str,
+        mailing_link: str,
+        use_typing: bool,
+        smart_delay: bool,
+        delay: float,
+        delay_between_accounts: float,
+        batch_delay: float,
+        group_id: Optional[int],
+        end_at: Optional[datetime],
+        progress_callback: Optional[Callable] = None,
+    ) -> int:
+        """
+        Тестовая рассылка: КАЖДЫЙ подключённый аккаунт пишет КАЖДОМУ тестовому
+        получателю по очереди. Без дедупа и ротации — цель теста: убедиться, что
+        отписывается каждый аккаунт (например, на свой собственный @username).
+        Лимит успешных и пауза-кулдаун здесь не применяются. Возвращает processed.
+        """
+        async with session_scope() as session:
+            recipients = await ClientRepository.get_test_recipients_all(session, mailing_id)
+            if group_id:
+                accounts = await AccountRepository.get_all_in_group(session, group_id)
+            else:
+                accounts = await AccountRepository.get_all(session)
+
+        if not recipients:
+            log.info(f"Тест {mailing_id}: список тестовых получателей пуст — нечего слать.")
+            return 0
+
+        accounts = sorted(accounts, key=lambda a: a.id)
+        processed = 0
+        seq_idx = 0
+
+        for account in accounts:
+            if self._stop_event.is_set() or (end_at and datetime.utcnow() >= end_at):
+                break
+            worker = self.workers.get(account.id)
+            if not worker or not worker.is_connected:
+                log.info(f"Тест {mailing_id}: аккаунт {account.id} не подключён — пропуск.")
+                continue
+
+            wrote_any = False
+            for recipient in recipients:
+                if self._stop_event.is_set() or (end_at and datetime.utcnow() >= end_at):
+                    break
+
+                if variant_mode == "sequential":
+                    message_body = variants[seq_idx % len(variants)]
+                    seq_idx += 1
+                else:
+                    message_body = random.choice(variants)
+                final_text = self.apply_template(
+                    message_body,
+                    recipient.username,
+                    account=worker.account,
+                    mailing_name=mailing_name,
+                    mailing_link=mailing_link,
+                )
+
+                uname = (getattr(recipient, "username", None) or "").strip().lstrip("@")
+                if uname:
+                    target_peer: Union[int, str] = uname
+                elif recipient.telegram_user_id:
+                    target_peer = int(recipient.telegram_user_id)
+                else:
+                    log.info(f"Тест {mailing_id}: у получателя id={recipient.id} нет ни @username, ни tg id — пропуск.")
+                    continue
+
+                typing_delay = random.uniform(5.0, 10.0) if use_typing else 0.0
+                out_plain, out_entities = plain_text_to_telegram_link_message(final_text)
+                success, msg_id, error, peer_uid = await worker.send_message_with_typing(
+                    peer=target_peer,
+                    text=out_plain,
+                    typing_delay=typing_delay,
+                    use_typing=use_typing,
+                    parse_mode=None,
+                    formatting_entities=out_entities or None,
+                )
+
+                async with session_scope() as session:
+                    await MailingLogRepository.create(
+                        session=session,
+                        mailing_id=mailing_id,
+                        account_id=account.id,
+                        client_id=recipient.id,
+                        success=success,
+                        error_message=error,
+                        message_id=msg_id if success else None,
+                    )
+                    if success:
+                        await ClientRepository.update_status(
+                            session, recipient.id, ClientStatus.CONTACTED
+                        )
+                        if peer_uid:
+                            await ClientRepository.set_telegram_user_id(
+                                session, recipient.id, int(peer_uid)
+                            )
+                        ms = await ClientMailSessionRepository.get_or_create(
+                            session, recipient.id, account.id, mailing_id
+                        )
+                        if ms.first_outbound_at is None:
+                            await ClientMailSessionRepository.set_first_outbound(session, ms.id)
+                        await AccountRepository.increment_stats(session, account.id, sent=1)
+                        await MailingRepository.increment_stats(session, mailing_id, sent=1)
+                    else:
+                        if error and "No user has" in error and "as username" in error:
+                            await ClientRepository.update_status(
+                                session, recipient.id, ClientStatus.INVALID
+                            )
+                        await AccountRepository.increment_stats(session, account.id, failed=1)
+                        await MailingRepository.increment_stats(session, mailing_id, failed=1)
+
+                processed += 1
+                wrote_any = True
+                if progress_callback:
+                    await progress_callback(processed, processed)
+
+                acc_lbl = _account_log_label(account)
+                cl_usr = (getattr(recipient, "username", None) or "").strip() or "—"
+                if success:
+                    log.info(
+                        f"Тест {mailing_id}: аккаунт {acc_lbl} → клиент id={recipient.id} @{cl_usr} | OK"
+                    )
+                else:
+                    log.warning(
+                        f"Тест {mailing_id}: не удалось | аккаунт {acc_lbl} → клиент id={recipient.id} "
+                        f"@{cl_usr} | ошибка: {error}"
+                    )
+
+                await self._interruptible_sleep(_mailing_jittered_delay(delay, smart_delay))
+
+            # Пауза между аккаунтами (как и в обычной рассылке).
+            if wrote_any:
+                extra = delay_between_accounts + batch_delay
+                if extra > 0:
+                    await self._interruptible_sleep(_mailing_jittered_delay(extra, smart_delay))
+
+        log.info(f"Тест {mailing_id}: завершено, отправок всего {processed}.")
+        return processed
+
     async def start_mailing(
         self,
         mailing_id: int,
@@ -1234,13 +1379,22 @@ class WorkerManager:
                     getattr(mailing, "mailing_cooldown_hours", None) or 12.0
                 )
                 max_recipients_cap = getattr(mailing, "max_recipients", None)
+                audience_mode = (
+                    getattr(mailing, "audience_mode", None) or "classes"
+                ).strip().lower()
+                test_mode = audience_mode == "test"
 
             safe_name = html.escape(str(mailing_name or ""), quote=False)
             _start_lines = [
                 f"🚀 <b>Рассылка #{mailing_id}</b> «{safe_name}» запущена.",
                 f"👥 Аккаунтов в группе: <b>{n_group_accounts if n_group_accounts else 'все доступные'}</b>",
-                f"📨 Ротация: после <b>{messages_per_account}</b> успешных с одного аккаунта — "
-                "следующий (лимит не накапливается между запусками; логи — в мониторинге).",
+                (
+                    "🧪 <b>Тестовый режим:</b> каждый подключённый аккаунт пишет каждому "
+                    "тестовому получателю по очереди (без дедупа — отписываются все аккаунты)."
+                    if test_mode else
+                    f"📨 Ротация: после <b>{messages_per_account}</b> успешных с одного аккаунта — "
+                    "следующий (лимит не накапливается между запусками; логи — в мониторинге)."
+                ),
                 f"🧩 Перебор вариантов первого сообщения: <b>{'по очереди' if variant_mode == 'sequential' else 'случайно'}</b>.",
                 "<i>Пул после рассылки восстанавливается только для этой группы — нейрочат на них остаётся.</i>",
             ]
@@ -1259,7 +1413,29 @@ class WorkerManager:
             prev_eligible_ids: Optional[tuple[int, ...]] = None
             cap_reached = False
 
+            # Тестовый режим — отдельная логика: каждый аккаунт пишет каждому
+            # тестовому получателю (без дедупа и ротации). Production-цикл ниже
+            # для test_mode сразу прерывается.
+            if test_mode:
+                processed = await self._run_test_mailing(
+                    mailing_id,
+                    variants=variants,
+                    variant_mode=variant_mode,
+                    mailing_name=mailing_name,
+                    mailing_link=mailing_link,
+                    use_typing=use_typing,
+                    smart_delay=smart_delay,
+                    delay=delay,
+                    delay_between_accounts=delay_between_accounts,
+                    batch_delay=batch_delay,
+                    group_id=group_id,
+                    end_at=end_at,
+                    progress_callback=progress_callback,
+                )
+
             while True:
+                if test_mode:
+                    break
                 if self._stop_event.is_set():
                     log.info("Рассылка остановлена пользователем")
                     break

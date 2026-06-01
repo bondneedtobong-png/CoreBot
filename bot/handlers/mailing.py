@@ -654,6 +654,30 @@ async def _render_mailing_audience_screen(callback: CallbackQuery, mailing_id: i
 MAILING_AUD_MODE_RE = re.compile(r"^mailing_aud_mode_(test|new|classes)_(\d+)$")
 
 
+def _audience_mode_logic_text(mode: str, mpa: int) -> str:
+    """Как именно поведёт себя рассылка в выбранном режиме (для экрана аудитории)."""
+    if mode == "test":
+        return (
+            "🧪 <b>Логика теста:</b> каждый подключённый аккаунт группы пишет "
+            "<b>каждому</b> тестовому получателю по очереди — дедупа нет, "
+            "отписываются все аккаунты (удобно слать на свой @username и сразу "
+            "проверять рассылку + нейрочат). Лимит успешных и пауза аккаунта "
+            "в тесте не применяются."
+        )
+    if mode == "new":
+        return (
+            "📗 <b>Логика «Из базы NEW»:</b> первое сообщение клиентам со статусом "
+            f"NEW. Один клиент = одно сообщение от одного аккаунта; аккаунты "
+            f"ротируются после <b>{mpa}</b> успешных. Уже отписанные в этом запуске "
+            "не дублируются."
+        )
+    return (
+        "🎛 <b>Логика «По классам»:</b> аудитория по фильтру include/exclude "
+        "классов (см. «Фильтр классов»). Один клиент = одно первое сообщение, "
+        f"аккаунты ротируются после <b>{mpa}</b> успешных, без повторов."
+    )
+
+
 async def _render_mailing_campaign_screen(callback: CallbackQuery, mailing_id: int) -> None:
     async with session_scope() as session:
         mailing = await MailingRepository.get_by_id(session, mailing_id)
@@ -678,8 +702,13 @@ async def _render_mailing_campaign_screen(callback: CallbackQuery, mailing_id: i
         f"Лимит успешных первых сообщений за запуск: {cap_txt}\n"
         f"Пауза <b>рассылки (первое сообщение)</b> для аккаунта после "
         f"<code>{mpa}</code> успешных: <b>{cd:g}</b> ч\n\n"
-        "<i>Пока аккаунты в паузе рассылки, нейрочат этой кампании отвечает на входящие.</i>"
+        f"{_audience_mode_logic_text(mode, mpa)}"
     )
+    if mode != "test":
+        text += (
+            "\n\n<i>Пока аккаунты в паузе рассылки, нейрочат этой кампании "
+            "отвечает на входящие.</i>"
+        )
     await callback.message.edit_text(
         text,
         reply_markup=get_mailing_campaign_keyboard(mailing),
@@ -769,9 +798,11 @@ async def cb_mailing_test_txt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(MailingCampaignFSM.waiting_test_txt)
     await state.update_data(mailing_test_id=mailing_id)
     await callback.message.answer(
-        "📎 Пришлите <b>.txt</b> со списком @username (как в импорте листов).\n"
-        "Список заменит предыдущий тестовый набор для этой рассылки.\n\n"
-        "<i>Назад — кнопка ниже (загрузка отменится).</i>",
+        "🧪 <b>Тестовые получатели</b>\n\n"
+        "Впишите @username прямо сообщением — по одному в строке или через "
+        "запятую/пробел (обычно 1–3 для теста, например ваш аккаунт).\n"
+        "Можно и прислать <b>.txt</b>. Список заменит предыдущий тестовый набор.\n\n"
+        "<i>Назад — кнопка ниже (ввод отменится).</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=_mailing_campaign_flow_back_kb(mailing_id),
     )
@@ -862,6 +893,44 @@ async def cb_mailing_test_txt_save(message: Message, state: FSMContext):
     await message.bot.download(doc, destination=buf)
     raw = buf.getvalue().decode("utf-8", errors="replace")
     usernames = parse_usernames_from_txt(raw)
+    async with session_scope() as session:
+        added, dups = await MailingTestRecipientRepository.replace_from_usernames(
+            session, mailing_id, sorted(usernames)
+        )
+    await state.clear()
+    await message.answer(
+        f"✅ Тестовый список: <b>{added}</b> уникальных, дубликатов строк: <b>{dups}</b>.\n"
+        "Переключите режим аудитории на «Тест», если ещё не.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=_mailing_campaign_flow_back_kb(mailing_id),
+    )
+
+
+@router.message(MailingCampaignFSM.waiting_test_txt, F.text)
+async def cb_mailing_test_txt_text(message: Message, state: FSMContext):
+    """Ручной ввод тестовых @username текстом (без .txt)."""
+    if message.from_user.id != OWNER_ID:
+        return
+    data = await state.get_data()
+    mailing_id = data.get("mailing_test_id")
+    if not mailing_id:
+        await state.clear()
+        return
+    raw = (message.text or "").strip()
+    if raw.lower() in ("/cancel", "cancel", "отмена"):
+        await state.clear()
+        await message.answer(
+            "Отменено.", reply_markup=_mailing_campaign_flow_back_kb(mailing_id)
+        )
+        return
+    usernames = parse_usernames_from_txt(raw)
+    if not usernames:
+        await message.answer(
+            "Не нашёл ни одного @username (минимум 5 символов: буквы/цифры/_). "
+            "Пришлите ещё раз или нажмите «Назад».",
+            reply_markup=_mailing_campaign_flow_back_kb(mailing_id),
+        )
+        return
     async with session_scope() as session:
         added, dups = await MailingTestRecipientRepository.replace_from_usernames(
             session, mailing_id, sorted(usernames)

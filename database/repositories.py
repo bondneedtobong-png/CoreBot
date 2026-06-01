@@ -1415,6 +1415,25 @@ class ClientRepository:
         return list(result.scalars().all())
 
     @staticmethod
+    async def get_test_recipients_all(
+        session: AsyncSession, mailing_id: int
+    ) -> List[Client]:
+        """
+        Все тестовые получатели рассылки (без исключения уже отправленных) —
+        для тестового режима, где КАЖДЫЙ аккаунт пишет КАЖДОМУ получателю.
+        Невалидные/заблокированные исключаются.
+        """
+        q = (
+            select(Client)
+            .join(MailingTestRecipient, MailingTestRecipient.client_id == Client.id)
+            .where(MailingTestRecipient.mailing_id == mailing_id)
+            .where(~Client.status.in_([ClientStatus.INVALID, ClientStatus.BLOCKED]))
+            .order_by(MailingTestRecipient.id)
+        )
+        result = await session.execute(q)
+        return list(result.scalars().all())
+
+    @staticmethod
     async def get_mailing_queue(session: AsyncSession, mailing: Mailing) -> List[Client]:
         """Очередь по audience_mode рассылки."""
         mode = (getattr(mailing, "audience_mode", None) or "classes").strip().lower()
