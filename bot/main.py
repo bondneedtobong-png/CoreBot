@@ -24,6 +24,7 @@ from bot.handlers.database import database_router
 from bot.handlers.mailing import router as mailing_router
 from bot.handlers.neurochat import router as neurochat_router
 from bot.handlers.openrouter_key import router as openrouter_key_router
+from bot.handlers.fleet_cleanup import router as fleet_cleanup_router
 from bot.handlers.proxy import router as proxy_router
 from bot.handlers.system_status import (
     build_system_status_text,
@@ -170,6 +171,7 @@ async def run_bot():
     dp.include_router(warmup_menu_router)
     dp.include_router(username_list_tool_router)
     dp.include_router(system_status_router)
+    dp.include_router(fleet_cleanup_router)
     dp.include_router(legacy_cancel_router)
 
     # 7. Хендлеры

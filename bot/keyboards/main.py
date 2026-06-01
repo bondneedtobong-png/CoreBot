@@ -261,6 +261,9 @@ def get_accounts_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📋 Список аккаунтов", callback_data="accounts_list"),
         ],
         [
+            InlineKeyboardButton(text="🧹 Чистка / проверка прокси", callback_data="acc_cleanup_menu"),
+        ],
+        [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back"),
         ],
     ]
@@ -1213,6 +1216,9 @@ def get_proxy_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="📋 Список прокси", callback_data="proxy_list"),
             InlineKeyboardButton(text="📂 Группы прокси", callback_data="proxy_groups"),
+        ],
+        [
+            InlineKeyboardButton(text="🧹 Чистка прокси", callback_data="proxy_cleanup_menu"),
         ],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back"),
