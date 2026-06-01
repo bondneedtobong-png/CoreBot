@@ -29,6 +29,9 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🌐 Прокси", callback_data="menu_proxy"),
             InlineKeyboardButton(text="🔥 Прогрев", callback_data="menu_warmup"),
         ],
+        [
+            InlineKeyboardButton(text="📊 Статус системы", callback_data="menu_status"),
+        ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 

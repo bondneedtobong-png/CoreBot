@@ -25,6 +25,11 @@ from bot.handlers.mailing import router as mailing_router
 from bot.handlers.neurochat import router as neurochat_router
 from bot.handlers.openrouter_key import router as openrouter_key_router
 from bot.handlers.proxy import router as proxy_router
+from bot.handlers.system_status import (
+    build_system_status_text,
+    get_system_status_keyboard,
+    router as system_status_router,
+)
 from bot.handlers.warmup_menu import router as warmup_menu_router
 from bot.handlers.username_list_tool import router as username_list_tool_router
 from utils.logger import log
@@ -164,6 +169,7 @@ async def run_bot():
     dp.include_router(proxy_router)
     dp.include_router(warmup_menu_router)
     dp.include_router(username_list_tool_router)
+    dp.include_router(system_status_router)
     dp.include_router(legacy_cancel_router)
 
     # 7. Хендлеры
@@ -235,61 +241,15 @@ async def run_bot():
 
     @dp.message(Command("status"))
     async def cmd_status(message: Message):
-        """Обработчик команды /status - статус системы."""
+        """Обработчик команды /status — статус системы (единый билдер)."""
         if message.from_user.id != OWNER_ID:
             return
-
-        from database.session import session_scope
-        from database.models import Account, AccountStatus, Client, ClientStatus, Mailing, MailingStatus
-        from sqlalchemy import select, func
-
-        async with session_scope() as session:
-            accounts_result = await session.execute(
-                select(Account.status, func.count(Account.id)).group_by(Account.status)
-            )
-            accounts_stats = {row[0].value: row[1] for row in accounts_result.all()}
-
-            clients_result = await session.execute(
-                select(Client.status, func.count(Client.id)).group_by(Client.status)
-            )
-            clients_stats = {row[0].value: row[1] for row in clients_result.all()}
-
-            running_mailing = await session.execute(
-                select(Mailing).where(Mailing.status == MailingStatus.RUNNING)
-            )
-            running = running_mailing.scalar_one_or_none()
-
-        status_text = (
-            "📊 <b>Статус системы:</b>\n\n"
-            f"👥 <b>Аккаунты:</b>\n"
-            f"  • Активные: {accounts_stats.get('active', 0)}\n"
-            f"  • Неактивные: {accounts_stats.get('inactive', 0)}\n"
-            f"  • FloodWait: {accounts_stats.get('flood_wait', 0)}\n"
-            f"  • Забаненные: {accounts_stats.get('banned', 0)}\n\n"
-            f"📁 <b>Клиенты:</b>\n"
-            f"  • Новые: {clients_stats.get('new', 0)}\n"
-            f"  • Обработанные: {clients_stats.get('contacted', 0)}\n"
-            f"  • Невалидные: {clients_stats.get('invalid', 0)}\n\n"
+        text = await build_system_status_text()
+        await message.answer(
+            text,
+            reply_markup=get_system_status_keyboard(),
+            parse_mode=ParseMode.HTML,
         )
-
-        if running:
-            status_text += (
-                f"🚀 <b>Активная рассылка:</b>\n"
-                f"  • ID: {running.id}\n"
-                f"  • Отправлено: {running.messages_sent}\n"
-                f"  • Ошибок: {running.messages_failed}\n"
-            )
-        else:
-            status_text += "🚀 <b>Активная рассылка:</b> Нет\n"
-
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🏠 В главное меню", callback_data="menu_back")]
-            ]
-        )
-
-        await message.answer(status_text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
 
     @dp.callback_query(F.data == "menu_accounts")
     async def cb_accounts(callback: CallbackQuery, state: FSMContext):
