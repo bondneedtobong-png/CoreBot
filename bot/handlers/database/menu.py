@@ -25,10 +25,6 @@ from bot.keyboards.database_menu import (
 
 router = Router()
 
-STUB_FOOT = (
-    "\n\n<i>Подробности: <code>docs/DATABASE_MODULE_SPEC.md</code></i>"
-)
-
 
 def _owner_only(callback: CallbackQuery) -> bool:
     if callback.from_user.id != OWNER_ID:
@@ -142,24 +138,6 @@ async def db_m_2132(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.in_(("db_ex_fresh", "db_ex_bl", "db_ex_alive")))
-async def db_export_groups(callback: CallbackQuery, state: FSMContext):
-    if not _owner_only(callback):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
-        return
-    labels = {
-        "db_ex_fresh": "Свежак",
-        "db_ex_bl": "Чёрный список",
-        "db_ex_alive": "Живые люди",
-    }
-    await callback.message.edit_text(
-        f"🚧 <b>{labels[callback.data]}</b>\n\nВыгрузка в .txt — в разработке (классы в БД)." + STUB_FOOT,
-        reply_markup=kb_database_export_groups(),
-        parse_mode=ParseMode.HTML,
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data == "db_m_2133")
 async def db_m_2133(callback: CallbackQuery, state: FSMContext):
     if not _owner_only(callback):
@@ -167,20 +145,6 @@ async def db_m_2133(callback: CallbackQuery, state: FSMContext):
         return
     await callback.message.edit_text(
         "<b>Удаление юзеров</b>",
-        reply_markup=kb_database_delete(),
-        parse_mode=ParseMode.HTML,
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.in_(("db_del_list", "db_del_db")))
-async def db_del(callback: CallbackQuery, state: FSMContext):
-    if not _owner_only(callback):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
-        return
-    t = "Из списка" if callback.data == "db_del_list" else "Из базы"
-    await callback.message.edit_text(
-        f"🚧 <b>{t}</b>\n\nВ разработке." + STUB_FOOT,
         reply_markup=kb_database_delete(),
         parse_mode=ParseMode.HTML,
     )
@@ -213,17 +177,5 @@ async def db_log_debug_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.in_(("db_log_accounts", "db_log_chats")))
-async def db_log_sub(callback: CallbackQuery, state: FSMContext):
-    if not _owner_only(callback):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
-        return
-    t = "Аккаунты" if callback.data == "db_log_accounts" else "Переписка"
-    await callback.message.edit_text(
-        f"🚧 <b>{t}</b>\n\nВ разработке." + STUB_FOOT,
-        reply_markup=kb_database_logs(),
-        parse_mode=ParseMode.HTML,
-    )
-    await callback.answer()
 
 
