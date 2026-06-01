@@ -472,3 +472,55 @@ def test_retry_queue_item_resets_failed_to_pending():
     assert isinstance(out, SendMessageOut)
     assert out.queue_id == 42
     assert out.status == "pending"
+
+
+def test_dialog_lock_auto_cleanup_single_use():
+    """После одного использования per-dialog лок удаляется (нет утечки)."""
+    from services.neurochat import incoming_service as inc
+
+    inc._dialog_locks.clear()
+    inc._dialog_lock_refs.clear()
+
+    async def _use_once():
+        async with inc._dialog_lock(1, 100):
+            # Внутри лока запись существует и refcount = 1.
+            assert "1:100" in inc._dialog_locks
+            assert inc._dialog_lock_refs.get("1:100") == 1
+        # После выхода — обе записи очищены.
+        assert "1:100" not in inc._dialog_locks
+        assert "1:100" not in inc._dialog_lock_refs
+
+    asyncio.run(_use_once())
+    assert inc._dialog_locks == {}
+    assert inc._dialog_lock_refs == {}
+
+
+def test_dialog_lock_serializes_and_cleans_concurrent():
+    """Два конкурентных пользователя одного ключа сериализуются и не текут."""
+    from services.neurochat import incoming_service as inc
+
+    inc._dialog_locks.clear()
+    inc._dialog_lock_refs.clear()
+    order: list[tuple[str, str]] = []
+
+    async def _user(tag: str, hold: float):
+        async with inc._dialog_lock(5, 200):
+            order.append(("enter", tag))
+            await asyncio.sleep(hold)
+            order.append(("exit", tag))
+
+    async def _run():
+        await asyncio.gather(_user("a", 0.02), _user("b", 0.0))
+
+    asyncio.run(_run())
+
+    # Нет утечки: после обоих пользователей лок очищен.
+    assert "5:200" not in inc._dialog_locks
+    assert "5:200" not in inc._dialog_lock_refs
+    # Сериализация: первый полностью вышел до входа второго (нет вложенности).
+    assert len(order) == 4
+    first = order[0][1]
+    assert order[0][0] == "enter"
+    assert order[1] == ("exit", first)
+    assert order[2][0] == "enter" and order[2][1] != first
+    assert order[3] == ("exit", order[2][1])

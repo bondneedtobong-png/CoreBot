@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 from telethon import events
 
@@ -27,11 +28,49 @@ from utils.logger import log
 from utils.telemetry import telemetry_emitter
 
 _llm_sem = asyncio.Semaphore(NEURO_MAX_CONCURRENT)
+# Per-dialog локи (account:peer) — сериализация обработки одного диалога.
+# Словарь самоочищается через refcount: лок удаляется, как только его отпустил
+# последний пользователь (никто не держит и не ждёт). Это убирает исторический
+# рост _dialog_locks на каждый новый account:peer (утечка памяти на длинной
+# дистанции).
 _dialog_locks: dict[str, asyncio.Lock] = {}
+_dialog_lock_refs: dict[str, int] = {}
 
 
 def _lock_key(account_id: int, peer_id: int) -> str:
     return f"{account_id}:{peer_id}"
+
+
+@asynccontextmanager
+async def _dialog_lock(account_id: int, peer_id: int) -> AsyncIterator[None]:
+    """
+    Контекст-менеджер per-dialog лока с авто-очисткой.
+
+    Лок создаётся лениво и удаляется, как только его отпустил последний
+    пользователь. `_dialog_lock_refs` считает «держит + ждёт»: пока счётчик
+    > 0, лок жив (его кто-то использует); как только дошёл до нуля — запись
+    удаляется из обоих словарей. Безопасно в однопоточном asyncio: инкремент
+    и финальная проверка выполняются без точек переключения (await) внутри.
+    """
+    key = _lock_key(account_id, peer_id)
+    lock = _dialog_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _dialog_locks[key] = lock
+    _dialog_lock_refs[key] = _dialog_lock_refs.get(key, 0) + 1
+    try:
+        async with lock:
+            yield
+    finally:
+        remaining = _dialog_lock_refs.get(key, 1) - 1
+        if remaining <= 0:
+            _dialog_lock_refs.pop(key, None)
+            # Удаляем лок, только если это тот же объект и он уже отпущен —
+            # защита от гонки, если параллельно создали новый лок под тем же key.
+            if _dialog_locks.get(key) is lock and not lock.locked():
+                _dialog_locks.pop(key, None)
+        else:
+            _dialog_lock_refs[key] = remaining
 
 
 async def _try_pulse_non_neuro_incoming(
@@ -147,9 +186,7 @@ async def handle_incoming(worker: Any, event: events.NewMessage.Event) -> None:
     messages = prepared.messages
     generation = prepared.generation
     use_typing_neuro = prepared.use_typing_neuro
-    key = _lock_key(worker.account.id, int(peer_uid))
-    lock = _dialog_locks.setdefault(key, asyncio.Lock())
-    async with lock:
+    async with _dialog_lock(worker.account.id, int(peer_uid)):
         async with _llm_sem:
             reply, err = await generate_reply_with_retries_and_fallback(
                 messages,
