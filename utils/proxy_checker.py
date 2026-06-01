@@ -3,7 +3,7 @@
 """
 import asyncio
 import aiohttp
-from aiohttp_socks import ProxyConnector
+from aiohttp_socks import ProxyConnector, ProxyType
 from loguru import logger
 
 log = logger
@@ -35,10 +35,12 @@ async def check_proxy(
 
     connector = None
     try:
-        # Создаём коннектор напрямую через параметры, а не from_url()
+        # Создаём коннектор напрямую через параметры, а не from_url().
+        # ВАЖНО: aiohttp_socks.ProxyType — SOCKS5=2, HTTP=3 (раньше тут был
+        # хардкод 5 для SOCKS5 → ValueError, и любой socks5 считался мёртвым).
         if proxy_type.lower() == 'socks5':
             connector = ProxyConnector(
-                proxy_type=5,  # SOCKS5 = 5
+                proxy_type=ProxyType.SOCKS5,
                 host=host,
                 port=port,
                 username=username if username else None,
@@ -46,9 +48,8 @@ async def check_proxy(
                 rdns=True,  # DNS resolution через прокси
             )
         elif proxy_type.lower() == 'http':
-            # Для HTTP прокси используем ProxyConnector с типом 3
             connector = ProxyConnector(
-                proxy_type=3,  # HTTP = 3
+                proxy_type=ProxyType.HTTP,
                 host=host,
                 port=port,
                 username=username if username else None,

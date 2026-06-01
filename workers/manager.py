@@ -862,12 +862,108 @@ class WorkerManager:
         if not need.issubset(self.workers.keys()):
             await self.load_accounts()
     
-    async def connect_all(self, *, quiet_unauthorized: bool = False):
-        """Подключение всех аккаунтов (последовательно, с паузой — меньше блокировок SQLite)."""
-        for i, worker in enumerate(self.workers.values()):
-            await worker.connect(quiet=quiet_unauthorized)
-            if i + 1 < len(self.workers):
+    async def precheck_proxies(self, *, timeout: int = 8) -> Dict[int, Optional[bool]]:
+        """
+        Параллельная проверка прокси всех загруженных воркеров (через сам прокси,
+        запрос exit-IP). Возвращает {account_id: True|False|None}:
+          True  — прокси рабочий;
+          False — прокси не отвечает;
+          None  — прокси не назначен.
+        Заодно обновляет `is_working` у прокси в БД.
+        """
+        from utils.proxy_checker import check_proxy
+
+        if not self.workers:
+            return {}
+
+        sem = asyncio.Semaphore(25)
+
+        async def _one(worker: "Worker"):
+            p = worker.proxy
+            if not p:
+                return worker.account.id, None, None
+            ptype = p.proxy_type.value if hasattr(p.proxy_type, "value") else str(p.proxy_type)
+            async with sem:
+                try:
+                    ok, _ip = await check_proxy(ptype, p.host, p.port, p.username, p.password, timeout=timeout)
+                except Exception as e:
+                    log.debug(f"precheck proxy acc={worker.account.id}: {e}")
+                    ok = False
+            return worker.account.id, bool(ok), p.id
+
+        pairs = await asyncio.gather(*[_one(w) for w in self.workers.values()])
+        results: Dict[int, Optional[bool]] = {}
+        proxy_status: Dict[int, bool] = {}
+        for aid, ok, pid in pairs:
+            results[aid] = ok
+            if pid is not None and ok is not None:
+                proxy_status[pid] = ok
+        if proxy_status:
+            async with session_scope() as session:
+                for pid, ok in proxy_status.items():
+                    try:
+                        await ProxyRepository.update_status(session, pid, ok)
+                    except Exception as e:
+                        log.debug(f"update proxy status {pid}: {e}")
+        return results
+
+    async def connect_all(
+        self,
+        *,
+        quiet_unauthorized: bool = False,
+        require_working_proxy: bool = True,
+    ) -> dict:
+        """
+        Подключение аккаунтов (последовательно, с паузой — меньше блокировок SQLite).
+
+        Безопасность по умолчанию (`require_working_proxy=True`): сначала
+        проверяются прокси, занятые аккаунтами; **аккаунты без прокси или с
+        мёртвым прокси НЕ подключаются и НЕ авторизуются** — иначе вход пойдёт
+        с «чужого» IP (сервера) и Telegram может забанить. Передать
+        `require_working_proxy=False` — старое поведение (подключать всех).
+        """
+        summary = {
+            "connected": 0,
+            "unauthorized": 0,
+            "skipped_no_proxy": 0,
+            "skipped_dead_proxy": 0,
+        }
+        proxy_ok: Dict[int, Optional[bool]] = {}
+        if require_working_proxy and self.workers:
+            log.info("🔍 Проверка прокси перед подключением аккаунтов…")
+            proxy_ok = await self.precheck_proxies()
+
+        items = list(self.workers.values())
+        for i, worker in enumerate(items):
+            if require_working_proxy:
+                st = proxy_ok.get(worker.account.id)
+                if st is None:
+                    log.warning(
+                        f"⛔ Аккаунт {worker.account.id}: нет прокси — пропускаю "
+                        f"подключение (защита от бана)"
+                    )
+                    summary["skipped_no_proxy"] += 1
+                    continue
+                if st is False:
+                    log.warning(
+                        f"⛔ Аккаунт {worker.account.id}: прокси не работает — "
+                        f"пропускаю подключение/авторизацию"
+                    )
+                    summary["skipped_dead_proxy"] += 1
+                    continue
+            ok = await worker.connect(quiet=quiet_unauthorized)
+            summary["connected" if ok else "unauthorized"] += 1
+            if i + 1 < len(items):
                 await asyncio.sleep(0.35)
+
+        if require_working_proxy:
+            log.info(
+                f"connect_all: подключено {summary['connected']}, "
+                f"не авторизованы {summary['unauthorized']}, "
+                f"без прокси {summary['skipped_no_proxy']}, "
+                f"мёртвый прокси {summary['skipped_dead_proxy']}"
+            )
+        return summary
     
     async def disconnect_all(self):
         """Отключение всех аккаунтов."""
