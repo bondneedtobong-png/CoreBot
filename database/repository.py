@@ -364,18 +364,90 @@ class Database:
                             "ALTER TABLE instance_settings ADD COLUMN neurochat_enabled BOOLEAN"
                         ))
 
-                # --- clients: telegram_user_id ---
+                # --- clients: telegram_user_id + username → nullable ---
                 c_exists = await conn.execute(text(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='clients'"
                 ))
                 if c_exists.fetchone():
                     c_info = await conn.execute(text("PRAGMA table_info(clients)"))
-                    ccols = {row[1] for row in c_info.fetchall()}
+                    c_rows = c_info.fetchall()
+                    ccols = {row[1] for row in c_rows}
                     if "telegram_user_id" not in ccols:
                         log.info("➕ clients: telegram_user_id")
                         await conn.execute(text(
                             "ALTER TABLE clients ADD COLUMN telegram_user_id INTEGER"
                         ))
+                        # Перечитываем схему — ниже нужен актуальный notnull.
+                        c_info = await conn.execute(text("PRAGMA table_info(clients)"))
+                        c_rows = c_info.fetchall()
+
+                    # username → nullable. На старых БД колонка создана как
+                    # NOT NULL UNIQUE и режет лидов без @username. SQLite не
+                    # умеет ALTER COLUMN, поэтому пересобираем таблицу с
+                    # авто-снимком для отката. Идемпотентно: если username уже
+                    # nullable — блок пропускается.
+                    uname_row = next((r for r in c_rows if r[1] == "username"), None)
+                    username_notnull = bool(uname_row) and int(uname_row[3]) == 1
+                    if username_notnull:
+                        log.info("🔧 clients.username → nullable: пересборка таблицы (бэкап в clients_pre_username_backup)")
+                        # 1. Авто-снимок для отката (идемпотентно).
+                        await conn.execute(text(
+                            "DROP TABLE IF EXISTS clients_pre_username_backup"
+                        ))
+                        await conn.execute(text(
+                            "CREATE TABLE clients_pre_username_backup AS SELECT * FROM clients"
+                        ))
+                        # 2. Новая таблица: username nullable; уникальные индексы
+                        #    навешиваем отдельно после копирования.
+                        await conn.execute(text("""
+                            CREATE TABLE clients_new (
+                                id INTEGER NOT NULL PRIMARY KEY,
+                                username VARCHAR(100),
+                                telegram_user_id BIGINT,
+                                status VARCHAR(9),
+                                added_at DATETIME,
+                                last_contacted_at DATETIME
+                            )
+                        """))
+                        # 3. Перелив данных (id сохраняются → FK из дочерних
+                        #    таблиц остаются валидными).
+                        await conn.execute(text("""
+                            INSERT INTO clients_new
+                                (id, username, telegram_user_id, status, added_at, last_contacted_at)
+                            SELECT id, username, telegram_user_id, status, added_at, last_contacted_at
+                            FROM clients
+                        """))
+                        # 4. Swap.
+                        await conn.execute(text("DROP TABLE clients"))
+                        await conn.execute(text("ALTER TABLE clients_new RENAME TO clients"))
+                        # 5. Уникальные индексы. На SQLite NULL считаются
+                        #    различными → несколько NULL-username допустимо,
+                        #    непустые остаются уникальными.
+                        await conn.execute(text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS ix_clients_username "
+                            "ON clients(username)"
+                        ))
+                        # telegram_user_id в живой БД мог не иметь unique
+                        # (ADD COLUMN не вешает constraint) — навешиваем UNIQUE,
+                        # только если нет дублей непустых значений.
+                        dup = await conn.execute(text(
+                            "SELECT 1 FROM clients WHERE telegram_user_id IS NOT NULL "
+                            "GROUP BY telegram_user_id HAVING COUNT(*) > 1 LIMIT 1"
+                        ))
+                        if dup.fetchone():
+                            log.warning(
+                                "clients.telegram_user_id: есть дубли — обычный индекс вместо UNIQUE"
+                            )
+                            await conn.execute(text(
+                                "CREATE INDEX IF NOT EXISTS ix_clients_tg_user_id "
+                                "ON clients(telegram_user_id)"
+                            ))
+                        else:
+                            await conn.execute(text(
+                                "CREATE UNIQUE INDEX IF NOT EXISTS ix_clients_tg_user_id "
+                                "ON clients(telegram_user_id)"
+                            ))
+                        log.info("✅ clients.username теперь nullable (снимок: clients_pre_username_backup)")
 
                 # --- neuro action logs table ---
                 nal_exists = await conn.execute(text(

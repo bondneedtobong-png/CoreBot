@@ -266,7 +266,10 @@ class Client(Base):
     __tablename__ = "clients"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    username = Column(String(100), unique=True, nullable=False)  # @username без @
+    # username теперь nullable: в TG масса юзеров без @username — ключуем по
+    # telegram_user_id. На SQLite UNIQUE допускает несколько NULL, поэтому
+    # уникальность сохраняется только для непустых username.
+    username = Column(String(100), unique=True, nullable=True)  # @username без @
     # Telegram user id (для изоляции диалогов нейрочата и привязки без @username)
     telegram_user_id = Column(BigInteger, nullable=True, unique=True)
     status = Column(Enum(ClientStatus), default=ClientStatus.NEW)
