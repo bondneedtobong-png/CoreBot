@@ -50,6 +50,8 @@ async def process_2fa_password(message: Message, state: FSMContext):
     await state.update_data(password=password)
     await state.set_state(Set2FAFSM.waiting_for_password_confirm)
 
+    data = await state.get_data()
+    account_id = data.get("account_id")
     await message.answer(
         "🔐 <b>Подтверждение пароля</b>\n\n"
         "Введите пароль ещё раз для подтверждения:",

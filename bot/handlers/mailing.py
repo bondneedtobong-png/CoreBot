@@ -789,6 +789,7 @@ async def cb_mailing_cap_save(message: Message, state: FSMContext):
         await message.answer("Сессия устарела.")
         return
     val: int | None
+    raw = (message.text or "").strip().lower()
     if raw in ("", "0", "сброс", "none", "нет"):
         val = None
     else:
@@ -1841,7 +1842,6 @@ async def process_text(message: Message, state: FSMContext):
 
     log.info(f"Рассылка {mailing_id}: текст обновлён")
 
-    extra_n = len(_extra_variants(mailing))
     await message.answer(
         "✅ Основной текст обновлён.\n\n"
         "✉️ Модуль «Первое сообщение»:",
