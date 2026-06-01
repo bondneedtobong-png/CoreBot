@@ -524,3 +524,32 @@ def test_dialog_lock_serializes_and_cleans_concurrent():
     assert order[1] == ("exit", first)
     assert order[2][0] == "enter" and order[2][1] != first
     assert order[3] == ("exit", order[2][1])
+
+
+def test_neuro_monitor_window_and_counts():
+    """Мониторинг нейрочата: окно N часов и агрегаты deny/success/fallback."""
+    import time as _time
+
+    from services.neurochat.monitor import NeuroMonitor
+
+    m = NeuroMonitor()
+    m.record_deny("global_disabled")
+    m.record_deny("client_class_bl")
+    m.record_deny("global_disabled")
+    m.record_success()
+    m.record_fallback()
+    # Старое событие вне окна 1 ч.
+    m._events.appendleft((_time.time() - 3 * 3600, "deny", "worker_disconnected"))
+
+    s = m.summary(hours=1.0)
+    assert s["deny"]["global_disabled"] == 2
+    assert s["deny"]["client_class_bl"] == 1
+    assert "worker_disconnected" not in s["deny"]  # вне окна 1 ч
+    assert s["deny_total"] == 3
+    assert s["success"] == 1
+    assert s["fallback"] == 1
+
+    # Широкое окно включает старое событие.
+    s2 = m.summary(hours=24.0)
+    assert s2["deny"].get("worker_disconnected") == 1
+    assert s2["deny_total"] == 4

@@ -18,6 +18,7 @@ from services.neurochat.class_bridge import apply_neuro_class_commands
 from services.neurochat.commands import extract_commands, user_asked_for_link
 from services.neurochat.llm_service import generate_reply_with_retries_and_fallback
 from services.neurochat.manager import prepare_incoming_context
+from services.neurochat.monitor import neuro_monitor
 from services.neurochat.post_actions import (
     persist_dialog_turn,
     process_send_link_command,
@@ -139,6 +140,7 @@ async def handle_incoming(worker: Any, event: events.NewMessage.Event) -> None:
             peer_uid=int(peer_uid),
         )
         if not prepared:
+            neuro_monitor.record_deny(prep_reason or "unknown")
             log.info(
                 f"Neuro incoming denied: reason={prep_reason} mailing={mailing.id} "
                 f"account={worker.account.id} client={client.id}"
@@ -195,6 +197,7 @@ async def handle_incoming(worker: Any, event: events.NewMessage.Event) -> None:
                 generation=generation,
             )
         if not reply:
+            neuro_monitor.record_fallback()
             log.warning(f"Neuro LLM: {err}; fallback to template")
             await telemetry_emitter.emit_event(
                 "warning",
@@ -203,6 +206,8 @@ async def handle_incoming(worker: Any, event: events.NewMessage.Event) -> None:
                 payload={"account_id": worker.account.id, "peer_id": int(peer_uid), "error": err or ""},
             )
             reply = NEURO_UNAVAILABLE_TEMPLATE
+        else:
+            neuro_monitor.record_success()
 
         reply = reply.replace("{link}", link_for_prompt).strip()
         reply, cmd_send_link, cmd_stop, cmd_accept, cmd_decline, cmd_hater = extract_commands(reply)

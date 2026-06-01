@@ -6,6 +6,7 @@ import json
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
@@ -32,6 +33,7 @@ from services.neurochat.admin_service import (
     has_prompt_file,
     load_prompt_text,
 )
+from services.neurochat.monitor import DENY_REASONS, neuro_monitor
 from utils.crypto_openrouter import mask_api_key
 from utils.links import normalize_public_link
 from utils.neuro_sampling import (
@@ -97,6 +99,14 @@ async def _render_neurochat_hub(callback: CallbackQuery) -> None:
     rows.append(
         [
             InlineKeyboardButton(
+                text="📊 Мониторинг нейрочата",
+                callback_data="neurochat_monitor_24",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
                 text="⬅️ В главное меню",
                 callback_data="menu_back",
             )
@@ -149,6 +159,78 @@ async def cb_neurochat_global_reset(callback: CallbackQuery, state: FSMContext):
         await InstanceSettingsRepository.clear_neurochat_enabled(session)
     await _render_neurochat_hub(callback)
     await callback.answer("Глобальный режим берется из .env")
+
+
+# ==================== Мониторинг нейрочата (deny-причины) ====================
+
+_DENY_LABELS = {
+    "global_disabled": "глобально выключен",
+    "mailing_local_disabled": "выключен в рассылке",
+    "worker_disconnected": "аккаунт офлайн",
+    "client_class_bl": "клиент в ЧС (bl)",
+    "client_class_stop": "клиент в стопе",
+    "account_manual_mode": "ручной режим аккаунта",
+}
+
+
+def _format_neuro_monitor(hours: float) -> str:
+    s = neuro_monitor.summary(hours=hours)
+    deny = s["deny"]
+    lines = [
+        f"🧠📊 <b>Мониторинг нейрочата</b> (за {hours:g} ч)\n",
+        f"✅ Успешных ответов: <b>{s['success']}</b>",
+        f"↩️ Фолбэков (LLM недоступен): <b>{s['fallback']}</b>",
+        "",
+        f"⛔ Отказы (deny): <b>{s['deny_total']}</b>",
+    ]
+    if s["deny_total"]:
+        for r in DENY_REASONS:
+            if deny.get(r):
+                lines.append(f"  • {_DENY_LABELS.get(r, r)}: {deny[r]}")
+        for r, n in deny.items():  # неизвестные причины, если появятся
+            if r not in DENY_REASONS:
+                lines.append(f"  • {r}: {n}")
+    else:
+        lines.append("  <i>— нет отказов в окне —</i>")
+    lines.append("\n<i>Счётчики в памяти процесса, сбрасываются при рестарте.</i>")
+    return "\n".join(lines)
+
+
+def _neuro_monitor_kb(hours: float) -> InlineKeyboardMarkup:
+    def _b(h: int, label: str) -> InlineKeyboardButton:
+        mark = "• " if float(h) == float(hours) else ""
+        return InlineKeyboardButton(text=f"{mark}{label}", callback_data=f"neurochat_monitor_{h}")
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [_b(1, "1 ч"), _b(6, "6 ч"), _b(24, "24 ч")],
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"neurochat_monitor_{hours:g}")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_neurochat")],
+        ]
+    )
+
+
+@router.callback_query(F.data.startswith("neurochat_monitor_"))
+async def cb_neurochat_monitor(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await state.clear()
+    raw = (callback.data or "").rsplit("_", 1)[-1]
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = 24.0
+    try:
+        await callback.message.edit_text(
+            _format_neuro_monitor(hours),
+            reply_markup=_neuro_monitor_kb(hours),
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramBadRequest as e:
+        if "not modified" not in (e.message or str(e)).lower():
+            raise
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("neurochat_progress_"))
