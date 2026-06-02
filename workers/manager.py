@@ -834,10 +834,43 @@ class WorkerManager:
                 return
             await asyncio.sleep(min(0.5, end - time.monotonic()))
 
+    async def _pool_member_ids(self, gid: Optional[int]) -> set[int]:
+        """ID аккаунтов, которые должны быть в пуле (группа gid или все) и у
+        которых есть файл сессии — то есть ровно то, что загрузил бы load_accounts."""
+        sessions_dir = Path("data/sessions")
+        async with session_scope() as session:
+            if gid is not None:
+                member_ids = await GroupRepository.get_member_account_ids(session, gid)
+                accounts = [
+                    a for a in await AccountRepository.get_all(session) if a.id in member_ids
+                ]
+            else:
+                accounts = await AccountRepository.get_all(session)
+        return {
+            a.id
+            for a in accounts
+            if (sessions_dir / f"{a.session_name}.session").exists()
+        }
+
     async def _restore_workers_after_mailing(self) -> None:
-        """Восстановление пула после рассылки: только группа этой рассылки (без лишних входов)."""
+        """
+        Восстановление пула после рассылки (только группа этой рассылки).
+
+        Важно: если нужный пул уже загружен (а после рассылки аккаунты и так
+        подключены для нейрочата) — НЕ делаем лишний disconnect_all + reconnect.
+        Переподключение уже-авторизованной сессии бессмысленно и зря дёргает
+        сессии. Reconnect выполняется только если состав пула изменился.
+        """
         try:
             gid = self._last_mailing_group_id
+            needed_ids = await self._pool_member_ids(gid)
+            if needed_ids and needed_ids == set(self.workers.keys()):
+                connected = sum(1 for w in self.workers.values() if w.is_connected)
+                log.info(
+                    f"Пул после рассылки уже актуален ({connected}/{len(needed_ids)} "
+                    "подключено) — лишний реконнект пропущен."
+                )
+                return
             await self.load_accounts(group_id=gid)
             await self.connect_all(quiet_unauthorized=True)
             if gid is not None:

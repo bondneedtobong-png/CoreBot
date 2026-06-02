@@ -167,3 +167,52 @@ def test_group_count_and_delete_empty():
 
     asyncio.run(run())
     asyncio.run(engine.dispose())
+
+
+def _patch_restore(monkeypatch, mgr, pool_ids):
+    calls = {"load": 0, "connect": 0}
+
+    async def _pool(self, gid):
+        return set(pool_ids)
+
+    async def _load(self, **k):
+        calls["load"] += 1
+
+    async def _connect(self, **k):
+        calls["connect"] += 1
+        return {}
+
+    monkeypatch.setattr(mgr.WorkerManager, "_pool_member_ids", _pool)
+    monkeypatch.setattr(mgr.WorkerManager, "load_accounts", _load)
+    monkeypatch.setattr(mgr.WorkerManager, "connect_all", _connect)
+    return calls
+
+
+def test_restore_skips_reconnect_when_pool_matches(monkeypatch):
+    import workers.manager as mgr
+
+    wm = mgr.WorkerManager()
+    wm._last_mailing_group_id = 1
+    wm.workers = {
+        1: SimpleNamespace(is_connected=True),
+        2: SimpleNamespace(is_connected=True),
+    }
+    calls = _patch_restore(monkeypatch, mgr, {1, 2})
+
+    asyncio.run(wm._restore_workers_after_mailing())
+    # Пул совпал → ни disconnect/load, ни reconnect не вызываются.
+    assert calls == {"load": 0, "connect": 0}
+    assert wm._mailing_busy is False
+
+
+def test_restore_reconnects_when_pool_differs(monkeypatch):
+    import workers.manager as mgr
+
+    wm = mgr.WorkerManager()
+    wm._last_mailing_group_id = 1
+    wm.workers = {1: SimpleNamespace(is_connected=True)}  # не хватает аккаунта 2
+    calls = _patch_restore(monkeypatch, mgr, {1, 2})
+
+    asyncio.run(wm._restore_workers_after_mailing())
+    # Состав изменился → перезагрузка пула.
+    assert calls == {"load": 1, "connect": 1}
