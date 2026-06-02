@@ -261,6 +261,9 @@ def get_accounts_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📋 Список аккаунтов", callback_data="accounts_list"),
         ],
         [
+            InlineKeyboardButton(text="📁 Группы аккаунтов", callback_data="accounts_groups"),
+        ],
+        [
             InlineKeyboardButton(text="🧹 Чистка / проверка прокси", callback_data="acc_cleanup_menu"),
         ],
         [
@@ -345,7 +348,7 @@ def get_accounts_list_keyboard(accounts: list, *, page: int = 0) -> InlineKeyboa
 
 
 def get_account_groups_menu_keyboard(groups: list) -> InlineKeyboardMarkup:
-    """Список групп аккаунтов + создать + назад к списку аккаунтов."""
+    """Список групп аккаунтов + создать + чистка пустых + назад."""
     rows = []
     for g in groups:
         rows.append([
@@ -354,8 +357,15 @@ def get_account_groups_menu_keyboard(groups: list) -> InlineKeyboardMarkup:
     rows.append([
         InlineKeyboardButton(text="➕ Создать группу", callback_data="groups_create_start"),
     ])
+    if groups:
+        rows.append([
+            InlineKeyboardButton(
+                text="🗑 Удалить пустые группы",
+                callback_data="groups_delete_empty",
+            ),
+        ])
     rows.append([
-        InlineKeyboardButton(text="⬅️ Назад", callback_data="accounts_list"),
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_accounts"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

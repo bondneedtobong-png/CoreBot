@@ -1006,6 +1006,29 @@ class GroupRepository:
         return True
 
     @staticmethod
+    async def count_empty(session: AsyncSession) -> int:
+        """Сколько групп без аккаунтов (для чистки старых групп)."""
+        used = select(account_groups.c.group_id)
+        return int(
+            await session.scalar(
+                select(func.count(Group.id)).where(~Group.id.in_(used))
+            )
+            or 0
+        )
+
+    @staticmethod
+    async def delete_empty(session: AsyncSession) -> int:
+        """Удалить все группы без аккаунтов. Возвращает число удалённых."""
+        used = select(account_groups.c.group_id)
+        ids = list(
+            (await session.execute(select(Group.id).where(~Group.id.in_(used)))).scalars().all()
+        )
+        if ids:
+            await session.execute(delete(Group).where(Group.id.in_(ids)))
+            await session.commit()
+        return len(ids)
+
+    @staticmethod
     async def add_account(session: AsyncSession, group_id: int, account_id: int) -> bool:
         g = await GroupRepository.get_by_id(session, group_id)
         a = await AccountRepository.get_by_id(session, account_id)

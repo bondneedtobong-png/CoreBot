@@ -14,10 +14,13 @@ from database.models import (
     Client,
     ClientInteraction,
     ClientStatus,
+    Group,
     NeuroChatMessage,
     Proxy,
     ProxyType,
+    account_groups,
 )
+from database.repositories import GroupRepository
 from services.database import fleet_cleanup
 
 
@@ -131,3 +134,36 @@ def test_connect_all_skips_dead_and_missing_proxy(monkeypatch):
         w.connected = False
     summary2 = asyncio.run(wm.connect_all(require_working_proxy=False))
     assert summary2["connected"] == 3
+
+
+def test_group_count_and_delete_empty():
+    engine = _engine()
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def run():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with Session() as s:
+            g1 = Group(name="empty1")
+            g2 = Group(name="empty2")
+            g3 = Group(name="hasacc")
+            a = Account(phone="+9", session_name="s9")
+            s.add_all([g1, g2, g3, a])
+            await s.commit()
+            for x in (g1, g2, g3, a):
+                await s.refresh(x)
+            await s.execute(
+                account_groups.insert().values(account_id=a.id, group_id=g3.id)
+            )
+            await s.commit()
+
+            assert await GroupRepository.count_empty(s) == 2
+            n = await GroupRepository.delete_empty(s)
+            assert n == 2
+            assert await GroupRepository.count_empty(s) == 0
+            remaining = await GroupRepository.get_all(s)
+            # Группа с аккаунтом сохранилась.
+            assert {g.name for g in remaining} == {"hasacc"}
+
+    asyncio.run(run())
+    asyncio.run(engine.dispose())

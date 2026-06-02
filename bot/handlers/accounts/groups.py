@@ -543,6 +543,69 @@ async def cb_group_delete_yes(callback: CallbackQuery):
     )
 
 
+@router.callback_query(F.data == "groups_delete_empty")
+async def cb_groups_delete_empty(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await state.clear()
+    async with session_scope() as session:
+        n = await GroupRepository.count_empty(session)
+    await callback.answer()
+    if not n:
+        await safe_edit_message(
+            callback.message,
+            "Пустых групп нет.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="accounts_groups")]]
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await safe_edit_message(
+        callback.message,
+        f"🗑 Удалить пустые группы: <b>{n}</b>?\n\n"
+        "Удалятся только группы <b>без аккаунтов</b>. Группы с аккаунтами не "
+        "затрагиваются, сами аккаунты — тоже.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=f"✅ Да, удалить {n}", callback_data="groups_delete_empty_do")],
+                [InlineKeyboardButton(text="⬅️ Отмена", callback_data="accounts_groups")],
+            ]
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data == "groups_delete_empty_do")
+async def cb_groups_delete_empty_do(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await state.clear()
+    async with session_scope() as session:
+        n = await GroupRepository.delete_empty(session)
+    log.info(f"Удалено пустых групп аккаунтов: {n}")
+    await callback.answer(f"Удалено: {n}")
+    async with session_scope() as session:
+        groups = await GroupRepository.get_all(session)
+    text = (
+        "📁 <b>Группы аккаунтов</b>\n\n"
+        + (
+            f"Удалено пустых: {n}. Всего сейчас: {len(groups)}.\n"
+            "Выберите группу или создайте новую."
+            if groups
+            else f"Удалено пустых: {n}. Групп больше нет — создайте новую."
+        )
+    )
+    await safe_edit_message(
+        callback.message,
+        text,
+        reply_markup=get_account_groups_menu_keyboard(groups),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 # ==================== Массовая 2FA по группе ====================
 
 
