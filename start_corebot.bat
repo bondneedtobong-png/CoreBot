@@ -63,14 +63,13 @@ if not exist ".env" (
 )
 
 echo [3/5] Validating .env...
-"%PYTHON%" -c "from bot.config import validate_config; raise SystemExit(0 if validate_config() else 1)"
+"%PYTHON%" -m tools.validate_config --mode local
 if errorlevel 1 (
     echo ERROR: Required values are missing or invalid in .env.
     echo        Check API_ID, API_HASH, BOT_TOKEN and OWNER_ID.
+    echo        Details: python -m tools.validate_config --mode local
     exit /b 21
 )
-
-"%PYTHON%" -c "from control_plane.config import CP_JWT_SECRET,CP_BOOTSTRAP_ADMIN_PASSWORD; import sys; unsafe=CP_JWT_SECRET.startswith('change-me') or CP_BOOTSTRAP_ADMIN_PASSWORD in ('admin123','change-me-please'); print('WARNING: replace Control Plane default secrets in .env' if unsafe else 'Control Plane secrets: configured')"
 
 if /I "%MODE%"=="--check" (
     echo [4/5] CHECK OK

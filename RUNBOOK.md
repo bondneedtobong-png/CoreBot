@@ -209,6 +209,7 @@ User=corebot
 Group=corebot
 WorkingDirectory=/opt/corebot/app
 EnvironmentFile=/opt/corebot/app/.env
+ExecStartPre=/opt/corebot/venv/bin/python -m tools.validate_config --mode production
 ExecStart=/opt/corebot/venv/bin/uvicorn control_plane.main:app --host 127.0.0.1 --port 8081
 Restart=on-failure
 RestartSec=5
@@ -244,6 +245,7 @@ User=corebot
 Group=corebot
 WorkingDirectory=/opt/corebot/app
 EnvironmentFile=/opt/corebot/app/.env
+ExecStartPre=/opt/corebot/venv/bin/python -m tools.validate_config --mode production
 ExecStart=/opt/corebot/venv/bin/python main.py
 Restart=on-failure
 RestartSec=10
@@ -520,7 +522,19 @@ systemctl disable --now corebot-cp.service
 
 ### 12.2. Секреты
 
-Перед запуском проверьте, что `.env` не содержит `change-me`, `admin123` и пустых обязательных Telegram-переменных:
+Перед запуском проверьте `.env` общей командой (валидирует бота и Control
+Plane по `docs/operations/CONFIG_CONTRACT.md`; секреты в выводе маскируются,
+exit 0 — ok, 2 — ошибка конфигурации). В репозитории нет systemd-юнитов —
+юниты генерирует installer, в оба он уже вписывает `ExecStartPre` с этой
+командой, поэтому сервис с небезопасным конфигом не стартует:
+
+```bash
+cd /opt/corebot/app
+COREBOT_ENV=production /opt/corebot/venv/bin/python -m tools.validate_config --mode production
+```
+
+Запасная Bash-проверка без Python (дублирует fail-fast намеренно — работает
+до установки venv):
 
 ```bash
 cd /opt/corebot/app

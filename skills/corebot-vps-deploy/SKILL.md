@@ -26,6 +26,7 @@ Obtain the SSH host/user, source method (Git checkout or uploaded directory), an
 - The installer refuses a non-empty target directory.
 - Never overwrite an existing `.env`, `data/`, `logs/`, or `data/sessions/`.
 - Reject empty Telegram credentials and unsafe values such as `change-me` or `admin123`.
+- Validate with the shared gate `python -m tools.validate_config --mode production` (plus `ExecStartPre` in both units); keep the scripts' Bash env checks as the pre-venv early gate.
 - Bind the Control Plane to `127.0.0.1:8081`; do not open port 8081 in UFW.
 - Use `/opt/corebot/app` and `/opt/corebot/venv` unless the user explicitly chooses other paths.
 - For updates, back up first and update code without replacing persistent paths.

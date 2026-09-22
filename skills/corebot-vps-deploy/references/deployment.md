@@ -20,6 +20,25 @@ PARSER_EMBEDDED=1
 
 Generate secrets with `openssl rand -hex 32` without placing the resulting value in shell history.
 
+Validate with the shared gate before starting services (validates bot +
+Control Plane per `docs/operations/CONFIG_CONTRACT.md`; secrets are masked;
+exit 0 ok, 1 usage error, 2 config error):
+
+```bash
+COREBOT_ENV=production python3 /tmp/CoreBot/tools/validate_config.py --mode production --env-file /root/corebot.env
+```
+
+The installer writes both systemd units with a fail-fast hook (no unit files
+live in the repo; VPS units are not edited by hand):
+
+```ini
+ExecStartPre=/opt/corebot/venv/bin/python -m tools.validate_config --mode production
+```
+
+The installer/verifier Bash env checks are intentionally kept alongside the
+validator: they parse the env file directly with no Python dependency
+(pre-venv stage), the validator is the authoritative runtime gate.
+
 ## Remote flow
 
 1. Upload source and env file.

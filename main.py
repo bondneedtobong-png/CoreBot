@@ -3,6 +3,7 @@
 Запуск Control Bot и инициализация всех компонентов.
 """
 import asyncio
+import os
 import sys
 
 from loguru import logger
@@ -37,7 +38,19 @@ async def main():
         sys.exit(1)
     
     log.info(f"Владелец бота: {OWNER_ID}")
-    
+
+    # Task 04: production fail-fast до подключения БД/парсера.
+    # Local-режим: no-op, поведение старта не меняется.
+    if (os.getenv("COREBOT_ENV", "local") or "local").strip().lower() == "production":
+        from tools.validate_config import require_valid_production_config
+
+        try:
+            require_valid_production_config("production")
+        except RuntimeError as exc:
+            log.error(str(exc))
+            log.error("Проверьте .env: python -m tools.validate_config --mode production")
+            sys.exit(2)
+
     # Инициализация базы данных
     from database.repository import db
     try:

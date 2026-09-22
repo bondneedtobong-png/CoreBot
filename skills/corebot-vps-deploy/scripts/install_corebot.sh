@@ -51,6 +51,18 @@ admin_password=$(get_env CP_BOOTSTRAP_ADMIN_PASSWORD)
 [[ "$(get_env CP_DATABASE_URL)" == sqlite:////* ]] || { echo "CP_DATABASE_URL must use an absolute SQLite path" >&2; exit 3; }
 parser_mode=$(get_env PARSER_EMBEDDED || true)
 [[ -z "$parser_mode" || "$parser_mode" == 0 || "$parser_mode" == 1 ]] || { echo "PARSER_EMBEDDED must be 0 or 1" >&2; exit 3; }
+# Shared Python validator (task 04): single source of truth for bot + Control
+# Plane rules (stdlib-only, runs on system python3 before the venv exists).
+# The Bash checks above stay as the pre-venv early gate: they need no Python
+# and parse the env file directly. Nothing is removed here on purpose.
+if [[ -f "$SOURCE_DIR/tools/validate_config.py" ]]; then
+  COREBOT_ENV=production python3 "$SOURCE_DIR/tools/validate_config.py" --mode production --env-file "$ENV_FILE" || {
+    echo "Shared config validator rejected the env file (see errors above)" >&2
+    exit 3
+  }
+else
+  echo "WARNING: shared config validator not found in source dir; Bash checks only" >&2
+fi
 if [[ -d "$APP_DIR" && -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
   echo "Refusing to overwrite non-empty APP_DIR: $APP_DIR" >&2
   echo "Use the backup/update workflow for an existing installation." >&2
@@ -115,6 +127,7 @@ User=$COREBOT_USER
 Group=$COREBOT_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$APP_DIR/.env
+ExecStartPre=$VENV_DIR/bin/python -m tools.validate_config --mode production
 ExecStart=$VENV_DIR/bin/uvicorn control_plane.main:app --host 127.0.0.1 --port 8081
 Restart=on-failure
 RestartSec=5
@@ -136,6 +149,7 @@ User=$COREBOT_USER
 Group=$COREBOT_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$APP_DIR/.env
+ExecStartPre=$VENV_DIR/bin/python -m tools.validate_config --mode production
 ExecStart=$VENV_DIR/bin/python main.py
 Restart=on-failure
 RestartSec=10

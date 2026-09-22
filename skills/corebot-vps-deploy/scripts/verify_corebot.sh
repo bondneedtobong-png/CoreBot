@@ -21,6 +21,25 @@ if [[ "${mode:-1}" == 1 ]] && { systemctl is-enabled --quiet corebot-parser.serv
   echo "Embedded parser and standalone corebot-parser.service cannot be enabled together" >&2
   exit 4
 fi
+# Shared Python validator (task 04) as the authoritative gate. The Bash checks
+# above stay: they parse the env file directly with no Python dependency.
+# Nothing is removed here on purpose (defense in depth, pre-venv stage).
+if [[ -f "$APP_DIR/tools/validate_config.py" ]]; then
+  if [[ -x /opt/corebot/venv/bin/python ]]; then
+    VALIDATOR_PY=/opt/corebot/venv/bin/python
+  elif command -v python3 >/dev/null 2>&1; then
+    VALIDATOR_PY=python3
+  else
+    VALIDATOR_PY=
+  fi
+  if [[ -n "${VALIDATOR_PY:-}" ]]; then
+    (cd "$APP_DIR" && COREBOT_ENV=production "$VALIDATOR_PY" -m tools.validate_config --mode production --env-file "$ENV_FILE") || exit 3
+  else
+    echo "WARNING: no Python found; shared config validator skipped, Bash checks only" >&2
+  fi
+else
+  echo "WARNING: shared config validator not found in $APP_DIR; Bash checks only" >&2
+fi
 systemctl is-active --quiet corebot-cp.service
 systemctl is-active --quiet corebot.service
 curl --fail --silent --show-error "$READY_URL"

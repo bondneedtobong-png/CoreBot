@@ -224,6 +224,17 @@ uvicorn control_plane.main:app --host 127.0.0.1 --port 8081
 
 Обязательные: `API_ID`, `API_HASH`, `BOT_TOKEN`, `OWNER_ID`.
 
+Режим валидации — `COREBOT_ENV`: `local` (по умолчанию, разработка:
+предупреждения вместо ошибок, loopback разрешён) или `production` (VPS:
+fail-fast до старта сервисов при пустых credentials, `change-me*`/`admin123`,
+коротком `CP_JWT_SECRET`, относительных sqlite-путях). Одна команда проверяет
+конфиг бота и Control Plane (секреты в выводе маскируются):
+
+```powershell
+python -m tools.validate_config --mode local       # разработка, exit 0 + warnings
+python -m tools.validate_config --mode production  # как на VPS, exit 2 при ошибках
+```
+
 Часто нужные:
 
 | Переменная | Смысл | Дефолт |
@@ -338,6 +349,7 @@ python -c "from fastapi.testclient import TestClient; from control_plane.main im
 ```bash
 openssl rand -hex 32
 chmod 600 /opt/corebot/app/.env
+COREBOT_ENV=production python -m tools.validate_config --mode production
 curl --fail http://127.0.0.1:8081/health/ready
 journalctl -u corebot.service -u corebot-cp.service -n 100 --no-pager
 ```

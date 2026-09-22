@@ -56,6 +56,12 @@ async def lifespan(app: FastAPI):
     """
     app.state.parser_task = None
     parser_task = None
+    # Task 04: production fail-fast до bootstrap/БД/парсера.
+    # Local-режим: no-op, поведение старта не меняется.
+    if (os.getenv("COREBOT_ENV", "local") or "local").strip().lower() == "production":
+        from tools.validate_config import require_valid_production_config
+
+        require_valid_production_config("production")
     try:
         bootstrap_defaults()
         if not is_parser_embedded_enabled():

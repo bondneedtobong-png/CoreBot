@@ -82,3 +82,31 @@
   синхронен внутри lifespan — кандидат на `to_thread` (задача 05); стаб
   `tdata_routes` в новом тесте условный — при установленном multipart тесты идут
   по реальному пути.
+
+## 04 — Централизованная конфигурация и production-secrets ✅ принята 2026-09-22
+
+- Commit: (см. git log, `feat: task 04 centralized config validation + production fail-fast`).
+- База исполнения: `49f99d1` (задача 03).
+- Создано: `tools/__init__.py`, `tools/validate_config.py` (stdlib-only, env
+  перечитывается при вызове; `validate(mode, env)`, `require_valid_production_config()`,
+  CLI `--mode local|production [--env-file]`, exit 0/1/2; секреты не печатаются —
+  только имена + длина), `tests/test_config_validation.py` (39 тестов).
+- Изменено: `main.py` + `control_plane/main.py` (production-gate до `db.connect()`/
+  `bootstrap_defaults()`, local — no-op); `start_corebot.bat --check` на общем
+  валидаторе; `skills/corebot-vps-deploy/scripts/{install,verify}_corebot.sh`
+  (вызов валидатора + `ExecStartPre --mode production` в генерируемых юнитах);
+  `skills/.../SKILL.md`, `references/deployment.md`; `.env.example` (`COREBOT_ENV`
+  + fail-fast-комментарии); `QUICKSTART.md`, `RUNBOOK.md` (минимально, по контракту).
+- Проверки (оркестратор, независимо): `tests/test_config_validation.py` — 39/39;
+  полный `pytest -q` — 106 passed + те же 2 предсуществующих tdata/multipart;
+  эталоны в TEMP (удалены): prod-дефолт → exit 2 (8 ошибок), prod-синтетика → 0,
+  `--mode bogus` → 1; скан значений секретов в обоих выводах — 0 совпадений;
+  `git diff --check` чист; `.env`/`data/*` не тронуты, секретов в репо нет.
+- Отклонение от текста задачи (обоснованное, принято): Bash-валидация НЕ удалена —
+  оставлена как pre-venv early gate (работает без Python до установки venv),
+  валидатор добавлен как authoritative runtime-gate + ExecStartPre.
+- Риски следующим задачам: production требует абсолютных sqlite-путей — задача 05
+  не должна их делать относительными; installer падает раньше (exit валидатора) —
+  учесть в rollback-процедурах задачи 06; fleet-генератор задачи 07 — плоский
+  `KEY=value` без expansion; при новых env-переменных пополнять `KNOWN_KEYS`
+  в тестах (задача 10).
