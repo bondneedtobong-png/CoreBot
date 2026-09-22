@@ -47,6 +47,38 @@ validator: they parse the env file directly with no Python dependency
 4. Run verifier.
 5. Access the panel through `ssh -L 8081:127.0.0.1:8081 user@vps`.
 
-## Update flow
+## Update flow (versioned, task 06)
 
-Back up first, stage new source separately, preserve `.env`/`data`/`logs`, install changed requirements, restart both services, and require readiness HTTP 200.
+Release artifact: `<tag> (<sha12>)` plus `RELEASE.json` manifest with
+`version`, `sha`, `python_requires (>=3.11)`, `ubuntu (22.04, 24.04)`,
+`released_at` (UTC) and `code_checksum` (sha256 of the code tree).
+Live identity is served at `GET /version` (no secrets); `/health*`
+contracts are unchanged. The deployed SHA record lives in
+`/opt/corebot/app/.deployed_sha`; `scripts/release_status.sh` prints
+manifest plus live `/version` (allowlisted fields only).
+
+Run from the app checkout on the VPS (`scripts/update_corebot.sh`):
+
+```bash
+cd /opt/corebot/app
+sudo bash scripts/update_corebot.sh --dry-run --sha <sha>   # plan only, touches nothing
+sudo bash scripts/update_corebot.sh --sha <sha>             # or --tag <tag>, or --branch <name>
+bash scripts/release_status.sh
+```
+
+Strict order inside the script (SLO: service stop <= 5 min):
+
+1. Preflight: production validator, git state, Python 3.11+, free disk (>= 2 GB default).
+2. Backup via `scripts/backup_corebot.sh`; the archive must exist and be non-empty.
+3. Stage: `git archive <sha>` into a temp dir (never `git pull` / `git reset --hard` on the live checkout) plus a fresh `RELEASE.json`.
+4. Dependencies from the staged tree.
+5. Stop `corebot-cp.service`, then `corebot.service`; rsync the stage over the code with `--checksum`, excluding `.git`, `.env`, `data/`, `logs/`.
+6. Start `corebot-cp.service`, then `corebot.service`.
+7. Readiness gate: `/health/live` + `/health/ready` HTTP 200 (default 18 x 10 s), then live `/version` SHA must equal the target and both units must be active.
+8. Success writes `.deployed_sha`; repeat of the same SHA is a logged no-op.
+
+Rollback is automatic when step 7 fails: previous staged code is swapped
+back, `.env`/`data/` are restored from the pre-update backup (logs are kept
+for forensics), services restart in the same order, health is re-checked.
+Exit codes: `0` ok/no-op/dry-run, `2` pre-swap failure (nothing changed),
+`3` rolled back, `4` rollback incomplete (manual recovery, RUNBOOK 17).

@@ -30,3 +30,8 @@ logs/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Release artifacts (task 06, generated on the VPS by make_release.py,
+# never committed: version source of truth is VERSION + git SHA)
+RELEASE.json
+.deployed_sha

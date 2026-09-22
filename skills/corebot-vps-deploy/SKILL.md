@@ -19,7 +19,8 @@ Obtain the SSH host/user, source method (Git checkout or uploaded directory), an
 4. Run `scripts/install_corebot.sh --dry-run` with the intended paths.
 5. Request explicit authorization immediately before SSH uploads, package installation, systemd writes, service restarts, firewall changes, or deployment.
 6. Run the installer on the VPS as root, then run `scripts/verify_corebot.sh`.
-7. Report service state, readiness, backup path, and remaining manual action. Never report success if `/health/ready` is not HTTP 200.
+7. For updates, use the versioned flow from the app checkout (`scripts/update_corebot.sh --sha <sha>`, dry-run first): it backs up, stages the SHA outside the persistent checkout, restarts `corebot-cp` then `corebot`, gates on readiness, and rolls back automatically on failure. Never `git pull` / `git reset --hard` the live checkout.
+8. After any install or update, report deployed SHA/version via `scripts/release_status.sh` and live `GET /version`. Never report success if `/health/ready` is not HTTP 200.
 
 ## Safety contract
 
@@ -30,6 +31,9 @@ Obtain the SSH host/user, source method (Git checkout or uploaded directory), an
 - Bind the Control Plane to `127.0.0.1:8081`; do not open port 8081 in UFW.
 - Use `/opt/corebot/app` and `/opt/corebot/venv` unless the user explicitly chooses other paths.
 - For updates, back up first and update code without replacing persistent paths.
+- Release artifact is `<tag> (<sha12>)` plus `RELEASE.json` manifest (version, sha, python_requires, ubuntu, released_at, code_checksum), served live at `GET /version` (no secrets). Update pins an explicit SHA; "latest master" updates are forbidden.
+- Restart order is always `corebot-cp.service` then `corebot.service`; the "new bot + old Control Plane" state is forbidden (checked via `/version` before success).
+- Rollback is automatic on readiness/version failure: previous code plus `.env`/`data/` from the pre-update backup, services restarted in the same order, health re-checked.
 
 ## Commands
 
@@ -37,6 +41,10 @@ Obtain the SSH host/user, source method (Git checkout or uploaded directory), an
 sudo bash scripts/install_corebot.sh --source-dir /tmp/CoreBot --env-file /root/corebot.env
 sudo bash scripts/verify_corebot.sh
 sudo bash scripts/backup_corebot.sh
+cd /opt/corebot/app && sudo bash scripts/update_corebot.sh --dry-run --sha <sha>
+cd /opt/corebot/app && sudo bash scripts/update_corebot.sh --sha <sha>
+bash scripts/release_status.sh
+curl --fail http://127.0.0.1:8081/version
 ```
 
 For failures, read `references/troubleshooting.md` before changing configuration.

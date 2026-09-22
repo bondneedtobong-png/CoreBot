@@ -139,3 +139,33 @@
 - Риски следующим задачам: playbook задачи 07 — проверка PRAGMA-паритета;
   задаче 08 забрать `SQLITE_BUSY_RETRY_STATS` в алерты; drill задачи 09 меряет
   порог restore ≤30 мин; нагрузке задачи 11 упереться в пороги ADR — ожидаемо.
+
+## 06 — Версионируемый deploy, update и rollback одного VPS ✅ принята 2026-09-22
+
+- Commit: (см. git log, `feat: task 06 versioned single-VPS update + auto-rollback`).
+- База исполнения: `ee7d8bd` (задача 05).
+- Создано: `VERSION` (0.1.0), `control_plane/version.py` (`GET /version`,
+  allowlist version/sha/python_requires/ubuntu/released_at/code_checksum, без
+  секретов; `/health*` не тронуты), `scripts/release_lib.py`,
+  `scripts/make_release.py`, `scripts/release_status.sh`,
+  `tests/test_release_workflow.py` (27 тестов).
+- Изменено: `scripts/update_corebot.sh` (переписан: preflight → backup →
+  stage → deps → stop/swap cp→bot → start cp→bot → readiness-gate + version-паритет
+  → success(.deployed_sha) | авторолбэк + повторный gate; exit 0/2/3/4; --dry-run;
+  no-op; rsync --checksum), `control_plane/main.py` (+version_router),
+  `.gitignore` (RELEASE.json, .deployed_sha), `scripts/init_env.sh` (только
+  CRLF→LF), skill SKILL.md/deployment.md/troubleshooting.md, `RUNBOOK.md` (§17
+  восстановление после неудачного обновления).
+- Проверки (оркестратор): `bash -n` всех 6 .sh — OK (системным bash.exe);
+  `init_env.sh` diff — только line-endings; `/version` — чтением кода
+  (allowlist, секретов нет); `test_release_workflow` — 27/27; полный `pytest -q` —
+  144 passed + те же 2 предсуществующих tdata/multipart; `git diff --check` чист;
+  контракты, `.env`, `data/*` не тронуты; `git reset --hard` на persistent —
+  отсутствует. Симуляция rollback (мок systemctl/curl, tmp-репо v1→v2) — по отчёту
+  исполнителя: exit 3, код v1, persistent целы, порядок cp→bot ×2.
+- Примечание: персональный `~/.codex/skills/corebot-vps-deploy` синхронизирован
+  исполнителем (вне git, не коммитится).
+- Риски следующим задачам: `docs/VPS_UPDATE_GUIDE.md` описывает старый flow —
+  обновить в задаче 07; алерты на exit 3/4 и version-MISMATCH — задача 08;
+  ручной откат из RUNBOOK §17 прогнать в drill задачи 09; CI задачи 10 — `bash -n`
+  + e2e на Linux; первый реальный VPS-прогон update — только с --dry-run и бэкапом.

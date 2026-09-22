@@ -20,6 +20,7 @@ from control_plane.routes.admin import router as admin_router
 from control_plane.routes.business import router as business_router
 from control_plane.routes.stream import router as stream_router
 from control_plane.health import router as health_router
+from control_plane.version import router as version_router
 from control_plane.business.dashboard import router as biz_dashboard_router
 from control_plane.business.archive import router as biz_archive_router
 from control_plane.business.mailings import router as biz_mailings_router
@@ -98,6 +99,7 @@ app.include_router(admin_router)
 app.include_router(business_router)
 app.include_router(stream_router)
 app.include_router(health_router)
+app.include_router(version_router)
 app.include_router(biz_dashboard_router)
 app.include_router(biz_archive_router)
 app.include_router(biz_mailings_router)

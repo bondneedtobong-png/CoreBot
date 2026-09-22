@@ -564,3 +564,45 @@ journalctl -u corebot.service -u corebot-cp.service -n 100 --no-pager
 ```
 
 Порт `8081` не добавляйте в UFW. Для доступа используйте SSH-туннель либо nginx с HTTPS.
+
+---
+
+## 17) Восстановление после неудачного обновления (авто-rollback и ручной откат)
+
+Обновление `scripts/update_corebot.sh --sha <sha>` при провале readiness/version-гейта
+откатывается само: возвращает предыдущий код, восстанавливает `.env`/`data/` из
+только что созданного предобновленческого бэкапа (логи сохраняются для разбора),
+перезапускает `corebot-cp.service`, затем `corebot.service`, и перепроверяет health.
+Смотрите код завершения:
+
+- `0` — успех (`UPDATE OK`) или повтор того же SHA (`NO-OP`);
+- `3` — обновление не взлетело, но откат выполнен (`ROLLED BACK to <sha>`, бэкап указан);
+- `4` — откат неполный, нужно вмешательство (бэкап и SHA напечатаны).
+
+При `3`: разберите логи (`journalctl -u corebot.service -u corebot-cp.service -n 200`),
+устраните причину и повторите обновление с зафиксированным SHA. Проверьте
+`bash scripts/release_status.sh` и `curl --fail http://127.0.0.1:8081/health/ready`.
+
+При `4` (ручной откат):
+
+```bash
+systemctl stop corebot.service corebot-cp.service
+cd /opt/corebot/app
+BACKUP=/opt/corebot/backups/<corebot-YYYYMMDDTHHMMSSZ.tar.gz>  # из вывода скрипта
+mkdir -p /tmp/rb && tar -xzf "$BACKUP" -C /tmp/rb
+cp -p /tmp/rb/.env /opt/corebot/app/.env
+cp -a /tmp/rb/data/. /opt/corebot/app/data/
+git archive <prev-sha> | tar -x -C /tmp/prev
+rsync -a --delete --checksum --exclude /.git --exclude /.env --exclude /data \
+  --exclude /logs /tmp/prev/ /opt/corebot/app/
+chown -R corebot:corebot /opt/corebot/app
+chmod 600 /opt/corebot/app/.env
+systemctl restart corebot-cp.service
+systemctl restart corebot.service
+curl --fail http://127.0.0.1:8081/health/live
+curl --fail http://127.0.0.1:8081/health/ready
+bash scripts/release_status.sh
+```
+
+Никогда не выполняйте `git reset --hard` / `git pull` на живом `/opt/corebot/app`
+и не запускайте install-скрипт поверх существующей установки.
