@@ -38,6 +38,7 @@ from control_plane.business.schemas import (
 )
 from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
+from database.sqlite_pragmas import run_sync_with_busy_retry
 from database.models import (
     Account,
     AccountStatus,
@@ -695,7 +696,7 @@ def enqueue_manual_send(
         requested_by=getattr(user, "username", None),
     )
     db.add(row)
-    db.commit()
+    run_sync_with_busy_retry(db.commit, op_name="outbound-enqueue")
     db.refresh(row)
     return SendMessageOut(
         queue_id=int(row.id), status=row.status, enqueued_at=row.created_at
@@ -730,7 +731,7 @@ def retry_queue_item(
             sent_at=None,
         )
     )
-    db.commit()
+    run_sync_with_busy_retry(db.commit, op_name="outbound-retry")
     db.refresh(row)
     return SendMessageOut(
         queue_id=int(row.id), status=row.status, enqueued_at=row.created_at
@@ -759,7 +760,7 @@ def cancel_queue_item(
         .where(OutboundQueue.id == queue_id)
         .values(status="cancelled", next_attempt_at=None)
     )
-    db.commit()
+    run_sync_with_busy_retry(db.commit, op_name="outbound-cancel")
 
 
 @router.delete(

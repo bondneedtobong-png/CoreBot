@@ -7,10 +7,11 @@ Sync-подключение к основной базе бота (corebot.db).
 """
 from __future__ import annotations
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from control_plane.config import BOT_DATABASE_URL
+from database.sqlite_pragmas import register_sqlite_pragmas
 
 
 def _normalize_url(url: str) -> str:
@@ -34,17 +35,10 @@ bot_engine = create_engine(
 )
 
 
-@event.listens_for(bot_engine, "connect")
-def _set_sqlite_pragma(dbapi_conn, _conn_record):
-    if not _resolved_url.startswith("sqlite"):
-        return
-    cur = dbapi_conn.cursor()
-    try:
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.execute("PRAGMA busy_timeout=15000")
-        cur.execute("PRAGMA foreign_keys=ON")
-    finally:
-        cur.close()
+# Единые SQLite PRAGMA для всех engine (см. database/sqlite_pragmas.py).
+# URL не меняем: только PRAGMA/retry (требование tools/validate_config.py).
+if _resolved_url.startswith("sqlite"):
+    register_sqlite_pragmas(bot_engine)
 
 
 BotSession = sessionmaker(bind=bot_engine, autoflush=False, autocommit=False, future=True)

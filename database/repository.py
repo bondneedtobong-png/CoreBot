@@ -4,10 +4,11 @@
 """
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy import text, event
+from sqlalchemy import text
 
 from bot.config import DATABASE_URL
 from database.models import Base
+from database.sqlite_pragmas import register_async_sqlite_pragmas
 from utils.logger import log
 
 
@@ -37,14 +38,8 @@ class Database:
             pool_pre_ping=True,     # Проверка подключения перед использованием
         )
 
-        # Включаем WAL mode и busy_timeout для SQLite
-        @event.listens_for(self.engine.sync_engine, "connect")
-        def set_sqlite_pragma(dbapi_conn, connection_record):
-            cursor = dbapi_conn.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA busy_timeout=30000")  # 30 секунд
-            cursor.execute("PRAGMA wal_autocheckpoint=1000")
-            cursor.close()
+        # Единые SQLite PRAGMA для всех engine (см. database/sqlite_pragmas.py).
+        register_async_sqlite_pragmas(self.engine)
 
         self.async_session_maker = async_sessionmaker(
             self.engine,

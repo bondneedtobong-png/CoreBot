@@ -110,3 +110,32 @@
   учесть в rollback-процедурах задачи 06; fleet-генератор задачи 07 — плоский
   `KEY=value` без expansion; при новых env-переменных пополнять `KNOWN_KEYS`
   в тестах (задача 10).
+
+## 05 — Надёжность SQLite и транзакций ✅ принята 2026-09-22
+
+- Commit: (см. git log, `fix: task 05 unified SQLite PRAGMAs, busy retry, UPSERTs`).
+- База исполнения: `0dea82d` (задача 04).
+- Создано: `database/sqlite_pragmas.py` (единые WAL / foreign_keys=ON /
+  busy_timeout=30000 / wal_autocheckpoint=1000; `register_*` для sync и async;
+  retry только transient `SQLITE_BUSY` ≤5 попыток, exp-backoff+jitter,
+  `SQLITE_BUSY_RETRY_STATS`; таблица инвентаризации трёх engine в docstring),
+  `tests/test_sqlite_reliability.py` (11 тестов),
+  `docs/operations/adr/0002-sqlite-scaling-limits.md` (6 числовых порогов PG-триггера).
+- Изменено (10 файлов): `database/repository.py`, `database/repositories.py`,
+  `database/crm_repositories.py`, `control_plane/business/db.py`,
+  `control_plane/database.py`, `control_plane/business/mailings.py`,
+  `control_plane/routes/business.py`, `control_plane/business/tdata_routes.py`,
+  `workers/parser/storage.py`, `workers/bot_command_consumer.py` —
+  helper вместо инлайн-PRAGMA, UPSERT/ON CONFLICT + точечные idempotent-хендлеры
+  (Account.create, Client.create, counters, alive-window, sessions, groups,
+  transcripts, stops, mailing-state, proxy-cursor). Пути/URL БД не менялись.
+- Проверки (оркестратор): `git diff --check` чист; `BEGIN IMMEDIATE` — 0;
+  новые `except IntegrityError` — только 2 точечных (rollback + возврат
+  существующей строки, чтением кода); blanket-отсутствует; PRAGMA-паритет и
+  инвенторизация — чтением helper; `test_sqlite_reliability` — 11/11;
+  смежные concurrency/DB-тесты — зелёные; полный `pytest -q` — 117 passed +
+  те же 2 предсуществующих tdata/multipart; контракты 01, `.env`, `data/*`
+  не тронуты.
+- Риски следующим задачам: playbook задачи 07 — проверка PRAGMA-паритета;
+  задаче 08 забрать `SQLITE_BUSY_RETRY_STATS` в алерты; drill задачи 09 меряет
+  порог restore ≤30 мин; нагрузке задачи 11 упереться в пороги ADR — ожидаемо.

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from control_plane.business.tdata import find_tdata_roots
@@ -17,6 +18,7 @@ from control_plane.business.db import get_bot_db
 from control_plane.deps import require_operator_write
 from control_plane.models import User
 from database.models import Account, AccountStatus
+from database.sqlite_pragmas import run_sync_with_busy_retry
 from utils.logger import log
 from workers.session_converter import convert_tdata_to_session
 
@@ -24,6 +26,11 @@ router = APIRouter(prefix="/business/tdata", tags=["business-tdata"])
 
 
 def _create_account_from_tdata(db: Session, result: dict, list_label: Optional[str] = None) -> int:
+    """Идемпотентное создание аккаунта из TData.
+
+    Повторный импорт той же session_name возвращает существующий id вместо
+    падения (409/skip на границе, не blanket-обработчик).
+    """
     session_name = result.get("session_name", "")
     existing = db.query(Account).filter(Account.session_name == session_name).first()
     if existing:
@@ -39,7 +46,16 @@ def _create_account_from_tdata(db: Session, result: dict, list_label: Optional[s
         list_label=list_label,
     )
     db.add(row)
-    db.commit()
+    try:
+        run_sync_with_busy_retry(db.commit, op_name="tdata-create-account")
+    except IntegrityError:
+        # Конкурентный дубль: откат и возврат существующей строки.
+        db.rollback()
+        existing = db.query(Account).filter(Account.session_name == session_name).first()
+        if existing is not None:
+            log.info(f"TData дубль {session_name}: уже в БД, пропуск (idempotent)")
+            return int(existing.id)
+        raise
     db.refresh(row)
     return int(row.id)
 

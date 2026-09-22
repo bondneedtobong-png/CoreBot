@@ -13,8 +13,16 @@ from bot.config import (
 )
 from utils.crypto_openrouter import decrypt_openrouter_key, encrypt_openrouter_key
 from sqlalchemy import select, update, delete, func, or_
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+from database.sqlite_pragmas import (
+    commit_with_busy_retry,
+    execute_with_busy_retry,
+    run_with_busy_retry,
+)
 
 from database.models import (
     Account, AccountStatus,
@@ -208,11 +216,19 @@ class InstanceSettingsRepository:
             select(InstanceSettings).where(InstanceSettings.id == InstanceSettingsRepository._ROW_ID)
         )
         row = result.scalar_one_or_none()
-        if row is None:
-            row = InstanceSettings(id=InstanceSettingsRepository._ROW_ID)
-            session.add(row)
-            await session.commit()
-            await session.refresh(row)
+        if row is not None:
+            return row
+        # Синглтон id=1: ON CONFLICT DO NOTHING делает конкурентное создание
+        # идемпотентным (два процесса одновременно — одна строка, без падения).
+        stmt = sqlite_insert(InstanceSettings).values(id=InstanceSettingsRepository._ROW_ID)
+        stmt = stmt.on_conflict_do_nothing(index_elements=[InstanceSettings.id])
+        await execute_with_busy_retry(session, stmt, op_name="settings-get-row")
+        await commit_with_busy_retry(session, op_name="settings-get-row")
+        result = await session.execute(
+            select(InstanceSettings).where(InstanceSettings.id == InstanceSettingsRepository._ROW_ID)
+        )
+        row = result.scalar_one_or_none()
+        assert row is not None, "instance_settings id=1 must exist after upsert"
         return row
 
     @staticmethod
@@ -342,7 +358,27 @@ class AccountRepository:
             list_label=list_label,
         )
         session.add(account)
-        await session.commit()
+        try:
+            await commit_with_busy_retry(session, op_name="account-create")
+        except IntegrityError:
+            # Конкурентный дубль (повторный TData-импорт, параллельный залив):
+            # идемпотентно возвращаем существующую строку вместо падения.
+            await session.rollback()
+            for lookup in (
+                AccountRepository.get_by_session_name(session, session_name),
+                AccountRepository.get_by_phone(session, phone),
+            ):
+                existing = await lookup
+                if existing is not None:
+                    return existing
+            if username:
+                result = await session.execute(
+                    select(Account).where(Account.username == username)
+                )
+                existing = result.scalar_one_or_none()
+                if existing is not None:
+                    return existing
+            raise
         await session.refresh(account)
         return account
     
@@ -1035,10 +1071,14 @@ class GroupRepository:
         a = await AccountRepository.get_by_id(session, account_id)
         if not g or not a:
             return False
-        if a in g.accounts:
-            return True
-        g.accounts.append(a)
-        await session.commit()
+        # Связка (account_id, group_id) — PK: ON CONFLICT DO NOTHING делает
+        # повторное добавление идемпотентным вместо IntegrityError.
+        stmt = sqlite_insert(account_groups).values(
+            account_id=int(account_id), group_id=int(group_id)
+        )
+        stmt = stmt.on_conflict_do_nothing()
+        await execute_with_busy_retry(session, stmt, op_name="group-add-account")
+        await commit_with_busy_retry(session, op_name="group-add-account")
         return True
 
     @staticmethod
@@ -1081,9 +1121,15 @@ class ProxyGroupRepository:
 
     @staticmethod
     async def get_or_create(session: AsyncSession, name: str) -> ProxyGroup:
+        cleaned = (name or "").strip()
+        stmt = sqlite_insert(ProxyGroup).values(name=cleaned)
+        stmt = stmt.on_conflict_do_nothing(index_elements=[ProxyGroup.name])
+        await execute_with_busy_retry(session, stmt, op_name="proxy-group-get-or-create")
+        await commit_with_busy_retry(session, op_name="proxy-group-get-or-create")
         existing = await ProxyGroupRepository.get_by_name(session, name)
-        if existing:
+        if existing is not None:
             return existing
+        # Не должно случаться: fallback на прямое создание.
         return await ProxyGroupRepository.create(session, name)
 
     @staticmethod
@@ -1111,7 +1157,11 @@ class ProxyGroupRepository:
 
     @staticmethod
     async def acquire_next_free_proxy(session: AsyncSession, group_id: int) -> Optional[Proxy]:
-        """Round-robin по свободным прокси группы."""
+        """Round-robin по свободным прокси группы.
+
+        Инкремент курсора — атомарный UPDATE ... RETURNING: два конкурентных
+        вызывающих получают разные курсоры и разные прокси.
+        """
         group = await ProxyGroupRepository.get_by_id(session, group_id)
         if not group:
             return None
@@ -1119,17 +1169,18 @@ class ProxyGroupRepository:
         if not free:
             return None
 
-        cursor = int(group.rr_cursor or 0)
-        idx = cursor % len(free)
-        selected = free[idx]
-
-        await session.execute(
-            update(ProxyGroup)
-            .where(ProxyGroup.id == group_id)
-            .values(rr_cursor=cursor + 1)
+        new_cursor = await run_with_busy_retry(
+            lambda: session.scalar(
+                update(ProxyGroup)
+                .where(ProxyGroup.id == group_id)
+                .values(rr_cursor=ProxyGroup.rr_cursor + 1)
+                .returning(ProxyGroup.rr_cursor)
+            ),
+            op_name="proxy-acquire",
         )
-        await session.commit()
-        return selected
+        await commit_with_busy_retry(session, op_name="proxy-acquire")
+        idx = (int(new_cursor or 1) - 1) % len(free)
+        return free[idx]
 
     @staticmethod
     async def delete_with_proxies(session: AsyncSession, group_id: int) -> bool:
@@ -1490,26 +1541,51 @@ class ClientRepository:
         username: str,
         status: ClientStatus = ClientStatus.NEW,
     ) -> Client:
-        """Создание нового клиента."""
+        """Создание нового клиента; конкурентный дубль идемпотентен.
+
+        При UNIQUE-конфликте по username возвращается существующая строка
+        вместо падения (TData/импорты, параллельные заливки).
+        """
         client = Client(username=username, status=status)
         session.add(client)
-        await session.commit()
+        try:
+            await commit_with_busy_retry(session, op_name="client-create")
+        except IntegrityError:
+            await session.rollback()
+            if username:
+                existing = await ClientRepository.get_by_username(session, username)
+                if existing is not None:
+                    return existing
+            raise
         await session.refresh(client)
         return client
-    
+
     @staticmethod
     async def create_many(
         session: AsyncSession,
         usernames: List[str],
     ) -> int:
-        """Массовое создание клиентов. Возвращает количество добавленных."""
-        existing = await ClientRepository.get_all_usernames(session)
-        new_usernames = [u for u in usernames if u not in existing]
-        
-        clients = [Client(username=u) for u in new_usernames]
-        session.add_all(clients)
-        await session.commit()
-        return len(new_usernames)
+        """Массовое создание клиентов. Возвращает количество добавленных.
+
+        Без предварительного SELECT: INSERT ... ON CONFLICT DO NOTHING делает
+        операцию атомарной и безопасной при конкурентных заливках.
+        """
+        seen: set[str] = set()
+        unique: List[str] = []
+        for raw in usernames:
+            u = (raw or "").strip()
+            if not u or u in seen:
+                continue
+            seen.add(u)
+            unique.append(u)
+        if not unique:
+            return 0
+        stmt = sqlite_insert(Client).values([{"username": u} for u in unique])
+        stmt = stmt.on_conflict_do_nothing(index_elements=[Client.username])
+        result = await execute_with_busy_retry(session, stmt, op_name="client-create-many")
+        await commit_with_busy_retry(session, op_name="client-create-many")
+        rowcount = result.rowcount if result.rowcount is not None else 0
+        return max(0, int(rowcount))
     
     @staticmethod
     async def get_by_id(session: AsyncSession, client_id: int) -> Optional[Client]:
@@ -1704,27 +1780,40 @@ class MailingAccountStateRepository:
         cooldown_hours: float,
     ) -> None:
         now = utcnow_naive()
+        # Строка (mailing_id, account_id) уникальна: INSERT ... ON CONFLICT
+        # DO NOTHING убирает гонку двух параллельных первых отправок.
+        stmt = sqlite_insert(MailingAccountState).values(
+            mailing_id=mailing_id,
+            account_id=account_id,
+            sent_in_wave=0,
+        )
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[
+                MailingAccountState.mailing_id,
+                MailingAccountState.account_id,
+            ]
+        )
+        await execute_with_busy_retry(session, stmt, op_name="mas-ensure")
+        await session.execute(
+            update(MailingAccountState)
+            .where(
+                MailingAccountState.mailing_id == mailing_id,
+                MailingAccountState.account_id == account_id,
+            )
+            .values(sent_in_wave=MailingAccountState.sent_in_wave + 1)
+        )
         r = await session.execute(
             select(MailingAccountState).where(
                 MailingAccountState.mailing_id == mailing_id,
                 MailingAccountState.account_id == account_id,
             )
         )
-        row = r.scalar_one_or_none()
-        if row is None:
-            row = MailingAccountState(
-                mailing_id=mailing_id,
-                account_id=account_id,
-                sent_in_wave=0,
-            )
-            session.add(row)
-            await session.flush()
-        row.sent_in_wave = int(row.sent_in_wave or 0) + 1
+        row = r.scalar_one()
         wl = max(1, int(wave_limit))
         if row.sent_in_wave >= wl:
             row.cooldown_until = now + timedelta(hours=float(cooldown_hours))
             row.sent_in_wave = 0
-        await session.commit()
+        await commit_with_busy_retry(session, op_name="mas-record")
 
 
 # ==================== Mailing Repository ====================
@@ -2154,28 +2243,28 @@ class NeuroStopRepository:
         account_id: int,
         client_id: int,
     ) -> None:
-        result = await session.execute(
-            select(NeuroStopList).where(
-                NeuroStopList.account_id == account_id,
-                NeuroStopList.client_id == client_id,
-            )
+        """STOP-запись идемпотентна: повторный STOP той же пары — UPDATE, не дубль.
+
+        Уникальный индекс ix_neuro_stop_account_client (account_id, client_id):
+        ON CONFLICT DO UPDATE вместо SELECT→INSERT.
+        """
+        stmt = sqlite_insert(NeuroStopList).values(
+            mailing_id=mailing_id,
+            account_id=account_id,
+            client_id=client_id,
         )
-        row = result.scalar_one_or_none()
-        if row:
-            await session.execute(
-                update(NeuroStopList)
-                .where(NeuroStopList.id == row.id)
-                .values(mailing_id=mailing_id, created_at=utcnow_naive())
-            )
-        else:
-            session.add(
-                NeuroStopList(
-                    mailing_id=mailing_id,
-                    account_id=account_id,
-                    client_id=client_id,
-                )
-            )
-        await session.commit()
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                NeuroStopList.account_id,
+                NeuroStopList.client_id,
+            ],
+            set_={
+                "mailing_id": mailing_id,
+                "created_at": utcnow_naive(),
+            },
+        )
+        await execute_with_busy_retry(session, stmt, op_name="neurostop-add")
+        await commit_with_busy_retry(session, op_name="neurostop-add")
 
     @staticmethod
     async def remove(
@@ -2249,7 +2338,7 @@ class OutboundQueueRepository:
             requested_by=(requested_by or None),
         )
         session.add(row)
-        await session.commit()
+        await commit_with_busy_retry(session, op_name="outbound-enqueue")
         await session.refresh(row)
         return row
 
@@ -2279,7 +2368,8 @@ class OutboundQueueRepository:
         queue_id: int,
         telegram_message_id: Optional[int],
     ) -> None:
-        await session.execute(
+        await execute_with_busy_retry(
+            session,
             update(OutboundQueue)
             .where(OutboundQueue.id == int(queue_id))
             .values(
@@ -2288,9 +2378,10 @@ class OutboundQueueRepository:
                 sent_at=utcnow_naive(),
                 error=None,
                 next_attempt_at=None,
-            )
+            ),
+            op_name="outbound-sent",
         )
-        await session.commit()
+        await commit_with_busy_retry(session, op_name="outbound-sent")
 
     @staticmethod
     async def mark_failed(
@@ -2298,7 +2389,8 @@ class OutboundQueueRepository:
         queue_id: int,
         error: str,
     ) -> None:
-        await session.execute(
+        await execute_with_busy_retry(
+            session,
             update(OutboundQueue)
             .where(OutboundQueue.id == int(queue_id))
             .values(
@@ -2306,9 +2398,10 @@ class OutboundQueueRepository:
                 error=(error or "")[:1000],
                 sent_at=utcnow_naive(),
                 next_attempt_at=None,
-            )
+            ),
+            op_name="outbound-failed",
         )
-        await session.commit()
+        await commit_with_busy_retry(session, op_name="outbound-failed")
 
     @staticmethod
     async def reschedule(
@@ -2323,7 +2416,8 @@ class OutboundQueueRepository:
         чтобы fetch_pending_batch не выбирал её до истечения паузы.
         """
         next_at = utcnow_naive() + timedelta(seconds=max(0.0, float(delay_sec)))
-        await session.execute(
+        await execute_with_busy_retry(
+            session,
             update(OutboundQueue)
             .where(OutboundQueue.id == int(queue_id))
             .values(
@@ -2331,26 +2425,30 @@ class OutboundQueueRepository:
                 error=(last_error or "")[:1000] if last_error else None,
                 attempts=OutboundQueue.attempts + 1,
                 next_attempt_at=next_at,
-            )
+            ),
+            op_name="outbound-reschedule",
         )
-        await session.commit()
+        await commit_with_busy_retry(session, op_name="outbound-reschedule")
 
     @staticmethod
     async def cancel(session: AsyncSession, queue_id: int) -> bool:
-        res = await session.execute(
+        res = await execute_with_busy_retry(
+            session,
             update(OutboundQueue)
             .where(
                 OutboundQueue.id == int(queue_id),
                 OutboundQueue.status.in_(["pending", "failed"]),
             )
-            .values(status="cancelled", next_attempt_at=None)
+            .values(status="cancelled", next_attempt_at=None),
+            op_name="outbound-cancel",
         )
-        await session.commit()
+        await commit_with_busy_retry(session, op_name="outbound-cancel")
         return (res.rowcount or 0) > 0
 
     @staticmethod
     async def retry(session: AsyncSession, queue_id: int) -> bool:
-        res = await session.execute(
+        res = await execute_with_busy_retry(
+            session,
             update(OutboundQueue)
             .where(
                 OutboundQueue.id == int(queue_id),
@@ -2362,9 +2460,10 @@ class OutboundQueueRepository:
                 attempts=0,
                 next_attempt_at=None,
                 sent_at=None,
-            )
+            ),
+            op_name="outbound-retry",
         )
-        await session.commit()
+        await commit_with_busy_retry(session, op_name="outbound-retry")
         return (res.rowcount or 0) > 0
 
     @staticmethod

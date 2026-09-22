@@ -22,6 +22,7 @@ from sqlalchemy import select, update
 
 from database.models import BotCommand, Mailing, MailingStatus
 from database.session import session_scope
+from database.sqlite_pragmas import commit_with_busy_retry, execute_with_busy_retry
 from utils.background_tasks import background_tasks
 from utils.logger import log
 
@@ -80,12 +81,14 @@ class BotCommandConsumer:
             if not rows:
                 return 0
             ids = [int(r.id) for r in rows]
-            await session.execute(
+            await execute_with_busy_retry(
+                session,
                 update(BotCommand)
                 .where(BotCommand.id.in_(ids))
-                .values(status="processing")
+                .values(status="processing"),
+                op_name="botcmd-claim",
             )
-            await session.commit()
+            await commit_with_busy_retry(session, op_name="botcmd-claim")
 
         for row in rows:
             await self._process_one(row)
@@ -134,7 +137,7 @@ class BotCommandConsumer:
                                 else MailingStatus.CANCELLED
                             )
                             m.status = target
-                            await session.commit()
+                            await commit_with_busy_retry(session, op_name="botcmd-mailing-status")
                 await self._mark_done(row, "ok: stop signal sent")
                 return
 
@@ -144,30 +147,34 @@ class BotCommandConsumer:
 
     async def _mark_done(self, row: BotCommand, detail: str = "") -> None:
         async with session_scope() as session:
-            await session.execute(
+            await execute_with_busy_retry(
+                session,
                 update(BotCommand)
                 .where(BotCommand.id == int(row.id))
                 .values(
                     status="done",
                     error=detail or None,
                     processed_at=utcnow_naive(),
-                )
+                ),
+                op_name="botcmd-done",
             )
-            await session.commit()
+            await commit_with_busy_retry(session, op_name="botcmd-done")
 
     async def _mark_failed(self, row: BotCommand, err: str) -> None:
         log.warning(f"BotCommand {row.id} failed: {err}")
         async with session_scope() as session:
-            await session.execute(
+            await execute_with_busy_retry(
+                session,
                 update(BotCommand)
                 .where(BotCommand.id == int(row.id))
                 .values(
                     status="failed",
                     error=err,
                     processed_at=utcnow_naive(),
-                )
+                ),
+                op_name="botcmd-failed",
             )
-            await session.commit()
+            await commit_with_busy_retry(session, op_name="botcmd-failed")
 
 
 bot_command_consumer = BotCommandConsumer()

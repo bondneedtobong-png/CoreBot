@@ -8,6 +8,8 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from database.sqlite_pragmas import execute_with_busy_retry
+
 from database.models import (
     ParsedChannel,
     ParsedGroup,
@@ -64,7 +66,7 @@ async def upsert_channel(
             "updated_at": now,
         },
     )
-    await session.execute(stmt)
+    await execute_with_busy_retry(session, stmt, op_name="parser-upsert")
     return "update" if existed is not None else "insert"
 
 
@@ -109,7 +111,7 @@ async def upsert_group(
             "updated_at": now,
         },
     )
-    await session.execute(stmt)
+    await execute_with_busy_retry(session, stmt, op_name="parser-upsert")
     return "update" if existed is not None else "insert"
 
 
@@ -154,7 +156,7 @@ async def upsert_user(
             "updated_at": now,
         },
     ).returning(ParsedUser.id)
-    user_id = int((await session.execute(stmt)).scalar_one())
+    user_id = int((await execute_with_busy_retry(session, stmt, op_name="parser-upsert-user")).scalar_one())
     row = await session.get(ParsedUser, user_id)
     if row is None:
         raise RuntimeError(f"parsed user upsert did not return row: {telegram_id}")
@@ -185,7 +187,7 @@ async def add_user_source_edge(
             ParsedUserSource.source_kind,
         ]
     )
-    await session.execute(stmt)
+    await execute_with_busy_retry(session, stmt, op_name="parser-user-source")
 
 
 async def bump_task_counters(
@@ -213,4 +215,8 @@ async def bump_task_counters(
         vals["current_account_id"] = current_account_id
     if current_query is not None:
         vals["current_query"] = current_query
-    await session.execute(update(ParsingTask).where(ParsingTask.id == task_id).values(**vals))
+    await execute_with_busy_retry(
+        session,
+        update(ParsingTask).where(ParsingTask.id == task_id).values(**vals),
+        op_name="parser-bump",
+    )

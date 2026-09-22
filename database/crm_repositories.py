@@ -7,8 +7,11 @@ from datetime import datetime
 from utils.time import utcnow_naive
 from typing import Any, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from database.sqlite_pragmas import commit_with_busy_retry, execute_with_busy_retry
 
 from database.models import (
     ClientAcceptTranscript,
@@ -31,23 +34,25 @@ class ClientClassCounterRepository:
         key = (class_key or "").strip().lower()
         if not key:
             raise ValueError("class_key пустой")
+        # Атомарный UPSERT вместо SELECT→INSERT: конкурентные инкременты
+        # не дают UNIQUE-конфликт, счётчик суммируется (floor 0).
+        stmt = sqlite_insert(ClientClassCounter).values(
+            client_id=client_id, class_key=key, count=max(0, delta)
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ClientClassCounter.client_id, ClientClassCounter.class_key],
+            set_={"count": func.max(0, ClientClassCounter.count + delta)},
+        )
+        await execute_with_busy_retry(session, stmt, op_name="class-counter-incr")
+        await commit_with_busy_retry(session, op_name="class-counter-incr")
         result = await session.execute(
             select(ClientClassCounter).where(
                 ClientClassCounter.client_id == client_id,
                 ClientClassCounter.class_key == key,
             )
         )
-        row = result.scalar_one_or_none()
-        if row is None:
-            row = ClientClassCounter(client_id=client_id, class_key=key, count=max(0, delta))
-            session.add(row)
-        else:
-            row.count = int(row.count or 0) + delta
-            if row.count < 0:
-                row.count = 0
-        await session.commit()
-        await session.refresh(row)
-        return int(row.count)
+        row = result.scalar_one()
+        return int(row.count or 0)
 
     @staticmethod
     async def get_counts(
@@ -96,6 +101,23 @@ class MailingLocalClassCounterRepository:
         key = (class_key or "").strip().lower()
         if not key:
             raise ValueError("class_key пустой")
+        # Атомарный UPSERT вместо SELECT→INSERT (см. ClientClassCounterRepository).
+        stmt = sqlite_insert(MailingLocalClassCounter).values(
+            mailing_id=mailing_id,
+            client_id=client_id,
+            class_key=key,
+            count=max(0, delta),
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                MailingLocalClassCounter.mailing_id,
+                MailingLocalClassCounter.client_id,
+                MailingLocalClassCounter.class_key,
+            ],
+            set_={"count": func.max(0, MailingLocalClassCounter.count + delta)},
+        )
+        await execute_with_busy_retry(session, stmt, op_name="local-counter-incr")
+        await commit_with_busy_retry(session, op_name="local-counter-incr")
         result = await session.execute(
             select(MailingLocalClassCounter).where(
                 MailingLocalClassCounter.mailing_id == mailing_id,
@@ -103,22 +125,8 @@ class MailingLocalClassCounterRepository:
                 MailingLocalClassCounter.class_key == key,
             )
         )
-        row = result.scalar_one_or_none()
-        if row is None:
-            row = MailingLocalClassCounter(
-                mailing_id=mailing_id,
-                client_id=client_id,
-                class_key=key,
-                count=max(0, delta),
-            )
-            session.add(row)
-        else:
-            row.count = int(row.count or 0) + delta
-            if row.count < 0:
-                row.count = 0
-        await session.commit()
-        await session.refresh(row)
-        return int(row.count)
+        row = result.scalar_one()
+        return int(row.count or 0)
 
 
 class ClientInteractionRepository:
@@ -161,26 +169,28 @@ class ClientAliveWindowRepository:
         client_id: int,
         window_key: int,
     ) -> bool:
-        result = await session.execute(
-            select(ClientAliveWindow).where(
-                ClientAliveWindow.mailing_id == mailing_id,
-                ClientAliveWindow.account_id == account_id,
-                ClientAliveWindow.client_id == client_id,
-                ClientAliveWindow.window_key == int(window_key),
-            )
-        )
-        row = result.scalar_one_or_none()
-        if row is not None:
-            return False
-        row = ClientAliveWindow(
+        """Идемпотентное окно alive: True — создано сейчас, False — уже было.
+
+        INSERT ... ON CONFLICT DO NOTHING вместо SELECT→INSERT: конкурентные
+        воркеры не дают UNIQUE-конфликт, rowcount различает исходы.
+        """
+        stmt = sqlite_insert(ClientAliveWindow).values(
             mailing_id=mailing_id,
             account_id=account_id,
             client_id=client_id,
             window_key=int(window_key),
         )
-        session.add(row)
-        await session.commit()
-        return True
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[
+                ClientAliveWindow.mailing_id,
+                ClientAliveWindow.account_id,
+                ClientAliveWindow.client_id,
+                ClientAliveWindow.window_key,
+            ]
+        )
+        result = await execute_with_busy_retry(session, stmt, op_name="alive-window")
+        await commit_with_busy_retry(session, op_name="alive-window")
+        return int(result.rowcount or 0) == 1
 
 
 class ClientMailSessionRepository:
@@ -201,6 +211,21 @@ class ClientMailSessionRepository:
         account_id: int,
         mailing_id: int,
     ) -> ClientMailSession:
+        """Идемпотентно: INSERT ... ON CONFLICT DO NOTHING + SELECT."""
+        stmt = sqlite_insert(ClientMailSession).values(
+            client_id=client_id,
+            account_id=account_id,
+            mailing_id=mailing_id,
+        )
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[
+                ClientMailSession.client_id,
+                ClientMailSession.account_id,
+                ClientMailSession.mailing_id,
+            ]
+        )
+        await execute_with_busy_retry(session, stmt, op_name="mail-session")
+        await commit_with_busy_retry(session, op_name="mail-session")
         result = await session.execute(
             select(ClientMailSession).where(
                 ClientMailSession.client_id == client_id,
@@ -208,17 +233,7 @@ class ClientMailSessionRepository:
                 ClientMailSession.mailing_id == mailing_id,
             )
         )
-        row = result.scalar_one_or_none()
-        if row:
-            return row
-        row = ClientMailSession(
-            client_id=client_id,
-            account_id=account_id,
-            mailing_id=mailing_id,
-        )
-        session.add(row)
-        await session.commit()
-        await session.refresh(row)
+        row = result.scalar_one()
         return row
 
     @staticmethod
@@ -261,20 +276,20 @@ class ClientAcceptTranscriptRepository:
         mail_session_id: int,
         messages_json: str,
     ) -> ClientAcceptTranscript:
+        """ON CONFLICT(mail_session_id) DO UPDATE вместо SELECT→INSERT."""
+        stmt = sqlite_insert(ClientAcceptTranscript).values(
+            mail_session_id=mail_session_id,
+            messages_json=messages_json,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ClientAcceptTranscript.mail_session_id],
+            set_={"messages_json": messages_json},
+        )
+        await execute_with_busy_retry(session, stmt, op_name="accept-transcript")
+        await commit_with_busy_retry(session, op_name="accept-transcript")
         result = await session.execute(
             select(ClientAcceptTranscript).where(
                 ClientAcceptTranscript.mail_session_id == mail_session_id
             )
         )
-        row = result.scalar_one_or_none()
-        if row is None:
-            row = ClientAcceptTranscript(
-                mail_session_id=mail_session_id,
-                messages_json=messages_json,
-            )
-            session.add(row)
-        else:
-            row.messages_json = messages_json
-        await session.commit()
-        await session.refresh(row)
-        return row
+        return result.scalar_one()

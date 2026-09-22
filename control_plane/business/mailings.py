@@ -29,6 +29,7 @@ from control_plane.business.schemas import (
 from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
 from database.models import BotCommand, Mailing, MailingStatus
+from database.sqlite_pragmas import run_sync_with_busy_retry
 from utils.neuro_prompts import (
     load_system_prompt,
     neuro_prompt_file_path,
@@ -153,7 +154,7 @@ def _enqueue_command(
         requested_by=requested_by,
     )
     db.add(row)
-    db.commit()
+    run_sync_with_busy_retry(db.commit, op_name="botcmd-enqueue")
     db.refresh(row)
     return int(row.id)
 
