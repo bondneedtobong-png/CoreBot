@@ -61,6 +61,17 @@ class BotCommandConsumer:
             except Exception as e:
                 log.warning(f"BotCommandConsumer tick error: {e}")
                 processed = 0
+            # Task 08: heartbeat для CP (shared corebot.db, без нового порта).
+            # Best-effort: запись троттлится внутри beat() и никогда не валит цикл.
+            try:
+                from control_plane.services.heartbeat import (
+                    BOTCMD_COMPONENT,
+                    record_consumer_tick,
+                )
+
+                await record_consumer_tick(BOTCMD_COMPONENT)
+            except Exception:
+                pass
             if processed == 0:
                 try:
                     await asyncio.wait_for(

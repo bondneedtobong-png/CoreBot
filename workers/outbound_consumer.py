@@ -64,6 +64,17 @@ class OutboundConsumer:
             except Exception as e:  # защищаемся от падения цикла
                 log.warning(f"OutboundConsumer tick error: {e}")
                 processed = 0
+            # Task 08: heartbeat для CP (shared corebot.db, без нового порта).
+            # Best-effort: запись троттлится внутри beat() и никогда не валит цикл.
+            try:
+                from control_plane.services.heartbeat import (
+                    OUTBOUND_COMPONENT,
+                    record_consumer_tick,
+                )
+
+                await record_consumer_tick(OUTBOUND_COMPONENT)
+            except Exception:
+                pass
             if processed == 0:
                 try:
                     await asyncio.wait_for(

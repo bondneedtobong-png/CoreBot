@@ -65,13 +65,17 @@ async def main():
     from workers.warmup import warmup_runner
     from workers.outbound_consumer import outbound_consumer
     from workers.bot_command_consumer import bot_command_consumer
+    from control_plane.services.heartbeat import BotHeartbeat
     log.info("Запуск Control Bot...")
+
+    bot_heartbeat = BotHeartbeat()
 
     try:
         await telemetry_emitter.start()
         warmup_runner.start()
         outbound_consumer.start()
         bot_command_consumer.start()
+        bot_heartbeat.start()
         await run_bot()
     except KeyboardInterrupt:
         log.info("Получен сигнал остановки")
@@ -91,6 +95,10 @@ async def main():
             log.warning(f"Ошибка graceful shutdown WorkerManager: {e}")
         await telemetry_emitter.stop()
         await warmup_runner.stop()
+        try:
+            await bot_heartbeat.stop()
+        except Exception as e:
+            log.warning(f"Ошибка остановки BotHeartbeat: {e}")
         try:
             await outbound_consumer.stop()
         except Exception as e:

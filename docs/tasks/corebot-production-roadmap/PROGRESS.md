@@ -194,3 +194,30 @@
 - Риски следующим задачам: fleet-отчёт в /tmp control node — форвардер для
   алертов (08); restore из fleet-бэкапов не прогонялся вживую (09); CI нужен
   Linux-job с ansible-lint (10); serial-тайминги парка не заложены в SLO (11).
+
+## 08 — Наблюдаемость, health и алерты ✅ принята 2026-09-22
+
+- Commit: (см. git log, `feat: task 08 observability snapshot, watchdog, status CLI`).
+- База исполнения: `09ec334` (задача 07).
+- Создано: `control_plane/services/snapshot.py` (ok/degraded/down, build_snapshot
+  с инжектом now, переиспользует health._parser_status + version без дублей),
+  `control_plane/services/heartbeat.py` (таблица `runtime_heartbeat` в corebot.db,
+  строки bot/consumer:*, запись 30с, stale 120с, CREATE IF NOT EXISTS),
+  `control_plane/services/watchdog.py` (per-kind cooldown 900с, recovery-события,
+  update exit 3/4 one-shot, health_failure при down >300с, поверх upsert_alert),
+  `control_plane/services/sanitize.py` (allowlist detail + санитайзер токенов/
+  proxy-паролей/телефонов/deny-ключей), `tools/instance_status.py`
+  (`--json`/human, exit 0 ok/degraded, 2 down), `tests/test_observability.py` (27).
+- Изменено аддитивно (+30/-0): `main.py` (старт/стоп BotHeartbeat),
+  `workers/outbound_consumer.py`, `workers/bot_command_consumer.py` (best-effort
+  tick с троттлингом, цикл не валят).
+- Проверки (оркестратор): `health.py`/`alerts.py`/`telemetry.py` — untouched;
+  `git diff --check` чист; `test_observability` — 27/27; полный `pytest -q` —
+  185 passed + те же 2 предсуществующих tdata/multipart; живой прогон
+  `instance_status --json` — честный down (бот не запущен), БД ok, версия
+  09ec3345117c, секретов в выводе нет, exit 2; контракты, `.env`, `data/*`
+  не тронуты; нового публичного порта нет.
+- Риски следующим задачам: `backup_age_h=None` без архивов — watchdog молчит,
+  drill 09 проверяет cron-метку отдельно; cooldown state процесс-локальный
+  (рестарт CP = 1 возможный повтор); heartbeat ~4 записи/мин в WAL —
+  пренебрежимо для нагрузки 11.
