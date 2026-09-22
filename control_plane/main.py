@@ -1,6 +1,6 @@
 ﻿import asyncio
 import os
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -36,7 +36,47 @@ from workers.parser.task_runner import run_forever as run_parser_forever
 
 load_dotenv()
 
-app = FastAPI(title="CoreBot Control Plane", version="0.1.0")
+
+def is_parser_embedded_enabled() -> bool:
+    """PARSER_EMBEDDED=0/false/off/no отключает встроенный parser-loop."""
+    return str(os.getenv("PARSER_EMBEDDED", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "off",
+        "no",
+    }
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Единый lifespan: bootstrap, embedded parser-loop и аккуратный shutdown.
+
+    Встроенный parser-loop запускается вместе с веб-панелью/Control Plane.
+    Отключение при необходимости: PARSER_EMBEDDED=0.
+    """
+    app.state.parser_task = None
+    parser_task = None
+    try:
+        bootstrap_defaults()
+        if not is_parser_embedded_enabled():
+            log.info("Embedded parser is disabled (PARSER_EMBEDDED=0)")
+        else:
+            # Нужен async-движок corebot.db для workers/parser/*
+            await bot_db.connect()
+            parser_task = asyncio.create_task(run_parser_forever(), name="embedded-parser-loop")
+            log.info("Embedded parser started with Control Plane")
+        app.state.parser_task = parser_task
+        yield
+    finally:
+        if parser_task is not None:
+            parser_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await parser_task
+        with suppress(Exception):
+            await bot_db.disconnect()
+
+
+app = FastAPI(title="CoreBot Control Plane", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -91,40 +131,3 @@ def bootstrap_defaults() -> None:
             db.commit()
     finally:
         db.close()
-
-
-bootstrap_defaults()
-
-
-@app.on_event("startup")
-async def startup_parser_embedded() -> None:
-    """
-    Р’СЃС‚СЂРѕРµРЅРЅС‹Р№ parser-loop: Р·Р°РїСѓСЃРєР°РµС‚СЃСЏ РІРјРµСЃС‚Рµ СЃ РІРµР±-РїР°РЅРµР»СЊСЋ/Control Plane.
-    РћС‚РєР»СЋС‡РµРЅРёРµ РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё: PARSER_EMBEDDED=0.
-    """
-    enabled = str(os.getenv("PARSER_EMBEDDED", "1")).strip().lower() not in {
-        "0",
-        "false",
-        "off",
-        "no",
-    }
-    if not enabled:
-        log.info("Embedded parser is disabled (PARSER_EMBEDDED=0)")
-        app.state.parser_task = None
-        return
-
-    # РќСѓР¶РµРЅ async-РґРІРёР¶РѕРє corebot.db РґР»СЏ workers/parser/*
-    await bot_db.connect()
-    app.state.parser_task = asyncio.create_task(run_parser_forever(), name="embedded-parser-loop")
-    log.info("Embedded parser started with Control Plane")
-
-
-@app.on_event("shutdown")
-async def shutdown_parser_embedded() -> None:
-    t = getattr(app.state, "parser_task", None)
-    if t is not None:
-        t.cancel()
-        with suppress(asyncio.CancelledError):
-            await t
-    with suppress(Exception):
-        await bot_db.disconnect()

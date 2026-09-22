@@ -59,3 +59,26 @@
 - Риски следующим задачам: формат внешних `ts` naive → `+00:00` — проверить строгих
   потребителей в 03/08; возможны isort/ruff-замечания по порядку импортов (задача 10);
   остаточные `datetime.now(timezone.utc)` вне скоупа — аудит naive/aware в задаче 05.
+
+## 03 — FastAPI lifespan и безопасный bootstrap ✅ принята 2026-09-22
+
+- Commit: (см. git log, `refactor: task 03 FastAPI lifespan, no import side effects`).
+- База исполнения: `0a3b402` (задача 02).
+- Изменённые файлы: `control_plane/main.py` (lifespan через `asynccontextmanager`,
+  `FastAPI(..., lifespan=...)`; `bootstrap_defaults()` только в startup-части;
+  единый try/finally: bootstrap → `bot_db.connect()` + именованная задача
+  `embedded-parser-loop` → yield → cancel/await → `bot_db.disconnect()`;
+  оба `@app.on_event` удалены; вызов bootstrap при импорте удалён;
+  `PARSER_EMBEDDED` вынесен в `is_parser_embedded_enabled()`; URL/API/health-JSON
+  без изменений), нов. `tests/test_lifespan_bootstrap.py` (5 тестов).
+- Проверки (оркестратор): `on_event` в `control_plane` — 0 совпадений;
+  `git diff --check` чист; scoped diff только `main.py` + новый тест;
+  структура lifespan и отсутствие вызова bootstrap при импорте — чтением файла;
+  полный `pytest -q` — 67 passed (62 + 5 новых), 2 failed — те же предсуществующие
+  `test_tdata_web_import` (нет `python-multipart`), неизменны с базы;
+  on_event-DeprecationWarning исчез (остался только baseline-варнинг loguru).
+- Риски следующим задачам (от исполнителя): `CP_BOOTSTRAP_*` читаются при импорте
+  `config.py`, fail-fast на `admin123` — зона задачи 04; `bootstrap_defaults()`
+  синхронен внутри lifespan — кандидат на `to_thread` (задача 05); стаб
+  `tdata_routes` в новом тесте условный — при установленном multipart тесты идут
+  по реальному пути.
