@@ -1,0 +1,62 @@
+# config role (task 07, safety-contract: fail-fast + chmod 600 + validator).
+# Every task touching Vault vars sets no_log: true so secrets never reach logs.
+# Idempotent: template converges; validator runs check-only (changed_when false).
+# Supports --check: template diff is shown, validator still runs read-only.
+- name: Resolve per-instance vault secrets for this host
+  ansible.builtin.set_fact:
+    instance_bot_token: "{{ (vault_instances[inventory_hostname]['bot_token'] | default('')) }}"
+    instance_cp_jwt_secret: "{{ (vault_instances[inventory_hostname]['cp_jwt_secret'] | default('')) }}"
+    instance_cp_admin_password: "{{ (vault_instances[inventory_hostname]['cp_bootstrap_admin_password'] | default('')) }}"
+    instance_cp_agent_token: "{{ (vault_instances[inventory_hostname]['cp_agent_token'] | default('')) }}"
+    instance_openrouter_api_key: "{{ (vault_instances[inventory_hostname]['openrouter_api_key'] | default('')) }}"
+    instance_cp_telegram_bot_token: "{{ (vault_instances[inventory_hostname]['cp_telegram_bot_token'] | default('')) }}"
+  no_log: true
+  tags: [config, secrets]
+
+- name: Fail fast on empty Telegram credentials (CONFIG_CONTRACT)
+  ansible.builtin.fail:
+    msg: "Empty API_ID/API_HASH/BOT_TOKEN/OWNER_ID for this instance; refusing to render .env."
+  when: (vault_api_id | default('') | length == 0) or (vault_api_hash | default('') | length == 0) or (instance_bot_token | default('') | length == 0) or (owner_id | default('') | string | length == 0)
+  no_log: true
+  check_mode: false
+  tags: [config, preflight]
+
+- name: Fail fast on placeholder secrets change-me/admin123 (safety-contract)
+  ansible.builtin.fail:
+    msg: "Placeholder secret detected (change-me/admin123); generate real secrets before deploy."
+  when: >
+    ('change-me' in (instance_cp_jwt_secret | default('') | lower)) or
+    ('admin123' in (instance_cp_admin_password | default('') | lower)) or
+    ('change-me' in (instance_cp_admin_password | default('') | lower))
+  no_log: true
+  check_mode: false
+  tags: [config, preflight]
+
+- name: Render per-instance .env (flat KEY=value, no expansion)
+  ansible.builtin.template:
+    src: dotenv.j2
+    dest: "{{ corebot_app_dir }}/.env"
+    owner: "{{ corebot_user }}"
+    group: "{{ corebot_group | default(corebot_user) }}"
+    mode: "0600"
+    validate: "python3 %s -c \"import sys; sys.exit(0)\""
+  no_log: true
+  tags: [config, env]
+
+- name: Enforce .env permissions 600 corebot:corebot
+  ansible.builtin.file:
+    path: "{{ corebot_app_dir }}/.env"
+    owner: "{{ corebot_user }}"
+    group: "{{ corebot_group | default(corebot_user) }}"
+    mode: "0600"
+  tags: [config, perms]
+
+- name: Preflight shared validator in production mode (task 04 gate)
+  ansible.builtin.command:
+    cmd: "{{ corebot_venv_dir }}/bin/python -m tools.validate_config --mode production --env-file {{ corebot_app_dir }}/.env"
+    chdir: "{{ corebot_app_dir }}"
+  register: config_validator
+  changed_when: false
+  failed_when: config_validator.rc != 0
+  check_mode: false
+  tags: [config, validate]

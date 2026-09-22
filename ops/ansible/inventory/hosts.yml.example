@@ -1,0 +1,47 @@
+# CoreBot fleet inventory TEMPLATE (task 07).
+# Copy to inventory/hosts.yml LOCALLY and fill real SSH targets there.
+# This example stays in Git and MUST contain zero secrets and zero real IPs:
+# only non-secret identifiers (instance name, host alias, ssh user/port,
+# desired version, feature flags, non-secret absolute sqlite paths).
+# Secrets (BOT_TOKEN, API_HASH, CP_JWT_SECRET, ...) live ONLY in the local
+# Vault file (group_vars/all/vault.yml, gitignored) — never here.
+# Hosts use .invalid placeholder domains so no example can be dialled.
+all:
+  children:
+    corebot_fleet:
+      vars:
+        corebot_user: corebot
+        corebot_app_base: /opt/corebot
+      hosts:
+        corebot-test-alpha:
+          ansible_host: vps-alpha.example.invalid
+          ansible_user: deploy
+          ansible_port: 22
+          instance_name: test-alpha
+          # Pinned release contract (task 06): explicit SHA or tag, never "latest".
+          corebot_target_tag: v0.1.0
+          corebot_target_sha: ""
+          # Feature flags (non-secret, per-instance).
+          parser_embedded: "1"
+          cp_enabled: true
+          owner_id: "100000001"
+          # Per-instance persistent layout: distinct DB file names prove
+          # isolation (different env + different persistent paths per host).
+          corebot_app_dir: /opt/corebot/app
+          corebot_database_url: sqlite+aiosqlite:////opt/corebot/app/data/corebot-alpha.db
+          corebot_bot_database_url: sqlite:////opt/corebot/app/data/corebot-alpha.db
+          corebot_cp_database_url: sqlite:////opt/corebot/app/data/control-plane-alpha.db
+        corebot-test-beta:
+          ansible_host: vps-beta.example.invalid
+          ansible_user: deploy
+          ansible_port: 2222
+          instance_name: test-beta
+          corebot_target_tag: v0.1.0
+          corebot_target_sha: ""
+          parser_embedded: "0"
+          cp_enabled: true
+          owner_id: "100000002"
+          corebot_app_dir: /opt/corebot/app
+          corebot_database_url: sqlite+aiosqlite:////opt/corebot/app/data/corebot-beta.db
+          corebot_bot_database_url: sqlite:////opt/corebot/app/data/corebot-beta.db
+          corebot_cp_database_url: sqlite:////opt/corebot/app/data/control-plane-beta.db

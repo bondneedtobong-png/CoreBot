@@ -1,0 +1,22 @@
+[Unit]
+Description=CoreBot Telegram Service (main.py) — fleet managed (task 07)
+After=network-online.target corebot-cp.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ corebot_user }}
+Group={{ corebot_group | default(corebot_user) }}
+WorkingDirectory={{ corebot_app_dir }}
+EnvironmentFile={{ corebot_app_dir }}/.env
+ExecStartPre={{ corebot_venv_dir }}/bin/python -m tools.validate_config --mode production
+ExecStart={{ corebot_venv_dir }}/bin/python main.py
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths={{ corebot_app_dir }}/data {{ corebot_app_dir }}/logs
+
+[Install]
+WantedBy=multi-user.target

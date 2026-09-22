@@ -1,0 +1,46 @@
+# backup role (task 07, safety-contract: backup-before-update).
+# Calls the single-host primitive skills/corebot-vps-deploy/scripts/backup_corebot.sh
+# on the managed host (ADR: Ansible calls Bash primitives, never duplicates them).
+# The archive path is registered for the fleet report; persistent paths
+# (.env/data/sessions/logs) are covered by the script itself.
+- name: Ensure backup directory exists
+  ansible.builtin.file:
+    path: "{{ corebot_backup_dir }}"
+    state: directory
+    owner: "{{ corebot_user }}"
+    group: "{{ corebot_group | default(corebot_user) }}"
+    mode: "0755"
+  become: true
+  tags: [backup]
+
+- name: Create pre-change backup via single-host primitive
+  ansible.builtin.command:
+    cmd: "{{ corebot_app_dir }}/skills/corebot-vps-deploy/scripts/backup_corebot.sh"
+  environment:
+    APP_DIR: "{{ corebot_app_dir }}"
+    BACKUP_DIR: "{{ corebot_backup_dir }}"
+  become: true
+  become_user: "{{ corebot_user }}"
+  register: fleet_backup
+  changed_when: fleet_backup.rc == 0
+  check_mode: false
+  tags: [backup]
+
+- name: Verify backup archive exists and is non-empty
+  ansible.builtin.stat:
+    path: "{{ fleet_backup.stdout_lines | last | trim }}"
+  register: fleet_backup_stat
+  failed_when: not fleet_backup_stat.stat.exists or fleet_backup_stat.stat.size == 0
+  changed_when: false
+  check_mode: false
+  tags: [backup]
+
+- name: Lock backup archive permissions 600
+  ansible.builtin.file:
+    path: "{{ fleet_backup.stdout_lines | last | trim }}"
+    owner: "{{ corebot_user }}"
+    group: "{{ corebot_group | default(corebot_user) }}"
+    mode: "0600"
+  become: true
+  changed_when: false
+  tags: [backup]

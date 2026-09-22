@@ -1,0 +1,52 @@
+# install.yml — fresh single-pass install for one host or a group (task 07).
+# Usage (control node, WSL/Ubuntu):
+#   ansible-playbook playbooks/install.yml --limit corebot-test-alpha --ask-vault-pass
+#   ansible-playbook playbooks/install.yml --check --limit corebot-test-alpha  # dry-run
+# Safety: common (user/dirs) -> deploy (pinned SHA/tag) -> config (.env 600 +
+# validator preflight) -> systemd (cp first, then bot) -> health gate.
+# Secrets: only from Vault; every secret-touching task has no_log (see roles).
+- name: Install CoreBot on fresh VPS instances
+  hosts: corebot_fleet
+  become: false
+  gather_facts: true
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  serial: 1
+
+  pre_tasks:
+    - name: Capture version before install (empty on fresh hosts)
+      ansible.builtin.command:
+        cmd: cat {{ corebot_app_dir }}/.deployed_sha
+      register: fleet_version_before
+      failed_when: false
+      changed_when: false
+      check_mode: false
+      tags: [report]
+
+  roles:
+    - role: common
+    - role: deploy
+    - role: config
+    - role: systemd_cp_bot
+    - role: health
+
+  post_tasks:
+    - name: Capture version after install
+      ansible.builtin.command:
+        cmd: cat {{ corebot_app_dir }}/.deployed_sha
+      register: fleet_version_after
+      failed_when: false
+      changed_when: false
+      check_mode: false
+      tags: [report]
+
+    - name: Write per-host fleet report (no secrets, control node)
+      ansible.builtin.template:
+        src: ../templates/fleet_report.j2
+        dest: "{{ fleet_report_dir }}/{{ inventory_hostname }}-install.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+      tags: [report]

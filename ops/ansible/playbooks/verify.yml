@@ -1,0 +1,78 @@
+# verify.yml — read-only fleet audit (task 07). Changes NOTHING on servers:
+# live /version (allowlisted fields), /health/live + /health/ready, SQLite
+# PRAGMA parity (busy_timeout=30000, task 05), production validator.
+# Safe for --check and for scheduled drift detection. All tasks changed_when
+# false; failures (non-200 readiness, wrong PRAGMA) fail the host loudly.
+- name: Verify CoreBot fleet without changes
+  hosts: corebot_fleet
+  become: false
+  gather_facts: false
+  any_errors_fatal: false
+  max_fail_percentage: 100
+
+  tasks:
+    - name: Read live version identity (no secrets leave the host)
+      ansible.builtin.uri:
+        url: "{{ corebot_health_base }}/version"
+        status_code: 200
+        return_content: true
+      register: fleet_version
+      changed_when: false
+      check_mode: false
+      tags: [verify, version]
+
+    - name: Check liveness probe
+      ansible.builtin.uri:
+        url: "{{ corebot_health_base }}/health/live"
+        status_code: 200
+      changed_when: false
+      check_mode: false
+      tags: [verify, live]
+
+    - name: Check readiness probe
+      ansible.builtin.uri:
+        url: "{{ corebot_health_base }}/health/ready"
+        status_code: 200
+      changed_when: false
+      check_mode: false
+      tags: [verify, ready]
+
+    - name: Check SQLite PRAGMA parity busy_timeout=30000 on bot DB
+      ansible.builtin.command:
+        cmd: sqlite3 {{ corebot_app_dir }}/data/{{ inventory_hostname }}.db "PRAGMA busy_timeout;"
+      register: fleet_pragma_bot
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      tags: [verify, pragma]
+
+    - name: Assert bot DB busy_timeout is 30000 (task 05 contract)
+      ansible.builtin.assert:
+        that:
+          - (fleet_pragma_bot.stdout | default('') | trim) == "30000"
+        fail_msg: "SQLite PRAGMA drift: busy_timeout != 30000 on this host."
+        success_msg: "SQLite PRAGMA parity OK (busy_timeout=30000)."
+      changed_when: false
+      check_mode: false
+      tags: [verify, pragma]
+
+    - name: Run production validator read-only (fail-fast rules, names only)
+      ansible.builtin.command:
+        cmd: "{{ corebot_venv_dir }}/bin/python -m tools.validate_config --mode production --env-file {{ corebot_app_dir }}/.env"
+        chdir: "{{ corebot_app_dir }}"
+      register: fleet_validator
+      changed_when: false
+      failed_when: fleet_validator.rc != 0
+      check_mode: false
+      tags: [verify, config]
+
+    - name: Write per-host verify report (no secrets, control node)
+      ansible.builtin.template:
+        src: ../templates/fleet_report.j2
+        dest: "{{ fleet_report_dir }}/{{ inventory_hostname }}-verify.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+      tags: [report]

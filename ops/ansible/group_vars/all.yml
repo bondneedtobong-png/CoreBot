@@ -1,0 +1,42 @@
+# Non-secret fleet defaults (task 07). No secrets here by policy —
+# every secret comes from the local Vault file (group_vars/all/vault.yml).
+corebot_user: corebot
+corebot_group: corebot
+corebot_app_base: /opt/corebot
+corebot_app_dir: /opt/corebot/app
+corebot_venv_dir: /opt/corebot/venv
+corebot_backup_dir: /opt/corebot/backups
+
+# Health contract (INSTANCE_CONTRACT: loopback bind only, public binds forbidden).
+corebot_health_base: http://127.0.0.1:8081
+corebot_health_ready_attempts: 18
+corebot_health_ready_delay: 10
+
+# Release contract defaults (task 06): explicit SHA wins over tag over branch.
+corebot_target_sha: ""
+corebot_target_tag: ""
+corebot_branch_fallback: main
+
+# Feature flags defaults (overridden per-host in inventory).
+parser_embedded: "1"
+cp_enabled: true
+
+# Shared non-secret env defaults rendered into .env (flat KEY=value).
+corebot_env_defaults:
+  COREBOT_ENV: production
+  LOG_LEVEL: INFO
+  DATABASE_URL: sqlite+aiosqlite:////opt/corebot/app/data/corebot.db
+  BOT_DATABASE_URL: sqlite:////opt/corebot/app/data/corebot.db
+  CP_DATABASE_URL: sqlite:////opt/corebot/app/data/control_plane.db
+  CP_INGEST_URL: http://127.0.0.1:8081/ingest/batch
+  CP_AGENT_ENABLED: "0"
+  CP_AGENT_NAME: corebot-agent
+  CP_BOOTSTRAP_ADMIN_USERNAME: admin
+  PARSER_EMBEDDED: "1"
+  PARSER_POLL_SEC: "2"
+
+# Fleet run report (control node, no secrets — see templates/fleet_report.j2).
+fleet_report_dir: /tmp/corebot-fleet-reports
+
+# SQLite reliability gate (task 05): every managed DB must report this.
+corebot_required_busy_timeout: "30000"

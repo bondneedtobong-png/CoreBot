@@ -1,0 +1,30 @@
+# Vault SCHEMA example (task 07, ADR 0001: secrets ONLY via Ansible Vault
+# or a local vault, never in Git).
+# This file shows KEY NAMES ONLY. Every value is a non-functional placeholder
+# starting with "VAULT:" — replace locally with real secrets via:
+#   cp group_vars/all/vault.yml.example <local-only-path-outside-git>
+#   ansible-vault create group_vars/all/vault.yml   # password stays local
+# The real group_vars/all/vault.yml is gitignored (see .gitignore) and must
+# never be committed. Synthetic TEST- markers only here, no real tokens.
+#
+# Layout: shared team Telegram app (API_ID/API_HASH) + per-instance secrets
+# keyed by inventory hostname (one host = one user, INSTANCE_CONTRACT).
+
+# Shared (one Telegram app for the team; operator fills once in Vault).
+vault_api_id: "VAULT:TEST-API-ID-REPLACE-ME"
+vault_api_hash: "VAULT:TEST-API-HASH-REPLACE-ME"
+
+# Per-instance secrets. Add one block per inventory host.
+vault_instances:
+  corebot-test-alpha:
+    bot_token: "VAULT:TEST-BOT-TOKEN-ALPHA-REPLACE-ME"
+    cp_jwt_secret: "VAULT:TEST-JWT-SECRET-ALPHA-REPLACE-ME"
+    cp_bootstrap_admin_password: "VAULT:TEST-ADMIN-PASSWORD-ALPHA-REPLACE-ME"
+    cp_agent_token: "VAULT:TEST-AGENT-TOKEN-ALPHA-REPLACE-ME"
+    openrouter_api_key: "VAULT:TEST-OPENROUTER-KEY-ALPHA-REPLACE-ME"
+  corebot-test-beta:
+    bot_token: "VAULT:TEST-BOT-TOKEN-BETA-REPLACE-ME"
+    cp_jwt_secret: "VAULT:TEST-JWT-SECRET-BETA-REPLACE-ME"
+    cp_bootstrap_admin_password: "VAULT:TEST-ADMIN-PASSWORD-BETA-REPLACE-ME"
+    cp_agent_token: "VAULT:TEST-AGENT-TOKEN-BETA-REPLACE-ME"
+    openrouter_api_key: "VAULT:TEST-OPENROUTER-KEY-BETA-REPLACE-ME"

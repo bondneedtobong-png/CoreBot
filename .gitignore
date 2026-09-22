@@ -35,3 +35,13 @@ Thumbs.db
 # never committed: version source of truth is VERSION + git SHA)
 RELEASE.json
 .deployed_sha
+
+# Fleet automation secrets (task 07, ADR 0001: Vault password + vault file +
+# local inventory stay on the operator control node, never in Git; only
+# *.example schemas are committed)
+ops/ansible/inventory/hosts.yml
+ops/ansible/group_vars/all/vault.yml
+ops/ansible/group_vars/**/vault.yml
+.vault-password-file
+vault-password-file
+/tmp/corebot-fleet-reports/

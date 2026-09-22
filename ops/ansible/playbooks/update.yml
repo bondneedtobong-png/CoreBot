@@ -1,0 +1,73 @@
+# update.yml — canary fleet rollout (task 07, release contract task 06).
+# Canary contract: serial 1 first (canary), then batches; ANY failure stops
+# the whole queue (any_errors_fatal + max_fail_percentage 0). A canary health
+# failure BLOCKS all remaining hosts — proven by tests/test_fleet_automation.py.
+# Usage:
+#   ansible-playbook playbooks/update.yml --ask-vault-pass
+#   ansible-playbook playbooks/update.yml --check --ask-vault-pass   # dry-run
+#   ansible-playbook playbooks/update.yml --limit corebot-test-alpha # one host
+# On-host engine: scripts/update_corebot.sh --sha <pinned> (single source of
+# truth; Ansible orchestrates, Bash executes — ADR consequence).
+- name: Canary fleet update via on-host update script
+  hosts: corebot_fleet
+  become: false
+  gather_facts: true
+  serial:
+    - 1
+    - 50%
+  max_fail_percentage: 0
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Capture deployed SHA before update
+      ansible.builtin.command:
+        cmd: cat {{ corebot_app_dir }}/.deployed_sha
+      register: fleet_version_before
+      failed_when: false
+      changed_when: false
+      check_mode: false
+      tags: [report]
+
+  roles:
+    - role: backup
+    - role: config
+
+  tasks:
+    - name: Run versioned update on the host (preflight->backup->stage->swap->gate)
+      ansible.builtin.command:
+        cmd: bash {{ corebot_app_dir }}/scripts/update_corebot.sh --sha {{ corebot_target_sha }}
+      become: true
+      register: fleet_update
+      changed_when: "'UPDATE OK' in fleet_update.stdout"
+      failed_when: fleet_update.rc not in [0]
+      check_mode: false
+      when: (corebot_target_sha | default('') | length > 0)
+      tags: [update]
+
+    - name: Enforce readiness + version parity after swap (health role gate)
+      ansible.builtin.include_role:
+        name: health
+      vars:
+        health_expected_sha: "{{ corebot_target_sha }}"
+      tags: [update, health]
+
+  post_tasks:
+    - name: Capture deployed SHA after update
+      ansible.builtin.command:
+        cmd: cat {{ corebot_app_dir }}/.deployed_sha
+      register: fleet_version_after
+      failed_when: false
+      changed_when: false
+      check_mode: false
+      tags: [report]
+
+    - name: Write per-host fleet report (no secrets, control node)
+      ansible.builtin.template:
+        src: ../templates/fleet_report.j2
+        dest: "{{ fleet_report_dir }}/{{ inventory_hostname }}-update.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+      tags: [report]

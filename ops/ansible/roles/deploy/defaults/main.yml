@@ -1,0 +1,6 @@
+# Default variables for the deploy role (non-secret only).
+corebot_repo_url: https://github.com/bondneedtobong-png/CoreBot
+corebot_target_sha: ""
+corebot_target_tag: ""
+corebot_branch_fallback: main
+corebot_python_bin: python3.11

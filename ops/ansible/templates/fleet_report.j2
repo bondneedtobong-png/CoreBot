@@ -1,0 +1,22 @@
+# Fleet run report (task 07 §5). Rendered on the CONTROL node per host.
+# Allowlisted fields ONLY: version before/after, backup path, service status,
+# readiness, errors. Secrets (tokens, jwt, passwords) are NEVER referenced
+# here — any playbook variable containing a secret has no_log: true at source.
+fleet_run_report
+================
+host: {{ inventory_hostname }}
+instance: {{ instance_name | default(inventory_hostname) }}
+play: {{ fleet_play | default(ansible_play_name | default('unknown')) }}
+date_utc: {{ ansible_date_time.iso8601 | default('unknown') }}
+desired_version_sha: {{ corebot_target_sha | default('n/a') }}
+desired_version_tag: {{ corebot_target_tag | default('n/a') }}
+version_before: {{ fleet_version_before.stdout | default('unknown') | trim }}
+version_after: {{ fleet_version_after.stdout | default('unknown') | trim }}
+backup_archive: {{ (fleet_backup.stdout_lines | last | trim) if (fleet_backup is defined and fleet_backup.stdout_lines is defined) else (rollback_backup_archive | default('n/a')) }}
+services:
+  corebot-cp: {{ fleet_services.results[0].stdout | default('unknown') if (fleet_services is defined and fleet_services.results is defined) else 'see health gate' }}
+  corebot: {{ fleet_services.results[1].stdout | default('unknown') if (fleet_services is defined and fleet_services.results is defined) else 'see health gate' }}
+readiness_live: {{ fleet_live.status | default('unknown') if fleet_live is defined else 'not-checked' }}
+readiness_ready: {{ fleet_ready.status | default('unknown') if fleet_ready is defined else 'not-checked' }}
+live_version_sha: {{ fleet_version.json.sha | default('unknown') if (fleet_version is defined and fleet_version.json is defined) else 'not-checked' }}
+errors: {{ ansible_failed_result.msg | default('none') if ansible_failed_result is defined else 'none' }}

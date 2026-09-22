@@ -1,0 +1,34 @@
+# common role (task 07, safety-contract: INSTANCE_CONTRACT layout + rights).
+# Idempotent: user/file modules converge; re-runs report ok (no changes).
+# Supports check mode (ansible --check): no command/shell here, only
+# declarative modules.
+- name: Ensure corebot system user exists
+  ansible.builtin.user:
+    name: "{{ corebot_user }}"
+    group: "{{ corebot_group | default(corebot_user) }}"
+    system: true
+    create_home: true
+    home: "{{ corebot_app_base }}"
+    shell: "{{ corebot_shell }}"
+    state: present
+  become: true
+  tags: [common, user]
+
+- name: Ensure base directories exist with fleet ownership
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ corebot_user }}"
+    group: "{{ corebot_group | default(corebot_user) }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ corebot_app_base }}", mode: "0755"}
+    - {path: "{{ corebot_app_dir }}", mode: "0755"}
+    - {path: "{{ corebot_venv_dir }}", mode: "0755"}
+    - {path: "{{ corebot_backup_dir }}", mode: "0755"}
+    - {path: "{{ corebot_app_dir }}/data/sessions", mode: "0755"}
+    - {path: "{{ corebot_app_dir }}/logs", mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+  become: true
+  tags: [common, dirs]

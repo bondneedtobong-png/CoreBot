@@ -1,0 +1,25 @@
+# backup.yml — on-demand fleet backup (task 07, RPO <= 24h per SLO).
+# Calls the single-host primitive; archives stay on the host in
+# /opt/corebot/backups (mode 600). Report records the archive path only.
+# Usage: ansible-playbook playbooks/backup.yml --ask-vault-pass
+- name: Back up CoreBot fleet persistent state
+  hosts: corebot_fleet
+  become: false
+  gather_facts: false
+  any_errors_fatal: true
+  max_fail_percentage: 0
+
+  roles:
+    - role: backup
+
+  post_tasks:
+    - name: Write per-host backup report (no secrets, control node)
+      ansible.builtin.template:
+        src: ../templates/fleet_report.j2
+        dest: "{{ fleet_report_dir }}/{{ inventory_hostname }}-backup.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+      tags: [report]

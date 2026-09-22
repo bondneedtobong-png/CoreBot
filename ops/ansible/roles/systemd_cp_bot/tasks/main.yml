@@ -1,0 +1,44 @@
+# systemd_cp_bot role (task 07, safety-contract: ExecStartPre validator,
+# loopback 127.0.0.1:8081, order cp -> bot). Idempotent: template + systemd
+# converge; re-runs report ok. Supports --check (template diff only).
+- name: Install corebot-cp unit (Control Plane first)
+  ansible.builtin.template:
+    src: corebot-cp.service.j2
+    dest: /etc/systemd/system/corebot-cp.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: cp_unit
+  tags: [systemd, cp]
+
+- name: Install corebot unit (bot after CP)
+  ansible.builtin.template:
+    src: corebot.service.j2
+    dest: /etc/systemd/system/corebot.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  register: bot_unit
+  tags: [systemd, bot]
+
+- name: Reload systemd daemon when units changed
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+  when: cp_unit is changed or bot_unit is changed
+  changed_when: false
+  check_mode: false
+  tags: [systemd]
+
+- name: Enable and start Control Plane first, then bot (restart order contract)
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - corebot-cp.service
+    - corebot.service
+  become: true
+  tags: [systemd, start]

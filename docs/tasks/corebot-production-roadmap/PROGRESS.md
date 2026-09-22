@@ -169,3 +169,28 @@
   обновить в задаче 07; алерты на exit 3/4 и version-MISMATCH — задача 08;
   ручной откат из RUNBOOK §17 прогнать в drill задачи 09; CI задачи 10 — `bash -n`
   + e2e на Linux; первый реальный VPS-прогон update — только с --dry-run и бэкапом.
+
+## 07 — Автоматизация нескольких независимых VPS ✅ принята 2026-09-22
+
+- Commit: (см. git log, `feat: task 07 Ansible fleet automation`).
+- База исполнения: `e1c0a50` (задача 06). Строго по ADR 0001 (Ansible, control node).
+- Создано: `ops/ansible/` (22 файла: ansible.cfg, inventory/hosts.yml.example
+  на 2 инстанса, group_vars/all.yml + vault.yml.example-схема, 7 ролей
+  common/deploy/config/systemd_cp_bot/backup/health/rollback, 5 playbooks
+  install/update/verify/backup/rollback, fleet_report.j2 без секретов),
+  `docs/operations/FLEET_OPERATIONS.md` (WSL control node, vault, новичок за
+  один проход, canary), `tests/test_fleet_automation.py` (14 тестов).
+- Изменено: `.gitignore` (vault.yml, hosts.yml, vault-пароль), `docs/VPS_UPDATE_GUIDE.md`
+  (переведён на контракт 06: pinned SHA, запрет pull на живом дереве, exit-коды).
+- Проверки (оркестратор): `git diff --check` чист; скан секретов по `ops/` —
+  только loopback 127.0.0.1 и fail-fast-условия change-me/admin123 (присвоений
+  нет); canary `serial/max_fail_percentage:0/any_errors_fatal` + `no_log: true`
+  (5 мест) — чтением файлов; `test_fleet_automation` — 14/14; полный `pytest -q` —
+  158 passed + те же 2 предсуществующих tdata/multipart; контракты, код, `.env`,
+  `data/*` не тронуты; к VPS не подключались.
+- Ограничение валидации (зафиксировано): Ansible отсутствует (Windows + WSL) —
+  `ansible --syntax-check` недоступен; вместо него YAML-парсинг + mock-симуляция
+  rollout в pytest. Первый реальный прогон — на disposable VPS в задаче 11.
+- Риски следующим задачам: fleet-отчёт в /tmp control node — форвардер для
+  алертов (08); restore из fleet-бэкапов не прогонялся вживую (09); CI нужен
+  Linux-job с ansible-lint (10); serial-тайминги парка не заложены в SLO (11).

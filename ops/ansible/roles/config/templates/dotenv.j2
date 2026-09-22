@@ -1,0 +1,26 @@
+# CoreBot .env rendered by Ansible (task 07 fleet generator).
+# FLAT KEY=value contract (tools/validate_config.py): one pair per line,
+# NO shell expansion, NO `export` prefix, NO variable references ($...).
+# Secrets arrive ONLY as Ansible Vault vars (vault_*); this template never
+# contains plaintext secrets. Rendered file on the host is chmod 600.
+COREBOT_ENV=production
+API_ID={{ vault_api_id }}
+API_HASH={{ vault_api_hash }}
+BOT_TOKEN={{ instance_bot_token }}
+OWNER_ID={{ owner_id }}
+DATABASE_URL={{ corebot_database_url }}
+BOT_DATABASE_URL={{ corebot_bot_database_url }}
+CP_DATABASE_URL={{ corebot_cp_database_url }}
+LOG_LEVEL={{ corebot_log_level | default('INFO') }}
+PARSER_EMBEDDED={{ parser_embedded | default('1') }}
+PARSER_POLL_SEC={{ corebot_parser_poll_sec | default('2') }}
+CP_AGENT_ENABLED={{ corebot_cp_agent_enabled | default('0') }}
+CP_INGEST_URL=http://127.0.0.1:8081/ingest/batch
+CP_AGENT_TOKEN={{ instance_cp_agent_token }}
+CP_AGENT_NAME={{ corebot_cp_agent_name | default('corebot-agent') }}
+CP_JWT_SECRET={{ instance_cp_jwt_secret }}
+CP_BOOTSTRAP_ADMIN_USERNAME={{ corebot_cp_admin_username | default('admin') }}
+CP_BOOTSTRAP_ADMIN_PASSWORD={{ instance_cp_admin_password }}
+CP_TELEGRAM_BOT_TOKEN={{ instance_cp_telegram_bot_token | default('') }}
+CP_TELEGRAM_ALERT_CHAT_ID={{ corebot_cp_telegram_chat_id | default('') }}
+OPENROUTER_API_KEY={{ instance_openrouter_api_key | default('') }}

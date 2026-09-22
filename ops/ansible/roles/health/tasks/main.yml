@@ -1,0 +1,62 @@
+# health role (task 07, safety-contract: readiness-gate live+ready + version parity).
+# Read-only: every task is changed_when false and check-mode safe.
+# Gates: GET /health/live + /health/ready HTTP 200 (loopback 127.0.0.1:8081),
+# then live /version SHA must equal the deployed target (forbids the
+# "new bot + old Control Plane" mixed state, task 06 contract).
+- name: Wait for Control Plane liveness on loopback
+  ansible.builtin.uri:
+    url: "{{ corebot_health_base }}/health/live"
+    status_code: 200
+    return_content: true
+  register: fleet_live
+  until: fleet_live.status == 200
+  retries: "{{ corebot_health_ready_attempts | default(18) }}"
+  delay: "{{ corebot_health_ready_delay | default(10) }}"
+  changed_when: false
+  check_mode: false
+  tags: [health, live]
+
+- name: Wait for readiness gate (both DBs + parser + background tasks)
+  ansible.builtin.uri:
+    url: "{{ corebot_health_base }}/health/ready"
+    status_code: 200
+    return_content: true
+  register: fleet_ready
+  until: fleet_ready.status == 200
+  retries: "{{ corebot_health_ready_attempts | default(18) }}"
+  delay: "{{ corebot_health_ready_delay | default(10) }}"
+  changed_when: false
+  check_mode: false
+  tags: [health, ready]
+
+- name: Read live version identity (allowlisted fields only, no secrets)
+  ansible.builtin.uri:
+    url: "{{ corebot_health_base }}/version"
+    status_code: 200
+    return_content: true
+  register: fleet_version
+  changed_when: false
+  check_mode: false
+  tags: [health, version]
+
+- name: Assert version parity (live SHA matches pinned target short SHA)
+  ansible.builtin.assert:
+    that:
+      - (fleet_version.json.sha | default(''))[:12] | lower == (health_expected_sha | default(corebot_target_sha))[:12] | lower
+    fail_msg: "Version parity failed: live SHA does not match pinned target (mixed cp/bot state forbidden)."
+    success_msg: "Version parity OK (cp + bot on pinned SHA)."
+  changed_when: false
+  check_mode: false
+  tags: [health, version]
+
+- name: Assert both services active (cp + bot)
+  ansible.builtin.command:
+    cmd: systemctl is-active {{ item }}
+  loop:
+    - corebot-cp.service
+    - corebot.service
+  register: fleet_services
+  changed_when: false
+  failed_when: fleet_services.rc != 0
+  check_mode: false
+  tags: [health, services]

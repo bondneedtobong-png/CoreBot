@@ -1,0 +1,8 @@
+# Default variables for the common role (non-secret only).
+corebot_user: corebot
+corebot_group: corebot
+corebot_app_base: /opt/corebot
+corebot_app_dir: /opt/corebot/app
+corebot_venv_dir: /opt/corebot/venv
+corebot_backup_dir: /opt/corebot/backups
+corebot_shell: /bin/bash

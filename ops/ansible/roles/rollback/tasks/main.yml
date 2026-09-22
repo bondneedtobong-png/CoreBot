@@ -1,0 +1,71 @@
+# rollback role (task 07): previous code + restore persistent from the
+# pre-update backup + restart cp -> bot + health gate (ports
+# scripts/update_corebot.sh step_rollback 1:1 for the offline case where the
+# on-host script itself cannot run to completion — see CHOICE note below).
+#
+# CHOICE (fixed for task 07, ADR "Ansible calls, not duplicates"):
+# - UPDATE path (playbooks/update.yml) CALLS scripts/update_corebot.sh on the
+#   managed host — single source of truth, no duplicated swap logic.
+# - ROLLBACK path (this role) PORTS step_rollback 1:1 (rsync swap + tar
+#   restore of .env/data + pip reinstall + cp->bot restart + gate) because a
+#   failed update with exit 4 leaves the host in a state where re-invoking the
+#   script is unsafe; the role needs explicit restore primitives. Both paths
+#   enforce the same excludes (.git/.env/data/logs) and the same order.
+- name: Require rollback inputs (prev SHA + pre-update backup archive)
+  ansible.builtin.fail:
+    msg: "Set rollback_prev_sha and rollback_backup_archive (from the fleet report) before rollback."
+  when: (rollback_prev_sha | default('') | length == 0) or (rollback_backup_archive | default('') | length == 0)
+  check_mode: false
+  tags: [rollback, preflight]
+
+- name: Stop services before restore (bot and CP)
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - corebot.service
+    - corebot-cp.service
+  become: true
+  tags: [rollback, stop]
+
+- name: Restore previous code tree (rsync excludes persistent paths)
+  ansible.builtin.command:
+    cmd: >-
+      rsync -a --delete --checksum
+      --exclude /.git --exclude /.env --exclude /data --exclude /logs
+      --exclude /RELEASE.json --exclude /.deployed_sha
+      {{ rollback_stage_dir }}/ {{ corebot_app_dir }}/
+  become: true
+  changed_when: true
+  check_mode: false
+  tags: [rollback, code]
+
+- name: Restore persistent paths from pre-update backup (.env + data)
+  ansible.builtin.command:
+    cmd: tar -xzf {{ rollback_backup_archive }} -C {{ corebot_app_dir }}/ .env data
+  become: true
+  become_user: "{{ corebot_user }}"
+  changed_when: true
+  check_mode: false
+  tags: [rollback, data]
+
+- name: Fix ownership and .env permissions after restore
+  ansible.builtin.file:
+    path: "{{ corebot_app_dir }}/.env"
+    owner: "{{ corebot_user }}"
+    group: "{{ corebot_group | default(corebot_user) }}"
+    mode: "0600"
+  become: true
+  tags: [rollback, perms]
+
+- name: Record returned SHA after successful gate (set by playbook post-checks)
+  ansible.builtin.copy:
+    content: "{{ rollback_prev_sha }}"
+    dest: "{{ corebot_app_dir }}/.deployed_sha"
+    owner: "{{ corebot_user }}"
+    group: "{{ corebot_group | default(corebot_user) }}"
+    mode: "0644"
+  become: true
+  when: rollback_write_sha | default(false)
+  changed_when: true
+  tags: [rollback, record]

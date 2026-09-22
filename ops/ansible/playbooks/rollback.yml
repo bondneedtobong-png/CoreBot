@@ -1,0 +1,62 @@
+# rollback.yml — manual fleet rollback (task 07, RTO <= 60 min per SLO).
+# Uses the rollback role (1:1 port of update_corebot.sh step_rollback) for the
+# offline case where re-running the on-host script is unsafe (exit 4).
+# Operator sets rollback_prev_sha + rollback_backup_archive per host, e.g.:
+#   ansible-playbook playbooks/rollback.yml --limit corebot-test-alpha \
+#     -e rollback_prev_sha=<sha12> -e rollback_backup_archive=/opt/corebot/backups/corebot-<stamp>.tar.gz
+# Restart order after restore is always cp -> bot, then the health gate.
+- name: Roll back CoreBot fleet to previous SHA
+  hosts: corebot_fleet
+  become: false
+  gather_facts: true
+  any_errors_fatal: true
+  max_fail_percentage: 0
+  serial: 1
+
+  pre_tasks:
+    - name: Capture deployed SHA before rollback
+      ansible.builtin.command:
+        cmd: cat {{ corebot_app_dir }}/.deployed_sha
+      register: fleet_version_before
+      failed_when: false
+      changed_when: false
+      check_mode: false
+      tags: [report]
+
+  roles:
+    - role: rollback
+    - role: systemd_cp_bot
+    - role: health
+
+  post_tasks:
+    - name: Record returned SHA on the host
+      ansible.builtin.copy:
+        content: "{{ rollback_prev_sha }}"
+        dest: "{{ corebot_app_dir }}/.deployed_sha"
+        owner: "{{ corebot_user }}"
+        group: "{{ corebot_group | default(corebot_user) }}"
+        mode: "0644"
+      become: true
+      changed_when: true
+      when: (rollback_prev_sha | default('') | length > 0)
+      tags: [rollback, record]
+
+    - name: Capture deployed SHA after rollback
+      ansible.builtin.command:
+        cmd: cat {{ corebot_app_dir }}/.deployed_sha
+      register: fleet_version_after
+      failed_when: false
+      changed_when: false
+      check_mode: false
+      tags: [report]
+
+    - name: Write per-host rollback report (no secrets, control node)
+      ansible.builtin.template:
+        src: ../templates/fleet_report.j2
+        dest: "{{ fleet_report_dir }}/{{ inventory_hostname }}-rollback.txt"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+      tags: [report]

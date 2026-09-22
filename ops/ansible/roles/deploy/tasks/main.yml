@@ -1,0 +1,40 @@
+# deploy role (task 07): staged checkout of a PINNED SHA/tag + venv + deps.
+# Release contract (task 06): never "latest master" — explicit SHA wins,
+# then explicit tag; branch fallback only resolves to a SHA in preflight.
+# Idempotent: git module converges to the pinned version; pip install is
+# guarded with changed_when (requirements hash) and supports --check.
+- name: Fail fast when no pinned version is requested
+  ansible.builtin.fail:
+    msg: "Set corebot_target_sha or corebot_target_tag per host (release contract: pinned SHA/tag only)."
+  when: (corebot_target_sha | default('') | length == 0) and (corebot_target_tag | default('') | length == 0)
+  check_mode: false
+  tags: [deploy, preflight]
+
+- name: Checkout pinned CoreBot revision (staged, persistent checkout preserved)
+  ansible.builtin.git:
+    repo: "{{ corebot_repo_url }}"
+    dest: "{{ corebot_app_dir }}"
+    version: "{{ corebot_target_sha if (corebot_target_sha | default('') | length > 0) else corebot_target_tag }}"
+    force: false
+    update: true
+  become: true
+  become_user: "{{ corebot_user }}"
+  tags: [deploy, code]
+
+- name: Ensure virtualenv exists
+  ansible.builtin.command:
+    cmd: "{{ corebot_python_bin }} -m venv {{ corebot_venv_dir }}"
+    creates: "{{ corebot_venv_dir }}/bin/python"
+  become: true
+  become_user: "{{ corebot_user }}"
+  changed_when: false
+  tags: [deploy, venv]
+
+- name: Install Python dependencies into venv
+  ansible.builtin.pip:
+    requirements: "{{ corebot_app_dir }}/requirements.txt"
+    virtualenv: "{{ corebot_venv_dir }}"
+    state: present
+  become: true
+  become_user: "{{ corebot_user }}"
+  tags: [deploy, deps]
