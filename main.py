@@ -8,6 +8,7 @@ import sys
 from loguru import logger
 
 from bot.config import validate_config, LOG_LEVEL, OWNER_ID
+from utils.background_tasks import background_tasks
 from utils.logger import setup_logger
 from utils.telemetry import telemetry_emitter
 
@@ -71,6 +72,7 @@ async def main():
                 worker_manager.stop_mailing()
                 # Даём циклу рассылки корректно завершить текущую итерацию.
                 await asyncio.sleep(1.0)
+            await background_tasks.shutdown()
             await worker_manager.disconnect_all()
         except Exception as e:
             log.warning(f"Ошибка graceful shutdown WorkerManager: {e}")

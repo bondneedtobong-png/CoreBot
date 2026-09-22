@@ -21,6 +21,7 @@ from sqlalchemy import select, update
 
 from database.models import BotCommand, Mailing, MailingStatus
 from database.session import session_scope
+from utils.background_tasks import background_tasks
 from utils.logger import log
 
 
@@ -105,7 +106,7 @@ class BotCommandConsumer:
                     raise ValueError("mailing_id required")
                 # запускаем рассылку как отдельную фоновую таску, чтобы консьюмер
                 # не блокировался на длинной кампании
-                asyncio.create_task(
+                background_tasks.create(
                     worker_manager.start_mailing(mailing_id),
                     name=f"mailing-{mailing_id}",
                 )

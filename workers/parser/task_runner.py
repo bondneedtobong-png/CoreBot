@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from database.models import ParsingTask, ParsingTaskLog
 from database.repositories import AccountRepository
@@ -17,6 +17,20 @@ from workers.parser.account_pool import AccountSnap, RotatingClients
 from workers.parser import collect_channels, collect_groups, collect_users
 
 POLL_SEC = float(os.getenv("PARSER_POLL_SEC", "2.0"))
+
+
+async def claim_pending_task(session, task_id: int) -> bool:
+    """Atomically claim one pending task; False means another worker won."""
+    result = await session.execute(
+        update(ParsingTask)
+        .where(ParsingTask.id == task_id, ParsingTask.status == "pending")
+        .values(
+            status="running",
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0) == 1
 
 
 async def _append_log(
@@ -46,12 +60,9 @@ async def process_task(task_id: int) -> None:
     pool: Optional[RotatingClients] = None
     try:
         async with session_scope() as session:
-            task = await session.get(ParsingTask, task_id)
-            if not task or task.status != "pending":
+            if not await claim_pending_task(session, task_id):
+                await session.rollback()
                 return
-            task.status = "running"
-            if not task.started_at:
-                task.started_at = datetime.utcnow()
             await session.commit()
 
         async with session_scope() as session:

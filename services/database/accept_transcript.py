@@ -34,6 +34,7 @@ from database.repositories import ClientRepository
 
 from database.session import session_scope
 
+from utils.background_tasks import background_tasks
 from utils.logger import log
 
 
@@ -78,7 +79,10 @@ def schedule_fetch_accept_transcript(mail_session_id: int) -> None:
 
 
 
-    asyncio.create_task(_run())
+    background_tasks.create(
+        _run(),
+        name=f"accept-transcript-{mail_session_id}",
+    )
 
 
 

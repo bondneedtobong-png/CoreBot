@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import os
 from contextlib import suppress
 from pathlib import Path
@@ -19,6 +19,7 @@ from control_plane.routes.dashboard import router as dashboard_router
 from control_plane.routes.admin import router as admin_router
 from control_plane.routes.business import router as business_router
 from control_plane.routes.stream import router as stream_router
+from control_plane.health import router as health_router
 from control_plane.business.dashboard import router as biz_dashboard_router
 from control_plane.business.archive import router as biz_archive_router
 from control_plane.business.mailings import router as biz_mailings_router
@@ -27,6 +28,7 @@ from control_plane.business.instance import router as biz_instance_router
 from control_plane.business.groups import router as biz_groups_router
 from control_plane.business.proxies import router as biz_proxies_router
 from control_plane.business.parsing import router as biz_parsing_router
+from control_plane.business.tdata_routes import router as biz_tdata_router
 from database.repository import db as bot_db
 from utils.logger import log
 from workers.parser.task_runner import run_forever as run_parser_forever
@@ -49,6 +51,7 @@ app.include_router(dashboard_router)
 app.include_router(admin_router)
 app.include_router(business_router)
 app.include_router(stream_router)
+app.include_router(health_router)
 app.include_router(biz_dashboard_router)
 app.include_router(biz_archive_router)
 app.include_router(biz_mailings_router)
@@ -57,15 +60,11 @@ app.include_router(biz_instance_router)
 app.include_router(biz_groups_router)
 app.include_router(biz_proxies_router)
 app.include_router(biz_parsing_router)
+app.include_router(biz_tdata_router)
 
 web_dir = Path(__file__).parent.parent / "web-panel"
 if web_dir.exists():
     app.mount("/panel", StaticFiles(directory=str(web_dir), html=True), name="panel")
-
-
-@app.get("/health")
-def health():
-    return {"ok": True}
 
 
 def bootstrap_defaults() -> None:
@@ -100,8 +99,8 @@ bootstrap_defaults()
 @app.on_event("startup")
 async def startup_parser_embedded() -> None:
     """
-    Встроенный parser-loop: запускается вместе с веб-панелью/Control Plane.
-    Отключение при необходимости: PARSER_EMBEDDED=0.
+    Р’СЃС‚СЂРѕРµРЅРЅС‹Р№ parser-loop: Р·Р°РїСѓСЃРєР°РµС‚СЃСЏ РІРјРµСЃС‚Рµ СЃ РІРµР±-РїР°РЅРµР»СЊСЋ/Control Plane.
+    РћС‚РєР»СЋС‡РµРЅРёРµ РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё: PARSER_EMBEDDED=0.
     """
     enabled = str(os.getenv("PARSER_EMBEDDED", "1")).strip().lower() not in {
         "0",
@@ -114,7 +113,7 @@ async def startup_parser_embedded() -> None:
         app.state.parser_task = None
         return
 
-    # Нужен async-движок corebot.db для workers/parser/*
+    # РќСѓР¶РµРЅ async-РґРІРёР¶РѕРє corebot.db РґР»СЏ workers/parser/*
     await bot_db.connect()
     app.state.parser_task = asyncio.create_task(run_parser_forever(), name="embedded-parser-loop")
     log.info("Embedded parser started with Control Plane")

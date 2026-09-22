@@ -1,8 +1,8 @@
-/* ================================================================
-   CoreBot Control Panel — vanilla SPA
-   - Хеш-роутинг (Dashboard / Accounts / Dialogs / Logs / Settings)
-   - JWT в localStorage, перезапрос токена не реализован (простая login-форма)
-   - SSE-канал для live-сообщений из corebot.db
+﻿/* ================================================================
+   CoreBot Control Panel вЂ” vanilla SPA
+   - РҐРµС€-СЂРѕСѓС‚РёРЅРі (Dashboard / Accounts / Dialogs / Logs / Settings)
+   - JWT РІ localStorage, РїРµСЂРµР·Р°РїСЂРѕСЃ С‚РѕРєРµРЅР° РЅРµ СЂРµР°Р»РёР·РѕРІР°РЅ (РїСЂРѕСЃС‚Р°СЏ login-С„РѕСЂРјР°)
+   - SSE-РєР°РЅР°Р» РґР»СЏ live-СЃРѕРѕР±С‰РµРЅРёР№ РёР· corebot.db
    ================================================================ */
 
 const API = window.location.origin.replace(/\/$/, "");
@@ -29,7 +29,7 @@ const state = {
     accountSearch: "",
     leftTab: "accounts", // accounts | groups
     selectedGroupId: null, // null = all
-    selectedGroupName: "Все",
+    selectedGroupName: "Р’СЃРµ",
     groupAccountIds: null, // Set<int> | null
   },
   accounts: {
@@ -42,7 +42,7 @@ const state = {
 
 function safeJSON(s) { try { return s ? JSON.parse(s) : null; } catch { return null; } }
 function fmtDate(s) {
-  if (!s) return "—";
+  if (!s) return "вЂ”";
   try {
     const d = (s instanceof Date) ? s : new Date(s);
     if (Number.isNaN(d.getTime())) return s;
@@ -50,13 +50,13 @@ function fmtDate(s) {
   } catch { return s; }
 }
 function fmtRelative(s) {
-  if (!s) return "—";
+  if (!s) return "вЂ”";
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return s;
   const diff = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (diff < 60) return `${diff} с назад`;
-  if (diff < 3600) return `${Math.floor(diff / 60)} мин назад`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`;
+  if (diff < 60) return `${diff} СЃ РЅР°Р·Р°Рґ`;
+  if (diff < 3600) return `${Math.floor(diff / 60)} РјРёРЅ РЅР°Р·Р°Рґ`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} С‡ РЅР°Р·Р°Рґ`;
   return d.toLocaleDateString("ru-RU");
 }
 function escapeHTML(s) {
@@ -129,7 +129,7 @@ async function loginFlow(ev) {
       body: JSON.stringify({ username, password }),
     });
     if (!r.ok) {
-      msg.textContent = r.status === 401 ? "Неверный логин или пароль" : `Ошибка входа: HTTP ${r.status}`;
+      msg.textContent = r.status === 401 ? "РќРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ РёР»Рё РїР°СЂРѕР»СЊ" : `РћС€РёР±РєР° РІС…РѕРґР°: HTTP ${r.status}`;
       msg.classList.remove("hidden");
       return;
     }
@@ -145,7 +145,7 @@ async function loginFlow(ev) {
     localStorage.setItem(USER_KEY, JSON.stringify(state.user));
     await enterApp();
   } catch (e) {
-    msg.textContent = "Ошибка сети";
+    msg.textContent = "РћС€РёР±РєР° СЃРµС‚Рё";
     msg.classList.remove("hidden");
   }
 }
@@ -163,14 +163,14 @@ function handleLogout(silent = false) {
   lg.classList.remove("hidden");
   lg.classList.add("flex");
   lg.style.display = "flex";
-  if (!silent) toast("Сессия завершена");
+  if (!silent) toast("РЎРµСЃСЃРёСЏ Р·Р°РІРµСЂС€РµРЅР°");
 }
 
 async function enterApp() {
   const app = $("#appShell");
   const lg = $("#loginScreen");
-  // Гасим экран логина и его inline style="display:flex" — иначе он
-  // остаётся в потоке и виден при прокрутке над приложением.
+  // Р“Р°СЃРёРј СЌРєСЂР°РЅ Р»РѕРіРёРЅР° Рё РµРіРѕ inline style="display:flex" вЂ” РёРЅР°С‡Рµ РѕРЅ
+  // РѕСЃС‚Р°С‘С‚СЃСЏ РІ РїРѕС‚РѕРєРµ Рё РІРёРґРµРЅ РїСЂРё РїСЂРѕРєСЂСѓС‚РєРµ РЅР°Рґ РїСЂРёР»РѕР¶РµРЅРёРµРј.
   lg.classList.add("hidden");
   lg.classList.remove("flex");
   lg.style.display = "none";
@@ -186,7 +186,7 @@ async function enterApp() {
     } catch {}
   }
   const roleSuffix = state.user?.role ? ` (${state.user.role})` : "";
-  $("#userBadge").textContent = (state.user?.username || "—") + roleSuffix;
+  $("#userBadge").textContent = (state.user?.username || "вЂ”") + roleSuffix;
   openSSE();
   navigate(window.location.hash || "#/dashboard");
 }
@@ -245,8 +245,8 @@ function onLiveMessage(msg) {
   if (state.route === "dialogs" &&
       state.current.accountId === msg.account_id &&
       state.current.peerId === msg.peer_user_id) {
-    // Если это assistant — он мог соответствовать строке очереди.
-    // Перерисовываем диалог целиком, чтобы убрать placeholder из outbound_queue.
+    // Р•СЃР»Рё СЌС‚Рѕ assistant вЂ” РѕРЅ РјРѕРі СЃРѕРѕС‚РІРµС‚СЃС‚РІРѕРІР°С‚СЊ СЃС‚СЂРѕРєРµ РѕС‡РµСЂРµРґРё.
+    // РџРµСЂРµСЂРёСЃРѕРІС‹РІР°РµРј РґРёР°Р»РѕРі С†РµР»РёРєРѕРј, С‡С‚РѕР±С‹ СѓР±СЂР°С‚СЊ placeholder РёР· outbound_queue.
     if (msg.role === "assistant") {
       loadDialogMessages(msg.account_id, msg.peer_user_id);
     } else {
@@ -298,16 +298,16 @@ function navigate(hash) {
 /* ------------------------------ Queue view ----------------------------- */
 
 async function renderQueue() {
-  setHeader("Очередь", "Ручные исходящие из веба (outbound_queue)");
+  setHeader("РћС‡РµСЂРµРґСЊ", "Р СѓС‡РЅС‹Рµ РёСЃС…РѕРґСЏС‰РёРµ РёР· РІРµР±Р° (outbound_queue)");
   const readOnly = isReadOnlyRole();
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
       <div class="card">
         <div class="flex items-center gap-3 text-sm flex-wrap">
-          <label class="text-slate-400">Статус:</label>
+          <label class="text-slate-400">РЎС‚Р°С‚СѓСЃ:</label>
           <select id="qStatus" class="bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100">
-            <option value="">все</option>
+            <option value="">РІСЃРµ</option>
             <option value="pending">pending</option>
             <option value="sending">sending</option>
             <option value="sent">sent</option>
@@ -320,9 +320,9 @@ async function renderQueue() {
                  class="w-40 bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" />
           <input id="qLimit" type="number" min="1" max="1000" value="200"
                  class="w-24 bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" />
-          <button id="qApply" class="px-3 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white">Применить</button>
-          <button id="qBulkRetry" class="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>↻ Retry выбранных</button>
-          <button id="qBulkCancel" class="px-3 py-1 rounded bg-rose-700 hover:bg-rose-600 text-white ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>✕ Cancel выбранных</button>
+          <button id="qApply" class="px-3 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white">РџСЂРёРјРµРЅРёС‚СЊ</button>
+          <button id="qBulkRetry" class="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>в†» Retry РІС‹Р±СЂР°РЅРЅС‹С…</button>
+          <button id="qBulkCancel" class="px-3 py-1 rounded bg-rose-700 hover:bg-rose-600 text-white ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>вњ• Cancel РІС‹Р±СЂР°РЅРЅС‹С…</button>
           <span id="qCount" class="text-xs text-slate-500 ml-auto"></span>
         </div>
       </div>
@@ -331,10 +331,10 @@ async function renderQueue() {
           <thead>
             <tr>
               <th><input id="qSelectAll" type="checkbox" class="rounded border-ink-600 bg-ink-800" ${readOnly ? "disabled" : ""} /></th>
-              <th>ID</th><th>Аккаунт</th><th>Peer</th><th>Текст</th><th>Статус</th><th>Attempts</th><th>Ошибка</th><th>Время</th><th></th>
+              <th>ID</th><th>РђРєРєР°СѓРЅС‚</th><th>Peer</th><th>РўРµРєСЃС‚</th><th>РЎС‚Р°С‚СѓСЃ</th><th>Attempts</th><th>РћС€РёР±РєР°</th><th>Р’СЂРµРјСЏ</th><th></th>
             </tr>
           </thead>
-          <tbody id="qBody"><tr><td colspan="10" class="text-center text-slate-500 py-8">Загрузка…</td></tr></tbody>
+          <tbody id="qBody"><tr><td colspan="10" class="text-center text-slate-500 py-8">Р—Р°РіСЂСѓР·РєР°вЂ¦</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -365,9 +365,9 @@ async function loadQueueList() {
     params.set("limit", limit || "200");
     const list = await api(`/business/queue?${params.toString()}`);
     const tbody = $("#qBody");
-    $("#qCount").textContent = `найдено: ${list.length}`;
+    $("#qCount").textContent = `РЅР°Р№РґРµРЅРѕ: ${list.length}`;
     if (!list.length) {
-      tbody.innerHTML = `<tr><td colspan="10" class="text-center text-slate-500 py-8">Очередь пуста по фильтру.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="text-center text-slate-500 py-8">РћС‡РµСЂРµРґСЊ РїСѓСЃС‚Р° РїРѕ С„РёР»СЊС‚СЂСѓ.</td></tr>`;
       return;
     }
     const readOnly = isReadOnlyRole();
@@ -380,11 +380,11 @@ async function loadQueueList() {
         <td class="max-w-[360px] truncate text-slate-200" title="${escapeHTML(q.text || "")}">${escapeHTML(q.text || "")}</td>
         <td>${queueStatusPill(q.status)}</td>
         <td class="text-slate-300">${q.attempts ?? 0}</td>
-        <td class="max-w-[260px] truncate text-xs text-rose-300" title="${escapeHTML(q.error || "")}">${escapeHTML(q.error || "—")}</td>
+        <td class="max-w-[260px] truncate text-xs text-rose-300" title="${escapeHTML(q.error || "")}">${escapeHTML(q.error || "вЂ”")}</td>
         <td class="text-xs text-slate-400">${fmtDate(q.created_at)}</td>
         <td class="text-right whitespace-nowrap">
-          <button data-q-act="retry" data-qid="${q.queue_id}" class="px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>↻</button>
-          <button data-q-act="cancel" data-qid="${q.queue_id}" class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs ml-1 ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>✕</button>
+          <button data-q-act="retry" data-qid="${q.queue_id}" class="px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>в†»</button>
+          <button data-q-act="cancel" data-qid="${q.queue_id}" class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs ml-1 ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>вњ•</button>
         </td>
       </tr>
     `).join("");
@@ -394,14 +394,14 @@ async function loadQueueList() {
       });
     }
   } catch (e) {
-    toast(`Очередь: ${e.message}`, "error");
+    toast(`РћС‡РµСЂРµРґСЊ: ${e.message}`, "error");
   }
 }
 
 async function onQueueItemAction(queueId, action) {
   if (!queueId || !action) return;
   if (isReadOnlyRole()) {
-    toast("Роль read-only: действие запрещено", "error");
+    toast("Р РѕР»СЊ read-only: РґРµР№СЃС‚РІРёРµ Р·Р°РїСЂРµС‰РµРЅРѕ", "error");
     return;
   }
   try {
@@ -412,20 +412,20 @@ async function onQueueItemAction(queueId, action) {
     }
     await loadQueueList();
   } catch (e) {
-    toast(`Очередь ${action}: ${e.message}`, "error");
+    toast(`РћС‡РµСЂРµРґСЊ ${action}: ${e.message}`, "error");
   }
 }
 
 async function runQueueBulk(action) {
   if (isReadOnlyRole()) {
-    toast("Роль read-only: массовые действия запрещены", "error");
+    toast("Р РѕР»СЊ read-only: РјР°СЃСЃРѕРІС‹Рµ РґРµР№СЃС‚РІРёСЏ Р·Р°РїСЂРµС‰РµРЅС‹", "error");
     return;
   }
   const ids = $$("#qBody input[type='checkbox'][data-qid]:checked")
     .map((c) => Number(c.dataset.qid))
     .filter((n) => Number.isFinite(n) && n > 0);
   if (!ids.length) {
-    toast("Отметьте элементы очереди", "info");
+    toast("РћС‚РјРµС‚СЊС‚Рµ СЌР»РµРјРµРЅС‚С‹ РѕС‡РµСЂРµРґРё", "info");
     return;
   }
   try {
@@ -477,41 +477,41 @@ async function renderParsing(tabSeg) {
   state.parsing.stream = null;
   const tab = _parsingTabValid(tabSeg || state.parsing.tab);
   state.parsing.tab = tab;
-  setHeader("Парсинг", "Задачи Telethon (parser-worker) — каналы, группы, пользователи");
+  setHeader("РџР°СЂСЃРёРЅРі", "Р—Р°РґР°С‡Рё Telethon (parser-worker) вЂ” РєР°РЅР°Р»С‹, РіСЂСѓРїРїС‹, РїРѕР»СЊР·РѕРІР°С‚РµР»Рё");
   const readOnly = isReadOnlyRole();
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
       <div class="flex flex-wrap gap-2 text-sm">
-        <button data-ptab="channels" class="px-3 py-1.5 rounded-lg border ${tab === "channels" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Каналы</button>
-        <button data-ptab="groups" class="px-3 py-1.5 rounded-lg border ${tab === "groups" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Группы</button>
-        <button data-ptab="users" class="px-3 py-1.5 rounded-lg border ${tab === "users" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Пользователи</button>
-        <span class="text-xs text-slate-500 ml-auto self-center">Парсер запускается вместе с веб-панелью</span>
+        <button data-ptab="channels" class="px-3 py-1.5 rounded-lg border ${tab === "channels" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">РљР°РЅР°Р»С‹</button>
+        <button data-ptab="groups" class="px-3 py-1.5 rounded-lg border ${tab === "groups" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">Р“СЂСѓРїРїС‹</button>
+        <button data-ptab="users" class="px-3 py-1.5 rounded-lg border ${tab === "users" ? "bg-accent-600 border-accent-500 text-white" : "bg-ink-800 border-ink-600 text-slate-200"}">РџРѕР»СЊР·РѕРІР°С‚РµР»Рё</button>
+        <span class="text-xs text-slate-500 ml-auto self-center">РџР°СЂСЃРµСЂ Р·Р°РїСѓСЃРєР°РµС‚СЃСЏ РІРјРµСЃС‚Рµ СЃ РІРµР±-РїР°РЅРµР»СЊСЋ</span>
       </div>
 
       <div id="pFormCard" class="card space-y-3 text-sm"></div>
 
       <div class="card">
         <div class="flex items-center justify-between mb-2">
-          <h3 class="font-semibold text-white">Задачи</h3>
+          <h3 class="font-semibold text-white">Р—Р°РґР°С‡Рё</h3>
           <span class="text-xs text-emerald-400">live</span>
         </div>
         <div class="overflow-x-auto">
           <table class="cb-table text-xs">
             <thead>
               <tr>
-                <th>ID</th><th>Тип</th><th>Статус</th><th>%</th><th>Этап</th><th>Акк</th><th>Запрос</th><th>Found</th><th>Filt</th><th>Err</th><th>Создана</th><th></th>
+                <th>ID</th><th>РўРёРї</th><th>РЎС‚Р°С‚СѓСЃ</th><th>%</th><th>Р­С‚Р°Рї</th><th>РђРєРє</th><th>Р—Р°РїСЂРѕСЃ</th><th>Found</th><th>Filt</th><th>Err</th><th>РЎРѕР·РґР°РЅР°</th><th></th>
               </tr>
             </thead>
-            <tbody id="pTaskBody"><tr><td colspan="12" class="text-center text-slate-500 py-6">Загрузка…</td></tr></tbody>
+            <tbody id="pTaskBody"><tr><td colspan="12" class="text-center text-slate-500 py-6">Р—Р°РіСЂСѓР·РєР°вЂ¦</td></tr></tbody>
           </table>
         </div>
       </div>
 
       <div class="card" id="pDetailCard" style="display:none">
         <div class="flex flex-wrap items-center gap-2 mb-2">
-          <h3 class="font-semibold text-white">Задача #<span id="pDetailId">—</span></h3>
-          <button id="pCancelTask" class="text-xs px-2 py-1 rounded bg-rose-800 border border-rose-600 ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Отменить</button>
+          <h3 class="font-semibold text-white">Р—Р°РґР°С‡Р° #<span id="pDetailId">вЂ”</span></h3>
+          <button id="pCancelTask" class="text-xs px-2 py-1 rounded bg-rose-800 border border-rose-600 ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>РћС‚РјРµРЅРёС‚СЊ</button>
           <div class="ml-auto flex flex-wrap gap-2 text-xs">
             <button type="button" data-pex="channels" class="px-2 py-1 rounded bg-ink-700 border border-ink-600">export channels.txt</button>
             <button type="button" data-pex="groups" class="px-2 py-1 rounded bg-ink-700 border border-ink-600">export groups.txt</button>
@@ -539,22 +539,22 @@ async function renderParsing(tabSeg) {
 
   if (tab === "channels" || tab === "groups") {
     formCard.innerHTML = `
-      <div class="font-medium text-slate-200">${tab === "channels" ? "Каналы" : "Группы"}: новая задача</div>
+      <div class="font-medium text-slate-200">${tab === "channels" ? "РљР°РЅР°Р»С‹" : "Р“СЂСѓРїРїС‹"}: РЅРѕРІР°СЏ Р·Р°РґР°С‡Р°</div>
       <div class="grid md:grid-cols-2 gap-3 text-xs">
-        <label class="block">Ключевые слова (по одному в строке)
+        <label class="block">РљР»СЋС‡РµРІС‹Рµ СЃР»РѕРІР° (РїРѕ РѕРґРЅРѕРјСѓ РІ СЃС‚СЂРѕРєРµ)
           <textarea id="pKeywords" rows="4" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono" placeholder="crypto&#10;defi"></textarea>
         </label>
-        <label class="block">Окончания (по одному в строке)
+        <label class="block">РћРєРѕРЅС‡Р°РЅРёСЏ (РїРѕ РѕРґРЅРѕРјСѓ РІ СЃС‚СЂРѕРєРµ)
           <textarea id="pEndings" rows="4" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono" placeholder="news&#10;chat&#10;channel"></textarea>
         </label>
       </div>
       <div class="grid md:grid-cols-3 gap-3 text-xs">
-        <label class="block">Depth (1–3)
+        <label class="block">Depth (1вЂ“3)
           <select id="pDepth" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
             <option value="1">1</option><option value="2">2</option><option value="3">3</option>
           </select>
         </label>
-        <label class="block">Режим задачи
+        <label class="block">Р РµР¶РёРј Р·Р°РґР°С‡Рё
           <select id="pMode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
             <option value="max_coverage">max_coverage</option>
             <option value="active_only">active_only</option>
@@ -562,38 +562,38 @@ async function renderParsing(tabSeg) {
         </label>
         <label class="block flex items-end gap-2">
           <input id="pExpandedSearch" type="checkbox" class="rounded border-ink-600 bg-ink-800" />
-          <span>Расширенный поиск</span>
+          <span>Р Р°СЃС€РёСЂРµРЅРЅС‹Р№ РїРѕРёСЃРє</span>
         </label>
       </div>
       <div class="grid md:grid-cols-3 gap-3 text-xs">
-        <label class="inline-flex items-center gap-2"><input id="fActive7d" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> Только активные (≥1 пост/7д)</label>
-        <label class="inline-flex items-center gap-2"><input id="fDiscussion" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> Только открытые комментарии</label>
-        <label class="inline-flex items-center gap-2"><input id="fPublic" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> Только открытые каналы</label>
-        <label class="block">Подписчики min
+        <label class="inline-flex items-center gap-2"><input id="fActive7d" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> РўРѕР»СЊРєРѕ Р°РєС‚РёРІРЅС‹Рµ (в‰Ґ1 РїРѕСЃС‚/7Рґ)</label>
+        <label class="inline-flex items-center gap-2"><input id="fDiscussion" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> РўРѕР»СЊРєРѕ РѕС‚РєСЂС‹С‚С‹Рµ РєРѕРјРјРµРЅС‚Р°СЂРёРё</label>
+        <label class="inline-flex items-center gap-2"><input id="fPublic" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> РўРѕР»СЊРєРѕ РѕС‚РєСЂС‹С‚С‹Рµ РєР°РЅР°Р»С‹</label>
+        <label class="block">РџРѕРґРїРёСЃС‡РёРєРё min
           <input id="fSubsMin" type="number" min="0" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" />
         </label>
-        <label class="block">Подписчики max
+        <label class="block">РџРѕРґРїРёСЃС‡РёРєРё max
           <input id="fSubsMax" type="number" min="0" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100" />
         </label>
-        <label class="block">Язык
+        <label class="block">РЇР·С‹Рє
           <select id="fLang" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
-            <option value="">любая</option><option value="ru">ru</option><option value="en">en</option>
+            <option value="">Р»СЋР±Р°СЏ</option><option value="ru">ru</option><option value="en">en</option>
           </select>
         </label>
       </div>
-      <div><span class="text-slate-400">Аккаунты:</span><div class="mt-1 flex flex-wrap">${accOpts || "<span class='text-slate-500'>нет аккаунтов</span>"}</div></div>
-      <button id="pSubmit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Запустить</button>
+      <div><span class="text-slate-400">РђРєРєР°СѓРЅС‚С‹:</span><div class="mt-1 flex flex-wrap">${accOpts || "<span class='text-slate-500'>РЅРµС‚ Р°РєРєР°СѓРЅС‚РѕРІ</span>"}</div></div>
+      <button id="pSubmit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Р—Р°РїСѓСЃС‚РёС‚СЊ</button>
     `;
     $("#pSubmit")?.addEventListener("click", async () => {
       if (readOnly) return;
       const ids = $$(".p-acc:checked").map((c) => Number(c.value)).filter((n) => n > 0);
       if (!ids.length) {
-        toast("Выберите хотя бы один аккаунт", "error");
+        toast("Р’С‹Р±РµСЂРёС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ Р°РєРєР°СѓРЅС‚", "error");
         return;
       }
       const keywords = ($("#pKeywords")?.value || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
       if (!keywords.length) {
-        toast("Добавьте хотя бы одно ключевое слово", "error");
+        toast("Р”РѕР±Р°РІСЊС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРЅРѕ РєР»СЋС‡РµРІРѕРµ СЃР»РѕРІРѕ", "error");
         return;
       }
       const endings = ($("#pEndings")?.value || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
@@ -623,7 +623,7 @@ async function renderParsing(tabSeg) {
             },
           },
         });
-        toast("Задача создана", "success");
+        toast("Р—Р°РґР°С‡Р° СЃРѕР·РґР°РЅР°", "success");
         await loadParsingTasks();
       } catch (e) {
         toast(e.message, "error");
@@ -631,45 +631,45 @@ async function renderParsing(tabSeg) {
     });
   } else {
     formCard.innerHTML = `
-      <div class="font-medium text-slate-200">Пользователи: новая задача</div>
-      <label class="block text-xs">Ввод источников (@username или t.me ссылки), по одной строке
+      <div class="font-medium text-slate-200">РџРѕР»СЊР·РѕРІР°С‚РµР»Рё: РЅРѕРІР°СЏ Р·Р°РґР°С‡Р°</div>
+      <label class="block text-xs">Р’РІРѕРґ РёСЃС‚РѕС‡РЅРёРєРѕРІ (@username РёР»Рё t.me СЃСЃС‹Р»РєРё), РїРѕ РѕРґРЅРѕР№ СЃС‚СЂРѕРєРµ
         <textarea id="pUserInputs" rows="5" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100 font-mono text-xs"
         placeholder="@group_one&#10;https://t.me/channel_one"></textarea>
       </label>
-      <label class="block text-xs">Загрузка .txt
+      <label class="block text-xs">Р—Р°РіСЂСѓР·РєР° .txt
         <input id="pUsersTxtFile" type="file" accept=".txt,text/plain" class="mt-1 block w-full text-slate-300 text-xs" />
       </label>
       <div class="grid md:grid-cols-2 gap-3 text-xs">
         <div class="space-y-2 border border-ink-700 rounded p-2">
-          <div class="text-slate-300">Источники (группы)</div>
-          <label class="inline-flex items-center gap-2"><input id="srcGroupMembers" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> участники</label>
-          <label class="inline-flex items-center gap-2"><input id="srcGroupActive" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> активные (писали)</label>
+          <div class="text-slate-300">РСЃС‚РѕС‡РЅРёРєРё (РіСЂСѓРїРїС‹)</div>
+          <label class="inline-flex items-center gap-2"><input id="srcGroupMembers" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> СѓС‡Р°СЃС‚РЅРёРєРё</label>
+          <label class="inline-flex items-center gap-2"><input id="srcGroupActive" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> Р°РєС‚РёРІРЅС‹Рµ (РїРёСЃР°Р»Рё)</label>
         </div>
         <div class="space-y-2 border border-ink-700 rounded p-2">
-          <div class="text-slate-300">Источники (каналы)</div>
-          <label class="inline-flex items-center gap-2"><input id="srcChanCommenters" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> комментаторы</label>
-          <label class="inline-flex items-center gap-2"><input id="srcChanActiveDiscussion" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> активные (если есть чат)</label>
+          <div class="text-slate-300">РСЃС‚РѕС‡РЅРёРєРё (РєР°РЅР°Р»С‹)</div>
+          <label class="inline-flex items-center gap-2"><input id="srcChanCommenters" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> РєРѕРјРјРµРЅС‚Р°С‚РѕСЂС‹</label>
+          <label class="inline-flex items-center gap-2"><input id="srcChanActiveDiscussion" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> Р°РєС‚РёРІРЅС‹Рµ (РµСЃР»Рё РµСЃС‚СЊ С‡Р°С‚)</label>
         </div>
       </div>
       <div class="grid md:grid-cols-3 gap-3 text-xs">
-        <label class="block">Режим задачи
+        <label class="block">Р РµР¶РёРј Р·Р°РґР°С‡Рё
           <select id="pUserMode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
             <option value="max_coverage">max_coverage</option>
             <option value="active_only">active_only</option>
           </select>
         </label>
-        <label class="inline-flex items-center gap-2"><input id="ufUsername" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> только с username</label>
-        <label class="inline-flex items-center gap-2"><input id="ufAvatar" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> только с аватаром</label>
-        <label class="inline-flex items-center gap-2"><input id="ufRecentOnline" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> только недавно онлайн</label>
-        <label class="inline-flex items-center gap-2"><input id="ufAntiBot" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> анти-бот (удалённые/пустые)</label>
-        <label class="block">Язык
+        <label class="inline-flex items-center gap-2"><input id="ufUsername" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> С‚РѕР»СЊРєРѕ СЃ username</label>
+        <label class="inline-flex items-center gap-2"><input id="ufAvatar" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> С‚РѕР»СЊРєРѕ СЃ Р°РІР°С‚Р°СЂРѕРј</label>
+        <label class="inline-flex items-center gap-2"><input id="ufRecentOnline" type="checkbox" class="rounded border-ink-600 bg-ink-800" /> С‚РѕР»СЊРєРѕ РЅРµРґР°РІРЅРѕ РѕРЅР»Р°Р№РЅ</label>
+        <label class="inline-flex items-center gap-2"><input id="ufAntiBot" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked /> Р°РЅС‚Рё-Р±РѕС‚ (СѓРґР°Р»С‘РЅРЅС‹Рµ/РїСѓСЃС‚С‹Рµ)</label>
+        <label class="block">РЇР·С‹Рє
           <select id="ufLang" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded px-2 py-1 text-slate-100">
-            <option value="">любой</option><option value="ru">ru</option><option value="en">en</option>
+            <option value="">Р»СЋР±РѕР№</option><option value="ru">ru</option><option value="en">en</option>
           </select>
         </label>
       </div>
-      <div><span class="text-slate-400">Аккаунты:</span><div class="mt-1 flex flex-wrap">${accOpts || "<span class='text-slate-500'>нет аккаунтов</span>"}</div></div>
-      <button id="pSubmitUsers" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Запустить</button>
+      <div><span class="text-slate-400">РђРєРєР°СѓРЅС‚С‹:</span><div class="mt-1 flex flex-wrap">${accOpts || "<span class='text-slate-500'>РЅРµС‚ Р°РєРєР°СѓРЅС‚РѕРІ</span>"}</div></div>
+      <button id="pSubmitUsers" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm ${readOnly ? "opacity-50 cursor-not-allowed" : ""}" ${readOnly ? "disabled" : ""}>Р—Р°РїСѓСЃС‚РёС‚СЊ</button>
     `;
     let txtUploaded = "";
     $("#pUsersTxtFile")?.addEventListener("change", async (ev) => {
@@ -677,21 +677,21 @@ async function renderParsing(tabSeg) {
       if (!f) return;
       try {
         txtUploaded = await f.text();
-        toast(`Загружен ${f.name}`, "success");
+        toast(`Р—Р°РіСЂСѓР¶РµРЅ ${f.name}`, "success");
       } catch {
-        toast("Не удалось прочитать файл", "error");
+        toast("РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕС‡РёС‚Р°С‚СЊ С„Р°Р№Р»", "error");
       }
     });
     $("#pSubmitUsers")?.addEventListener("click", async () => {
       if (readOnly) return;
       const ids = $$(".p-acc:checked").map((c) => Number(c.value)).filter((n) => n > 0);
       if (!ids.length) {
-        toast("Выберите хотя бы один аккаунт", "error");
+        toast("Р’С‹Р±РµСЂРёС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРёРЅ Р°РєРєР°СѓРЅС‚", "error");
         return;
       }
       const manualText = [($("#pUserInputs")?.value || "").trim(), txtUploaded.trim()].filter(Boolean).join("\n");
       if (!manualText) {
-        toast("Добавьте список источников вручную или через txt", "error");
+        toast("Р”РѕР±Р°РІСЊС‚Рµ СЃРїРёСЃРѕРє РёСЃС‚РѕС‡РЅРёРєРѕРІ РІСЂСѓС‡РЅСѓСЋ РёР»Рё С‡РµСЂРµР· txt", "error");
         return;
       }
       const mode = ($("#pUserMode")?.value || "max_coverage").trim();
@@ -724,7 +724,7 @@ async function renderParsing(tabSeg) {
             },
           },
         });
-        toast("Задача создана", "success");
+        toast("Р—Р°РґР°С‡Р° СЃРѕР·РґР°РЅР°", "success");
         await loadParsingTasks();
       } catch (e) {
         toast(e.message, "error");
@@ -739,24 +739,24 @@ async function renderParsing(tabSeg) {
       const list = await api("/business/parsing/tasks?limit=100");
       const tbody = $("#pTaskBody");
       if (!list.length) {
-        tbody.innerHTML = `<tr><td colspan="12" class="text-center text-slate-500 py-6">Нет задач</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="12" class="text-center text-slate-500 py-6">РќРµС‚ Р·Р°РґР°С‡</td></tr>`;
         return;
       }
-      const stageMap = { search: "поиск", collect: "сбор", filter: "фильтрация", done: "завершено" };
+      const stageMap = { search: "РїРѕРёСЃРє", collect: "СЃР±РѕСЂ", filter: "С„РёР»СЊС‚СЂР°С†РёСЏ", done: "Р·Р°РІРµСЂС€РµРЅРѕ" };
       tbody.innerHTML = list.map((t) => `
         <tr class="cursor-pointer hover:bg-ink-800/80" data-pselect="${t.id}">
           <td class="text-slate-400">#${t.id}</td>
           <td>${escapeHTML(t.kind)}</td>
           <td>${escapeHTML(t.status)}</td>
           <td>${t.progress_percent ?? 0}</td>
-          <td class="max-w-[140px] truncate" title="${escapeHTML(t.current_stage || "")}">${escapeHTML(stageMap[t.current_stage] || t.current_stage || "—")}</td>
-          <td>${t.current_account_id ?? "—"}</td>
-          <td class="max-w-[200px] truncate" title="${escapeHTML(t.current_query || "")}">${escapeHTML(t.current_query || "—")}</td>
+          <td class="max-w-[140px] truncate" title="${escapeHTML(t.current_stage || "")}">${escapeHTML(stageMap[t.current_stage] || t.current_stage || "вЂ”")}</td>
+          <td>${t.current_account_id ?? "вЂ”"}</td>
+          <td class="max-w-[200px] truncate" title="${escapeHTML(t.current_query || "")}">${escapeHTML(t.current_query || "вЂ”")}</td>
           <td>${t.found_count ?? 0}</td>
           <td>${t.filtered_count ?? 0}</td>
           <td>${t.error_count ?? 0}</td>
           <td class="text-slate-400">${fmtDate(t.created_at)}</td>
-          <td><button data-plogs="${t.id}" class="text-xs text-accent-400 hover:text-accent-300">логи</button></td>
+          <td><button data-plogs="${t.id}" class="text-xs text-accent-400 hover:text-accent-300">Р»РѕРіРё</button></td>
         </tr>
       `).join("");
       tbody.querySelectorAll("tr[data-pselect]").forEach((row) => {
@@ -774,7 +774,7 @@ async function renderParsing(tabSeg) {
         });
       });
     } catch (e) {
-      toast(`Парсинг: ${e.message}`, "error");
+      toast(`РџР°СЂСЃРёРЅРі: ${e.message}`, "error");
     }
   }
 
@@ -784,14 +784,14 @@ async function renderParsing(tabSeg) {
     const pre = $("#pLogs");
     $("#pDetailId").textContent = String(taskId);
     card.style.display = "block";
-    pre.textContent = "Загрузка…";
+    pre.textContent = "Р—Р°РіСЂСѓР·РєР°вЂ¦";
     try {
       const logs = await api(`/business/parsing/tasks/${taskId}/logs?limit=300`);
       pre.textContent = (logs || []).map((l) =>
         `[${fmtDate(l.created_at)}] ${l.level} ${l.event}: ${l.message || ""}`
       ).join("\n");
     } catch (e) {
-      pre.textContent = "Ошибка: " + e.message;
+      pre.textContent = "РћС€РёР±РєР°: " + e.message;
     }
   }
 
@@ -799,7 +799,7 @@ async function renderParsing(tabSeg) {
     if (readOnly || !selectedTaskId) return;
     try {
       await api(`/business/parsing/tasks/${selectedTaskId}/cancel`, { method: "POST" });
-      toast("Отмена запрошена", "success");
+      toast("РћС‚РјРµРЅР° Р·Р°РїСЂРѕС€РµРЅР°", "success");
       await loadParsingTasks();
     } catch (e) {
       toast(e.message, "error");
@@ -808,7 +808,7 @@ async function renderParsing(tabSeg) {
   $$("button[data-pex]").forEach((b) => {
     b.addEventListener("click", async () => {
       if (!selectedTaskId) {
-        toast("Выберите задачу (строка таблицы)", "info");
+        toast("Р’С‹Р±РµСЂРёС‚Рµ Р·Р°РґР°С‡Сѓ (СЃС‚СЂРѕРєР° С‚Р°Р±Р»РёС†С‹)", "info");
         return;
       }
       const kind = b.getAttribute("data-pex");
@@ -823,7 +823,7 @@ async function renderParsing(tabSeg) {
 
   await loadParsingTasks();
 
-  // Realtime без дёрганья UI: события приходят по SSE только при изменениях.
+  // Realtime Р±РµР· РґС‘СЂРіР°РЅСЊСЏ UI: СЃРѕР±С‹С‚РёСЏ РїСЂРёС…РѕРґСЏС‚ РїРѕ SSE С‚РѕР»СЊРєРѕ РїСЂРё РёР·РјРµРЅРµРЅРёСЏС….
   try {
     const url = `${API}/business/parsing/stream?token=${encodeURIComponent(state.token)}`;
     const es = new EventSource(url);
@@ -847,11 +847,11 @@ async function renderParsing(tabSeg) {
       if (nearBottom) pre.scrollTop = pre.scrollHeight;
     });
     es.onerror = () => {
-      // Оставляем только SSE-путь, без отката на ручной polling.
+      // РћСЃС‚Р°РІР»СЏРµРј С‚РѕР»СЊРєРѕ SSE-РїСѓС‚СЊ, Р±РµР· РѕС‚РєР°С‚Р° РЅР° СЂСѓС‡РЅРѕР№ polling.
     };
   } catch {
-    // SSE недоступен — покажем предупреждение.
-    toast("Realtime stream parsing недоступен", "error");
+    // SSE РЅРµРґРѕСЃС‚СѓРїРµРЅ вЂ” РїРѕРєР°Р¶РµРј РїСЂРµРґСѓРїСЂРµР¶РґРµРЅРёРµ.
+    toast("Realtime stream parsing РЅРµРґРѕСЃС‚СѓРїРµРЅ", "error");
   }
 }
 
@@ -868,86 +868,86 @@ function incLiveCounter() {
 }
 
 async function renderDashboard() {
-  setHeader("Дашборд", "Бизнес-метрики бота: рассылки, клиенты, классы, активность");
+  setHeader("Р”Р°С€Р±РѕСЂРґ", "Р‘РёР·РЅРµСЃ-РјРµС‚СЂРёРєРё Р±РѕС‚Р°: СЂР°СЃСЃС‹Р»РєРё, РєР»РёРµРЅС‚С‹, РєР»Р°СЃСЃС‹, Р°РєС‚РёРІРЅРѕСЃС‚СЊ");
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-6">
-      <!-- KPI ряд 1: Аккаунты + диалоги -->
+      <!-- KPI СЂСЏРґ 1: РђРєРєР°СѓРЅС‚С‹ + РґРёР°Р»РѕРіРё -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        ${kpi("Аккаунты", "kpiAccTotal", "—", "всего")}
-        ${kpi("AI активны", "kpiAccAI", "—", "auto-режим", "text-emerald-300")}
-        ${kpi("MANUAL", "kpiAccManual", "—", "оператор отвечает", "text-amber-300")}
-        ${kpi("Авторизованы", "kpiAccAuth", "—", "Telegram OK")}
+        ${kpi("РђРєРєР°СѓРЅС‚С‹", "kpiAccTotal", "вЂ”", "РІСЃРµРіРѕ")}
+        ${kpi("AI Р°РєС‚РёРІРЅС‹", "kpiAccAI", "вЂ”", "auto-СЂРµР¶РёРј", "text-emerald-300")}
+        ${kpi("MANUAL", "kpiAccManual", "вЂ”", "РѕРїРµСЂР°С‚РѕСЂ РѕС‚РІРµС‡Р°РµС‚", "text-amber-300")}
+        ${kpi("РђРІС‚РѕСЂРёР·РѕРІР°РЅС‹", "kpiAccAuth", "вЂ”", "Telegram OK")}
       </div>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        ${kpi("Диалоги всего", "kpiDialogs", "—", "уникальных пар (acc, peer)")}
-        ${kpi("Диалоги 24ч", "kpiDialogs24", "—", "активных за сутки")}
-        ${kpi("Клиенты", "kpiClients", "—", "записей в БД")}
-        ${kpi("Live-стрим", "dashLive", String(liveCounter), "событий с входа")}
-      </div>
-
-      <!-- Сообщения -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        ${kpi("Входящие 24ч", "kpiMsgIn", "—", "от клиентов", "text-sky-300")}
-        ${kpi("Исходящие AI 24ч", "kpiMsgOut", "—", "ответил нейрочат", "text-violet-300")}
-        ${kpi("Ручные 24ч", "kpiManualSent", "—", "из веб-панели")}
-        ${kpi("Очередь pending/failed", "kpiManualQueue", "—", "ждут отправки / не доставлены", "text-amber-300")}
+        ${kpi("Р”РёР°Р»РѕРіРё РІСЃРµРіРѕ", "kpiDialogs", "вЂ”", "СѓРЅРёРєР°Р»СЊРЅС‹С… РїР°СЂ (acc, peer)")}
+        ${kpi("Р”РёР°Р»РѕРіРё 24С‡", "kpiDialogs24", "вЂ”", "Р°РєС‚РёРІРЅС‹С… Р·Р° СЃСѓС‚РєРё")}
+        ${kpi("РљР»РёРµРЅС‚С‹", "kpiClients", "вЂ”", "Р·Р°РїРёСЃРµР№ РІ Р‘Р”")}
+        ${kpi("Live-СЃС‚СЂРёРј", "dashLive", String(liveCounter), "СЃРѕР±С‹С‚РёР№ СЃ РІС…РѕРґР°")}
       </div>
 
-      <!-- Рассылки KPI -->
+      <!-- РЎРѕРѕР±С‰РµРЅРёСЏ -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        ${kpi("Рассылки RUNNING", "kpiMailRun", "—", "идут сейчас", "text-emerald-300")}
-        ${kpi("Рассылки PAUSED", "kpiMailPause", "—", "ждут продолжения", "text-amber-300")}
-        ${kpi("Рассылки 24ч завершено", "kpiMailDone", "—", "")}
-        ${kpi("Сообщ. рассылок 24ч", "kpiMailSent", "—", "успех / ошибки см. ниже")}
+        ${kpi("Р’С…РѕРґСЏС‰РёРµ 24С‡", "kpiMsgIn", "вЂ”", "РѕС‚ РєР»РёРµРЅС‚РѕРІ", "text-sky-300")}
+        ${kpi("РСЃС…РѕРґСЏС‰РёРµ AI 24С‡", "kpiMsgOut", "вЂ”", "РѕС‚РІРµС‚РёР» РЅРµР№СЂРѕС‡Р°С‚", "text-violet-300")}
+        ${kpi("Р СѓС‡РЅС‹Рµ 24С‡", "kpiManualSent", "вЂ”", "РёР· РІРµР±-РїР°РЅРµР»Рё")}
+        ${kpi("РћС‡РµСЂРµРґСЊ pending/failed", "kpiManualQueue", "вЂ”", "Р¶РґСѓС‚ РѕС‚РїСЂР°РІРєРё / РЅРµ РґРѕСЃС‚Р°РІР»РµРЅС‹", "text-amber-300")}
       </div>
 
-      <!-- Графики и активные рассылки -->
+      <!-- Р Р°СЃСЃС‹Р»РєРё KPI -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        ${kpi("Р Р°СЃСЃС‹Р»РєРё RUNNING", "kpiMailRun", "вЂ”", "РёРґСѓС‚ СЃРµР№С‡Р°СЃ", "text-emerald-300")}
+        ${kpi("Р Р°СЃСЃС‹Р»РєРё PAUSED", "kpiMailPause", "вЂ”", "Р¶РґСѓС‚ РїСЂРѕРґРѕР»Р¶РµРЅРёСЏ", "text-amber-300")}
+        ${kpi("Р Р°СЃСЃС‹Р»РєРё 24С‡ Р·Р°РІРµСЂС€РµРЅРѕ", "kpiMailDone", "вЂ”", "")}
+        ${kpi("РЎРѕРѕР±С‰. СЂР°СЃСЃС‹Р»РѕРє 24С‡", "kpiMailSent", "вЂ”", "СѓСЃРїРµС… / РѕС€РёР±РєРё СЃРј. РЅРёР¶Рµ")}
+      </div>
+
+      <!-- Р“СЂР°С„РёРєРё Рё Р°РєС‚РёРІРЅС‹Рµ СЂР°СЃСЃС‹Р»РєРё -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div class="card lg:col-span-2">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="font-semibold">Активность за 24 часа</h3>
+            <h3 class="font-semibold">РђРєС‚РёРІРЅРѕСЃС‚СЊ Р·Р° 24 С‡Р°СЃР°</h3>
             <div class="text-xs text-slate-400 flex items-center gap-3">
-              <span class="flex items-center gap-1"><span class="ts-dot ts-in"></span> входящие</span>
-              <span class="flex items-center gap-1"><span class="ts-dot ts-out"></span> AI ответ</span>
-              <span class="flex items-center gap-1"><span class="ts-dot ts-mn"></span> ручные</span>
+              <span class="flex items-center gap-1"><span class="ts-dot ts-in"></span> РІС…РѕРґСЏС‰РёРµ</span>
+              <span class="flex items-center gap-1"><span class="ts-dot ts-out"></span> AI РѕС‚РІРµС‚</span>
+              <span class="flex items-center gap-1"><span class="ts-dot ts-mn"></span> СЂСѓС‡РЅС‹Рµ</span>
             </div>
           </div>
-          <div id="dashTimeseries" class="ts-chart">…</div>
+          <div id="dashTimeseries" class="ts-chart">вЂ¦</div>
         </div>
         <div class="card">
-          <h3 class="font-semibold mb-3">Активные рассылки</h3>
-          <div id="dashMailings" class="space-y-2 text-sm text-slate-400">…</div>
+          <h3 class="font-semibold mb-3">РђРєС‚РёРІРЅС‹Рµ СЂР°СЃСЃС‹Р»РєРё</h3>
+          <div id="dashMailings" class="space-y-2 text-sm text-slate-400">вЂ¦</div>
         </div>
       </div>
 
-      <!-- Классы клиентов и топ-аккаунты -->
+      <!-- РљР»Р°СЃСЃС‹ РєР»РёРµРЅС‚РѕРІ Рё С‚РѕРї-Р°РєРєР°СѓРЅС‚С‹ -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div class="card">
-          <h3 class="font-semibold mb-3">Распределение классов клиентов</h3>
-          <div id="dashClasses" class="space-y-2 text-sm">…</div>
+          <h3 class="font-semibold mb-3">Р Р°СЃРїСЂРµРґРµР»РµРЅРёРµ РєР»Р°СЃСЃРѕРІ РєР»РёРµРЅС‚РѕРІ</h3>
+          <div id="dashClasses" class="space-y-2 text-sm">вЂ¦</div>
         </div>
         <div class="card">
-          <h3 class="font-semibold mb-3">Топ-аккаунты по активности (24ч)</h3>
+          <h3 class="font-semibold mb-3">РўРѕРї-Р°РєРєР°СѓРЅС‚С‹ РїРѕ Р°РєС‚РёРІРЅРѕСЃС‚Рё (24С‡)</h3>
           <table class="cb-table">
-            <thead><tr><th>Аккаунт</th><th>Режим</th><th class="text-right">In</th><th class="text-right">Out</th></tr></thead>
-            <tbody id="dashTopAccounts"><tr><td colspan="4" class="text-slate-500 text-center py-4">…</td></tr></tbody>
+            <thead><tr><th>РђРєРєР°СѓРЅС‚</th><th>Р РµР¶РёРј</th><th class="text-right">In</th><th class="text-right">Out</th></tr></thead>
+            <tbody id="dashTopAccounts"><tr><td colspan="4" class="text-slate-500 text-center py-4">вЂ¦</td></tr></tbody>
           </table>
         </div>
       </div>
 
-      <!-- Recent live + последние сообщения -->
+      <!-- Recent live + РїРѕСЃР»РµРґРЅРёРµ СЃРѕРѕР±С‰РµРЅРёСЏ -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div class="card">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="font-semibold">Live-поток сообщений</h3>
-            <span class="text-xs text-slate-400">после входа в панель</span>
+            <h3 class="font-semibold">Live-РїРѕС‚РѕРє СЃРѕРѕР±С‰РµРЅРёР№</h3>
+            <span class="text-xs text-slate-400">РїРѕСЃР»Рµ РІС…РѕРґР° РІ РїР°РЅРµР»СЊ</span>
           </div>
-          <div id="dashRecent" class="space-y-2 text-sm text-slate-400">Подождите событий…</div>
+          <div id="dashRecent" class="space-y-2 text-sm text-slate-400">РџРѕРґРѕР¶РґРёС‚Рµ СЃРѕР±С‹С‚РёР№вЂ¦</div>
         </div>
         <div class="card">
-          <h3 class="font-semibold mb-3">Последние сообщения (БД)</h3>
-          <div id="dashRecentDb" class="space-y-2 text-sm text-slate-400">…</div>
+          <h3 class="font-semibold mb-3">РџРѕСЃР»РµРґРЅРёРµ СЃРѕРѕР±С‰РµРЅРёСЏ (Р‘Р”)</h3>
+          <div id="dashRecentDb" class="space-y-2 text-sm text-slate-400">вЂ¦</div>
         </div>
       </div>
     </div>
@@ -973,7 +973,7 @@ async function renderDashboard() {
         <span class="pill ${m.role === 'assistant' ? 'pill-blue' : 'pill-gray'}">${escapeHTML(m.role)}</span>
         <div class="min-w-0 flex-1">
           <div class="truncate text-slate-200">${escapeHTML(m.content || "")}</div>
-          <div class="text-[11px] text-slate-500">acc#${m.account_id} ↔ ${m.peer_user_id} · ${fmtRelative(m.created_at)}</div>
+          <div class="text-[11px] text-slate-500">acc#${m.account_id} в†” ${m.peer_user_id} В· ${fmtRelative(m.created_at)}</div>
         </div>
       </div>
     `).join("");
@@ -1007,7 +1007,7 @@ async function loadDashSummary() {
     $("#kpiMailRun").textContent = s.mailings_running;
     $("#kpiMailPause").textContent = s.mailings_paused;
     $("#kpiMailDone").textContent = s.mailings_completed_24h;
-    $("#kpiMailSent").textContent = `${s.mailing_sent_24h} ✓ / ${s.mailing_failed_24h} ✕`;
+    $("#kpiMailSent").textContent = `${s.mailing_sent_24h} вњ“ / ${s.mailing_failed_24h} вњ•`;
   } catch (e) { toast(`summary: ${e.message}`, "error"); }
 }
 
@@ -1016,7 +1016,7 @@ async function loadDashTimeseries() {
   if (!el) return;
   try {
     const points = await api("/business/dashboard/timeseries?hours=24");
-    if (!points.length) { el.textContent = "Нет данных за период."; return; }
+    if (!points.length) { el.textContent = "РќРµС‚ РґР°РЅРЅС‹С… Р·Р° РїРµСЂРёРѕРґ."; return; }
     const max = points.reduce((m, p) =>
       Math.max(m, (p.messages_in || 0) + (p.messages_out || 0) + (p.manual_sent || 0)), 1);
     const cols = points.map(p => {
@@ -1025,7 +1025,7 @@ async function loadDashTimeseries() {
       const inH  = Math.round(((p.messages_in || 0) / Math.max(1, total)) * h);
       const outH = Math.round(((p.messages_out || 0) / Math.max(1, total)) * h);
       const mnH  = h - inH - outH;
-      const tip = `${p.ts}\n← ${p.messages_in} · → ${p.messages_out} · ✋ ${p.manual_sent}`;
+      const tip = `${p.ts}\nв†ђ ${p.messages_in} В· в†’ ${p.messages_out} В· вњ‹ ${p.manual_sent}`;
       const hourLabel = (p.ts || "").slice(11, 13);
       return `
         <div class="ts-col" title="${escapeHTML(tip)}">
@@ -1038,7 +1038,7 @@ async function loadDashTimeseries() {
         </div>`;
     }).join("");
     el.innerHTML = cols;
-  } catch (e) { el.textContent = `Ошибка: ${e.message}`; }
+  } catch (e) { el.textContent = `РћС€РёР±РєР°: ${e.message}`; }
 }
 
 async function loadDashClasses() {
@@ -1053,12 +1053,12 @@ async function loadDashClasses() {
         <div>
           <div class="flex items-center justify-between text-xs">
             <span class="text-slate-300">${escapeHTML(it.class_key)}</span>
-            <span class="text-slate-500">клиентов: <b class="text-slate-200">${it.clients}</b> · событий: ${it.events}</span>
+            <span class="text-slate-500">РєР»РёРµРЅС‚РѕРІ: <b class="text-slate-200">${it.clients}</b> В· СЃРѕР±С‹С‚РёР№: ${it.events}</span>
           </div>
           <div class="cb-bar mt-1"><div class="cb-bar-fill cls-${escapeHTML(it.class_key)}" style="width:${w}%"></div></div>
         </div>
       `;
-    }).join("") || `<div class="text-slate-500">Нет данных по классам.</div>`;
+    }).join("") || `<div class="text-slate-500">РќРµС‚ РґР°РЅРЅС‹С… РїРѕ РєР»Р°СЃСЃР°Рј.</div>`;
   } catch (e) { el.innerHTML = `<div class="text-rose-400">${escapeHTML(e.message)}</div>`; }
 }
 
@@ -1067,7 +1067,7 @@ async function loadDashTopAccounts() {
   if (!el) return;
   try {
     const list = await api("/business/dashboard/top_accounts?hours=24&limit=10");
-    if (!list.length) { el.innerHTML = `<tr><td colspan="4" class="text-slate-500 text-center py-3">Нет активности.</td></tr>`; return; }
+    if (!list.length) { el.innerHTML = `<tr><td colspan="4" class="text-slate-500 text-center py-3">РќРµС‚ Р°РєС‚РёРІРЅРѕСЃС‚Рё.</td></tr>`; return; }
     el.innerHTML = list.map(a => `
       <tr>
         <td><a href="#/dialogs/${a.account_id}" class="text-slate-200 hover:text-accent-500">${escapeHTML(a.title)}</a></td>
@@ -1086,7 +1086,7 @@ async function loadDashMailings() {
   if (!el) return;
   try {
     const list = await api("/business/dashboard/mailings_active");
-    if (!list.length) { el.innerHTML = `<div class="text-slate-500">Нет активных рассылок.</div>`; return; }
+    if (!list.length) { el.innerHTML = `<div class="text-slate-500">РќРµС‚ Р°РєС‚РёРІРЅС‹С… СЂР°СЃСЃС‹Р»РѕРє.</div>`; return; }
     el.innerHTML = list.map(m => {
       const pct = m.total ? Math.round((m.sent / m.total) * 100) : 0;
       const pill = m.status === "running"
@@ -1098,7 +1098,7 @@ async function loadDashMailings() {
             <div class="text-slate-200 truncate">${escapeHTML(m.name)}</div>
             ${pill}
           </div>
-          <div class="text-[11px] text-slate-500 mt-1">отправлено ${m.sent}/${m.total} · ошибок ${m.failed}</div>
+          <div class="text-[11px] text-slate-500 mt-1">РѕС‚РїСЂР°РІР»РµРЅРѕ ${m.sent}/${m.total} В· РѕС€РёР±РѕРє ${m.failed}</div>
           <div class="cb-bar mt-1"><div class="cb-bar-fill" style="width:${pct}%"></div></div>
         </a>`;
     }).join("");
@@ -1110,13 +1110,13 @@ async function loadDashRecentDb() {
   if (!el) return;
   try {
     const list = await api("/business/dashboard/recent_messages?limit=20");
-    if (!list.length) { el.innerHTML = `<div class="text-slate-500">Сообщений нет.</div>`; return; }
+    if (!list.length) { el.innerHTML = `<div class="text-slate-500">РЎРѕРѕР±С‰РµРЅРёР№ РЅРµС‚.</div>`; return; }
     el.innerHTML = list.map(m => `
       <div class="flex items-start gap-2">
         <span class="pill ${m.role === 'assistant' ? 'pill-blue' : 'pill-gray'}">${escapeHTML(m.role)}</span>
         <div class="min-w-0 flex-1">
           <div class="truncate text-slate-200">${escapeHTML(m.content || "")}</div>
-          <div class="text-[11px] text-slate-500"><a href="#/dialogs/${m.account_id}/${m.peer_user_id}" class="hover:text-accent-500">${escapeHTML(m.account_title)} ↔ ${escapeHTML(m.peer_title)}</a> · ${fmtRelative(m.created_at)}</div>
+          <div class="text-[11px] text-slate-500"><a href="#/dialogs/${m.account_id}/${m.peer_user_id}" class="hover:text-accent-500">${escapeHTML(m.account_title)} в†” ${escapeHTML(m.peer_title)}</a> В· ${fmtRelative(m.created_at)}</div>
         </div>
       </div>`).join("");
   } catch (e) { el.innerHTML = `<div class="text-rose-400">${escapeHTML(e.message)}</div>`; }
@@ -1127,47 +1127,63 @@ async function loadDashRecentDb() {
 async function renderAccounts(accountIdStr) {
   const accountId = accountIdStr ? Number(accountIdStr) : null;
   setHeader(
-    "Аккаунты",
+    "РђРєРєР°СѓРЅС‚С‹",
     accountId
-      ? `Редактор #${accountId}`
-      : "Состояние аккаунтов и режим автоответа (AI / Manual)",
+      ? `Р РµРґР°РєС‚РѕСЂ #${accountId}`
+      : "РЎРѕСЃС‚РѕСЏРЅРёРµ Р°РєРєР°СѓРЅС‚РѕРІ Рё СЂРµР¶РёРј Р°РІС‚РѕРѕС‚РІРµС‚Р° (AI / Manual)",
   );
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full">
+      <div class="card mb-4" id="tdataImportCard">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-slate-100">Импорт TData (ZIP)</h3>
+          <span class="text-xs text-slate-500">Массовая загрузка аккаунтов из архива</span>
+        </div>
+        <div id="tdataDropZone" tabindex="0" role="button" aria-label="Загрузить TData ZIP">
+          <div class="tdata-ico" aria-hidden="true">📦</div>
+          <div class="text-slate-200 text-sm font-medium mb-1">Перетащите ZIP или нажмите для выбора</div>
+          <div class="text-slate-500 text-xs">Архив с одной или несколькими папками tdata</div>
+          <input id="tdataFileInput" type="file" accept=".zip" class="hidden" />
+        </div>
+        <div class="mt-3 flex items-center gap-3">
+          <button id="tdataUploadBtn" type="button" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Загрузить ZIP</button>
+          <span id="tdataMsg" class="text-xs text-slate-400"></span>
+        </div>
+      </div>
       <div class="card mb-4">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="font-semibold text-slate-100">Новый аккаунт (быстрое создание)</h3>
-          <span class="text-xs text-slate-500">Tdata/.session всё ещё импортируются в Telegram-боте</span>
+          <h3 class="font-semibold text-slate-100">РќРѕРІС‹Р№ Р°РєРєР°СѓРЅС‚ (Р±С‹СЃС‚СЂРѕРµ СЃРѕР·РґР°РЅРёРµ)</h3>
+          <span class="text-xs text-slate-500">Tdata/.session РІСЃС‘ РµС‰С‘ РёРјРїРѕСЂС‚РёСЂСѓСЋС‚СЃСЏ РІ Telegram-Р±РѕС‚Рµ</span>
         </div>
         <form id="accountCreateForm" class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
           <label class="block">
-            <span class="text-slate-400 text-xs">Телефон *</span>
+            <span class="text-slate-400 text-xs">РўРµР»РµС„РѕРЅ *</span>
             <input name="phone" required placeholder="+79990001122"
                    class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Название в боте (list_label)</span>
+            <span class="text-slate-400 text-xs">РќР°Р·РІР°РЅРёРµ РІ Р±РѕС‚Рµ (list_label)</span>
             <input name="list_label" placeholder="sales-01"
                    class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Session name (опц.)</span>
+            <span class="text-slate-400 text-xs">Session name (РѕРїС†.)</span>
             <input name="session_name" placeholder="web_7999..."
                    class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Username (опц.)</span>
+            <span class="text-slate-400 text-xs">Username (РѕРїС†.)</span>
             <input name="username" placeholder="username"
                    class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Имя</span>
+            <span class="text-slate-400 text-xs">РРјСЏ</span>
             <input name="first_name"
                    class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Фамилия</span>
+            <span class="text-slate-400 text-xs">Р¤Р°РјРёР»РёСЏ</span>
             <input name="last_name"
                    class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
@@ -1180,47 +1196,47 @@ async function renderAccounts(accountIdStr) {
             </select>
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Режим</span>
+            <span class="text-slate-400 text-xs">Р РµР¶РёРј</span>
             <select name="ai_mode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
               <option value="MANUAL">MANUAL</option>
               <option value="AI_ACTIVE">AI_ACTIVE</option>
             </select>
           </label>
           <div class="md:col-span-4 flex items-center gap-3">
-            <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Создать аккаунт</button>
+            <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">РЎРѕР·РґР°С‚СЊ Р°РєРєР°СѓРЅС‚</button>
             <span id="accCreateMsg" class="text-xs text-slate-400"></span>
           </div>
         </form>
       </div>
       <div class="card overflow-hidden p-0">
         <div class="px-4 py-3 border-b border-ink-700 flex items-center gap-3 text-sm flex-wrap">
-          <input id="accSearch" placeholder="Поиск: list_label / @username / phone / #id"
+          <input id="accSearch" placeholder="РџРѕРёСЃРє: list_label / @username / phone / #id"
                  value="${escapeHTML(state.accounts?.q || "")}"
                  class="px-3 py-1.5 rounded bg-ink-800 border border-ink-600 text-slate-100 w-80 max-w-full" />
           <select id="accSort" class="bg-ink-800 border border-ink-600 rounded px-2 py-1.5 text-slate-100">
-            <option value="id_desc" ${(state.accounts?.sort || "id_desc") === "id_desc" ? "selected" : ""}>Сначала новые (#id ↓)</option>
-            <option value="id_asc" ${(state.accounts?.sort || "id_desc") === "id_asc" ? "selected" : ""}>Сначала старые (#id ↑)</option>
-            <option value="dialogs_desc" ${(state.accounts?.sort || "id_desc") === "dialogs_desc" ? "selected" : ""}>По диалогам (больше → меньше)</option>
-            <option value="last_dialog_desc" ${(state.accounts?.sort || "id_desc") === "last_dialog_desc" ? "selected" : ""}>Как в мессенджере (последний диалог)</option>
-            <option value="label_asc" ${(state.accounts?.sort || "id_desc") === "label_asc" ? "selected" : ""}>По названию (A→Я)</option>
+            <option value="id_desc" ${(state.accounts?.sort || "id_desc") === "id_desc" ? "selected" : ""}>РЎРЅР°С‡Р°Р»Р° РЅРѕРІС‹Рµ (#id в†“)</option>
+            <option value="id_asc" ${(state.accounts?.sort || "id_desc") === "id_asc" ? "selected" : ""}>РЎРЅР°С‡Р°Р»Р° СЃС‚Р°СЂС‹Рµ (#id в†‘)</option>
+            <option value="dialogs_desc" ${(state.accounts?.sort || "id_desc") === "dialogs_desc" ? "selected" : ""}>РџРѕ РґРёР°Р»РѕРіР°Рј (Р±РѕР»СЊС€Рµ в†’ РјРµРЅСЊС€Рµ)</option>
+            <option value="last_dialog_desc" ${(state.accounts?.sort || "id_desc") === "last_dialog_desc" ? "selected" : ""}>РљР°Рє РІ РјРµСЃСЃРµРЅРґР¶РµСЂРµ (РїРѕСЃР»РµРґРЅРёР№ РґРёР°Р»РѕРі)</option>
+            <option value="label_asc" ${(state.accounts?.sort || "id_desc") === "label_asc" ? "selected" : ""}>РџРѕ РЅР°Р·РІР°РЅРёСЋ (Aв†’РЇ)</option>
           </select>
           <span id="accCount" class="text-slate-500 text-xs ml-auto"></span>
         </div>
         <table class="cb-table">
           <thead>
             <tr>
-              <th>ID</th><th>Аккаунт</th><th>Статус</th><th>Membership</th>
-              <th>Режим AI</th><th class="text-right">Диалоги</th><th class="text-right">В очереди</th>
-              <th>Последняя активность</th><th></th>
+              <th>ID</th><th>РђРєРєР°СѓРЅС‚</th><th>РЎС‚Р°С‚СѓСЃ</th><th>Membership</th>
+              <th>Р РµР¶РёРј AI</th><th class="text-right">Р”РёР°Р»РѕРіРё</th><th class="text-right">Р’ РѕС‡РµСЂРµРґРё</th>
+              <th>РџРѕСЃР»РµРґРЅСЏСЏ Р°РєС‚РёРІРЅРѕСЃС‚СЊ</th><th></th>
             </tr>
           </thead>
           <tbody id="accountsBody">
-            <tr><td colspan="9" class="text-center text-slate-500 py-8">Загрузка…</td></tr>
+            <tr><td colspan="9" class="text-center text-slate-500 py-8">Р—Р°РіСЂСѓР·РєР°вЂ¦</td></tr>
           </tbody>
         </table>
       </div>
       <div id="accountEditorWrap" class="${accountId ? '' : 'hidden'} mt-4 card">
-        <div id="accountEditor">${accountId ? "Загрузка…" : ""}</div>
+        <div id="accountEditor">${accountId ? "Р—Р°РіСЂСѓР·РєР°вЂ¦" : ""}</div>
       </div>
     </div>
   `;
@@ -1252,10 +1268,10 @@ async function onCreateAccountSubmit(ev) {
     status: "inactive",
   };
   const out = $("#accCreateMsg");
-  out.textContent = "…";
+  out.textContent = "вЂ¦";
   try {
     const created = await api("/business/accounts", { method: "POST", body });
-    toast(`Аккаунт #${created.id} создан`, "success");
+    toast(`РђРєРєР°СѓРЅС‚ #${created.id} СЃРѕР·РґР°РЅ`, "success");
     out.textContent = `ok (#${created.id})`;
     out.className = "text-xs text-emerald-300";
     ev.currentTarget.reset();
@@ -1307,12 +1323,12 @@ async function refreshAccountsTable() {
       return b.id - a.id;
     });
     const accCount = $("#accCount");
-    if (accCount) accCount.textContent = `показано: ${rows.length} / ${list.length}`;
+    if (accCount) accCount.textContent = `РїРѕРєР°Р·Р°РЅРѕ: ${rows.length} / ${list.length}`;
 
     const tbody = $("#accountsBody");
     if (!tbody) return;
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-slate-500 py-8">Нет аккаунтов в БД.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-slate-500 py-8">РќРµС‚ Р°РєРєР°СѓРЅС‚РѕРІ РІ Р‘Р”.</td></tr>`;
       return;
     }
     tbody.innerHTML = rows.map(a => {
@@ -1322,23 +1338,23 @@ async function refreshAccountsTable() {
       const modePill = a.ai_mode === "MANUAL"
         ? `<span class="pill pill-amber">MANUAL</span>`
         : `<span class="pill pill-green">AI_ACTIVE</span>`;
-      const toggleLabel = a.ai_mode === "MANUAL" ? "→ AI_ACTIVE" : "→ MANUAL";
+      const toggleLabel = a.ai_mode === "MANUAL" ? "в†’ AI_ACTIVE" : "в†’ MANUAL";
       return `
         <tr data-account-id="${a.id}">
           <td class="text-slate-500">#${a.id}</td>
           <td>
             <div class="font-medium text-slate-100">${title}</div>
-            <div class="text-xs text-slate-500">${escapeHTML(fullName) || "—"} · ${escapeHTML(a.username || "")}${a.phone ? ' · ' + escapeHTML(a.phone) : ''}</div>
+            <div class="text-xs text-slate-500">${escapeHTML(fullName) || "вЂ”"} В· ${escapeHTML(a.username || "")}${a.phone ? ' В· ' + escapeHTML(a.phone) : ''}</div>
           </td>
           <td>${statusPill}</td>
-          <td><span class="pill pill-gray">${escapeHTML(a.membership || "—")}</span></td>
+          <td><span class="pill pill-gray">${escapeHTML(a.membership || "вЂ”")}</span></td>
           <td>${modePill}</td>
           <td class="text-right text-slate-300">${a.dialogs_count}</td>
           <td class="text-right ${a.pending_outbound > 0 ? 'text-amber-400 font-medium' : 'text-slate-300'}">${a.pending_outbound}</td>
           <td class="text-slate-400 text-xs">${fmtRelative(a.last_activity)}</td>
           <td class="text-right whitespace-nowrap">
-            <button data-act="goto-dialogs" class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs mr-1">💬 Диалоги</button>
-            <button data-act="edit" class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs mr-1">✎ Изменить</button>
+            <button data-act="goto-dialogs" class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs mr-1">рџ’¬ Р”РёР°Р»РѕРіРё</button>
+            <button data-act="edit" class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs mr-1">вњЋ РР·РјРµРЅРёС‚СЊ</button>
             <button data-act="toggle-mode" class="px-2 py-1 rounded ${a.ai_mode === 'MANUAL' ? 'bg-emerald-700 hover:bg-emerald-600' : 'bg-amber-700 hover:bg-amber-600'} text-xs">${toggleLabel}</button>
           </td>
         </tr>
@@ -1355,26 +1371,26 @@ async function refreshAccountsTable() {
       });
       tr.querySelector('[data-act="toggle-mode"]').addEventListener("click", async (ev) => {
         const btn = ev.currentTarget;
-        btn.disabled = true; btn.textContent = "…";
+        btn.disabled = true; btn.textContent = "вЂ¦";
         try {
           const acc = state.cache.accountById.get(accountId);
           const next = acc.ai_mode === "MANUAL" ? "AI_ACTIVE" : "MANUAL";
           await api(`/business/accounts/${accountId}/mode`, { method: "POST", body: { mode: next } });
-          toast(`Аккаунт #${accountId} → ${next}`, "success");
+          toast(`РђРєРєР°СѓРЅС‚ #${accountId} в†’ ${next}`, "success");
           await refreshAccountsTable();
         } catch (e) {
-          toast(`Не удалось переключить: ${e.message}`, "error");
+          toast(`РќРµ СѓРґР°Р»РѕСЃСЊ РїРµСЂРµРєР»СЋС‡РёС‚СЊ: ${e.message}`, "error");
           btn.disabled = false;
         }
       });
     });
   } catch (e) {
-    toast(`Ошибка загрузки аккаунтов: ${e.message}`, "error");
+    toast(`РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё Р°РєРєР°СѓРЅС‚РѕРІ: ${e.message}`, "error");
   }
 }
 
 function accountStatusPill(s) {
-  if (!s) return `<span class="pill pill-gray">—</span>`;
+  if (!s) return `<span class="pill pill-gray">вЂ”</span>`;
   const map = {
     active: "pill-green",
     inactive: "pill-gray",
@@ -1398,7 +1414,7 @@ async function loadAccountEditor(accountId) {
   const el = $("#accountEditor");
   if (!wrap || !el) return;
   wrap.classList.remove("hidden");
-  el.innerHTML = `<div class="text-slate-500 text-sm">Загрузка…</div>`;
+  el.innerHTML = `<div class="text-slate-500 text-sm">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>`;
   try {
     const [acc, groups, proxies] = await Promise.all([
       api(`/business/accounts/${accountId}`),
@@ -1412,29 +1428,29 @@ async function loadAccountEditor(accountId) {
         <span>${escapeHTML(g.name)}</span>
         <span class="text-xs text-slate-500">(${g.accounts_count})</span>
       </label>
-    `).join("") || `<span class="text-slate-500 text-xs">Групп ещё нет — создайте в разделе «Группы».</span>`;
+    `).join("") || `<span class="text-slate-500 text-xs">Р“СЂСѓРїРї РµС‰С‘ РЅРµС‚ вЂ” СЃРѕР·РґР°Р№С‚Рµ РІ СЂР°Р·РґРµР»Рµ В«Р“СЂСѓРїРїС‹В».</span>`;
     const proxyOptions = [
-      `<option value="0" ${!acc.proxy_id ? "selected" : ""}>— без прокси —</option>`,
+      `<option value="0" ${!acc.proxy_id ? "selected" : ""}>вЂ” Р±РµР· РїСЂРѕРєСЃРё вЂ”</option>`,
       ...(proxies || []).map(p => `
         <option value="${p.id}" ${acc.proxy_id === p.id ? "selected" : ""}>
-          ${escapeHTML(p.name)} (${escapeHTML(p.host)}:${p.port}) ${p.is_working ? "✓" : "✗"}
+          ${escapeHTML(p.name)} (${escapeHTML(p.host)}:${p.port}) ${p.is_working ? "вњ“" : "вњ—"}
         </option>
       `),
     ].join("");
     el.innerHTML = `
       <div class="flex items-center justify-between mb-4 gap-3">
         <div>
-          <h3 class="font-semibold text-white">Редактирование #${acc.id} — ${escapeHTML(acc.list_label || acc.username || acc.phone || "")}</h3>
-          <p class="text-xs text-slate-500 mt-1">phone: ${escapeHTML(acc.phone || "—")} · username: ${escapeHTML(acc.username || "—")} · отправлено: ${acc.messages_sent} / today ${acc.messages_today}</p>
+          <h3 class="font-semibold text-white">Р РµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ #${acc.id} вЂ” ${escapeHTML(acc.list_label || acc.username || acc.phone || "")}</h3>
+          <p class="text-xs text-slate-500 mt-1">phone: ${escapeHTML(acc.phone || "вЂ”")} В· username: ${escapeHTML(acc.username || "вЂ”")} В· РѕС‚РїСЂР°РІР»РµРЅРѕ: ${acc.messages_sent} / today ${acc.messages_today}</p>
         </div>
         <div class="flex gap-2">
-          <button id="accCloseBtn" class="px-3 py-2 rounded-md bg-ink-700 hover:bg-ink-600 text-sm">Закрыть</button>
-          <button id="accDeleteBtn" class="px-3 py-2 rounded-md bg-rose-700 hover:bg-rose-600 text-white text-sm">🗑 Удалить</button>
+          <button id="accCloseBtn" class="px-3 py-2 rounded-md bg-ink-700 hover:bg-ink-600 text-sm">Р—Р°РєСЂС‹С‚СЊ</button>
+          <button id="accDeleteBtn" class="px-3 py-2 rounded-md bg-rose-700 hover:bg-rose-600 text-white text-sm">рџ—‘ РЈРґР°Р»РёС‚СЊ</button>
         </div>
       </div>
       <form id="accountEditForm" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
         <label class="block">
-          <span class="text-slate-400 text-xs">Подпись в списке (list_label)</span>
+          <span class="text-slate-400 text-xs">РџРѕРґРїРёСЃСЊ РІ СЃРїРёСЃРєРµ (list_label)</span>
           <input name="list_label" value="${escapeHTML(acc.list_label || "")}"
                  class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
         </label>
@@ -1445,12 +1461,12 @@ async function loadAccountEditor(accountId) {
           </select>
         </label>
         <label class="block">
-          <span class="text-slate-400 text-xs">Имя (Telegram first_name)</span>
+          <span class="text-slate-400 text-xs">РРјСЏ (Telegram first_name)</span>
           <input name="first_name" value="${escapeHTML(acc.first_name || "")}"
                  class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
         </label>
         <label class="block">
-          <span class="text-slate-400 text-xs">Фамилия (last_name)</span>
+          <span class="text-slate-400 text-xs">Р¤Р°РјРёР»РёСЏ (last_name)</span>
           <input name="last_name" value="${escapeHTML(acc.last_name || "")}"
                  class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
         </label>
@@ -1459,43 +1475,43 @@ async function loadAccountEditor(accountId) {
           <textarea name="bio" rows="2" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">${escapeHTML(acc.bio || "")}</textarea>
         </label>
         <label class="block">
-          <span class="text-slate-400 text-xs">Теги (CSV, например ,USA,Main,)</span>
+          <span class="text-slate-400 text-xs">РўРµРіРё (CSV, РЅР°РїСЂРёРјРµСЂ ,USA,Main,)</span>
           <input name="tags" value="${escapeHTML(acc.tags || "")}"
                  class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
         </label>
         <label class="block">
-          <span class="text-slate-400 text-xs">Дневной лимит сообщений</span>
+          <span class="text-slate-400 text-xs">Р”РЅРµРІРЅРѕР№ Р»РёРјРёС‚ СЃРѕРѕР±С‰РµРЅРёР№</span>
           <input name="daily_limit" type="number" min="0" max="10000" value="${acc.daily_limit}"
                  class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
         </label>
         <label class="block">
-          <span class="text-slate-400 text-xs">Статус</span>
+          <span class="text-slate-400 text-xs">РЎС‚Р°С‚СѓСЃ</span>
           <select name="status" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
             ${["active","inactive","banned","flood_wait","error","spam_blocked"].map(v => `<option value="${v}" ${acc.status === v ? "selected" : ""}>${v}</option>`).join("")}
           </select>
         </label>
         <label class="flex items-center gap-2 mt-6 text-slate-300">
           <input name="warmup_enabled" type="checkbox" ${acc.warmup_enabled ? "checked" : ""} class="rounded border-ink-600 bg-ink-800" />
-          Прогрев включён
+          РџСЂРѕРіСЂРµРІ РІРєР»СЋС‡С‘РЅ
         </label>
         <label class="block">
-          <span class="text-slate-400 text-xs">Профиль прогрева</span>
+          <span class="text-slate-400 text-xs">РџСЂРѕС„РёР»СЊ РїСЂРѕРіСЂРµРІР°</span>
           <input name="warmup_profile" value="${escapeHTML(acc.warmup_profile || "safe")}"
                  class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
         </label>
         <label class="block col-span-full">
-          <span class="text-slate-400 text-xs">Прокси</span>
+          <span class="text-slate-400 text-xs">РџСЂРѕРєСЃРё</span>
           <select name="proxy_id" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
             ${proxyOptions}
           </select>
         </label>
         <div class="col-span-full">
-          <span class="text-slate-400 text-xs">Группы</span>
+          <span class="text-slate-400 text-xs">Р“СЂСѓРїРїС‹</span>
           <div class="mt-2 grid grid-cols-2 md:grid-cols-3 gap-2">${groupsCheckboxes}</div>
         </div>
         <div class="col-span-full flex items-center gap-3 mt-2">
-          <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Сохранить</button>
-          <a href="#/dialogs/${acc.id}" class="text-sm text-slate-400 hover:text-slate-200">→ Открыть диалоги</a>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+          <a href="#/dialogs/${acc.id}" class="text-sm text-slate-400 hover:text-slate-200">в†’ РћС‚РєСЂС‹С‚СЊ РґРёР°Р»РѕРіРё</a>
           <span id="accSaveMsg" class="text-xs text-slate-400"></span>
         </div>
       </form>
@@ -1506,13 +1522,13 @@ async function loadAccountEditor(accountId) {
     });
 
     $("#accDeleteBtn").addEventListener("click", async () => {
-      if (!confirm(`Удалить аккаунт #${acc.id} полностью? Это удалит все его диалоги, сообщения и записи.`)) return;
+      if (!confirm(`РЈРґР°Р»РёС‚СЊ Р°РєРєР°СѓРЅС‚ #${acc.id} РїРѕР»РЅРѕСЃС‚СЊСЋ? Р­С‚Рѕ СѓРґР°Р»РёС‚ РІСЃРµ РµРіРѕ РґРёР°Р»РѕРіРё, СЃРѕРѕР±С‰РµРЅРёСЏ Рё Р·Р°РїРёСЃРё.`)) return;
       try {
         await api(`/business/accounts/${acc.id}`, { method: "DELETE" });
-        toast(`Аккаунт #${acc.id} удалён`, "success");
+        toast(`РђРєРєР°СѓРЅС‚ #${acc.id} СѓРґР°Р»С‘РЅ`, "success");
         window.location.hash = "#/accounts";
       } catch (e) {
-        toast(`Ошибка удаления: ${e.message}`, "error");
+        toast(`РћС€РёР±РєР° СѓРґР°Р»РµРЅРёСЏ: ${e.message}`, "error");
       }
     });
 
@@ -1539,10 +1555,10 @@ async function loadAccountEditor(accountId) {
       body.group_ids = groupIds;
 
       const out = $("#accSaveMsg");
-      out.textContent = "…";
+      out.textContent = "вЂ¦";
       try {
         await api(`/business/accounts/${acc.id}`, { method: "PATCH", body });
-        toast("Сохранено", "success");
+        toast("РЎРѕС…СЂР°РЅРµРЅРѕ", "success");
         out.textContent = "ok";
         out.className = "text-xs text-emerald-300";
         await refreshAccountsTable();
@@ -1560,7 +1576,7 @@ async function loadAccountEditor(accountId) {
 /* ----------------------------- Dialogs view ---------------------------- */
 
 async function renderDialogs(accountIdStr, peerStr) {
-  setHeader("Диалоги", "Live-просмотр переписок и ручные ответы");
+  setHeader("Р”РёР°Р»РѕРіРё", "Live-РїСЂРѕСЃРјРѕС‚СЂ РїРµСЂРµРїРёСЃРѕРє Рё СЂСѓС‡РЅС‹Рµ РѕС‚РІРµС‚С‹");
   const accountId = accountIdStr ? Number(accountIdStr) : null;
   const peerId = peerStr ? Number(peerStr) : null;
   state.current.accountId = accountId;
@@ -1572,51 +1588,51 @@ async function renderDialogs(accountIdStr, peerStr) {
     <div class="grid grid-cols-12 h-full min-h-0 overflow-hidden">
       <aside class="col-span-3 min-w-0 min-h-0 border-r border-ink-700 flex flex-col overflow-hidden">
         <div class="px-4 py-3 border-b border-ink-700 flex items-center justify-between gap-2">
-          <h3 class="font-medium text-slate-200 text-sm">Диалоги</h3>
-          <button id="dlgAccountsRefresh" class="text-xs text-slate-400 hover:text-slate-200">⟳</button>
+          <h3 class="font-medium text-slate-200 text-sm">Р”РёР°Р»РѕРіРё</h3>
+          <button id="dlgAccountsRefresh" class="text-xs text-slate-400 hover:text-slate-200">вџі</button>
         </div>
         <div class="px-3 py-2 border-b border-ink-700 flex items-center gap-2">
-          <button id="dlgTabAccounts" class="px-2 py-1 rounded text-xs ${state.dialogs.leftTab === 'accounts' ? 'bg-accent-600 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}">Аккаунты</button>
-          <button id="dlgTabGroups" class="px-2 py-1 rounded text-xs ${state.dialogs.leftTab === 'groups' ? 'bg-accent-600 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}">Группы</button>
+          <button id="dlgTabAccounts" class="px-2 py-1 rounded text-xs ${state.dialogs.leftTab === 'accounts' ? 'bg-accent-600 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}">РђРєРєР°СѓРЅС‚С‹</button>
+          <button id="dlgTabGroups" class="px-2 py-1 rounded text-xs ${state.dialogs.leftTab === 'groups' ? 'bg-accent-600 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}">Р“СЂСѓРїРїС‹</button>
         </div>
         <div class="px-3 py-2 border-b border-ink-700">
           <input
             id="dlgAccountsSearch"
             type="text"
-            placeholder="Поиск по названию аккаунта…"
+            placeholder="РџРѕРёСЃРє РїРѕ РЅР°Р·РІР°РЅРёСЋ Р°РєРєР°СѓРЅС‚Р°вЂ¦"
             value="${escapeHTML(state.dialogs?.accountSearch || '')}"
             class="w-full bg-ink-800 border border-ink-700 rounded px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500 ${state.dialogs.leftTab === 'accounts' ? '' : 'hidden'}"
           />
         </div>
         <div id="dlgAccountsList" class="flex-1 overflow-y-auto cb-scroll ${state.dialogs.leftTab === 'accounts' ? '' : 'hidden'}">
-          <div class="p-4 text-slate-500 text-sm">Загрузка…</div>
+          <div class="p-4 text-slate-500 text-sm">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>
         </div>
         <div id="dlgGroupsList" class="flex-1 overflow-y-auto cb-scroll ${state.dialogs.leftTab === 'groups' ? '' : 'hidden'}">
-          <div class="p-4 text-slate-500 text-sm">Загрузка…</div>
+          <div class="p-4 text-slate-500 text-sm">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>
         </div>
       </aside>
       <section class="col-span-${peerId ? '4' : '9'} min-w-0 min-h-0 border-r border-ink-700 flex flex-col overflow-hidden">
         <div class="px-4 py-3 border-b border-ink-700 flex items-center justify-between">
-          <h3 id="dlgListTitle" class="font-medium text-slate-200 text-sm">${accountId ? `Диалоги аккаунта #${accountId}` : 'Выберите аккаунт'}</h3>
-          <button id="dlgListRefresh" class="text-xs text-slate-400 hover:text-slate-200">⟳</button>
+          <h3 id="dlgListTitle" class="font-medium text-slate-200 text-sm">${accountId ? `Р”РёР°Р»РѕРіРё Р°РєРєР°СѓРЅС‚Р° #${accountId}` : 'Р’С‹Р±РµСЂРёС‚Рµ Р°РєРєР°СѓРЅС‚'}</h3>
+          <button id="dlgListRefresh" class="text-xs text-slate-400 hover:text-slate-200">вџі</button>
         </div>
         <div id="dlgList" class="flex-1 overflow-y-auto cb-scroll">
-          ${accountId ? '<div class="p-4 text-slate-500 text-sm">Загрузка…</div>' : '<div class="p-4 text-slate-500 text-sm">Слева выберите аккаунт.</div>'}
+          ${accountId ? '<div class="p-4 text-slate-500 text-sm">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>' : '<div class="p-4 text-slate-500 text-sm">РЎР»РµРІР° РІС‹Р±РµСЂРёС‚Рµ Р°РєРєР°СѓРЅС‚.</div>'}
         </div>
       </section>
       ${peerId ? `
         <section class="col-span-5 min-w-0 min-h-0 flex flex-col overflow-hidden">
           <div class="px-4 py-3 border-b border-ink-700 flex items-center justify-between gap-2">
             <div class="min-w-0">
-              <h3 class="font-medium text-slate-200 text-sm truncate" id="dlgChatTitle">Диалог с ${peerId}</h3>
-              <div class="text-xs text-slate-500" id="dlgChatSub">—</div>
+              <h3 class="font-medium text-slate-200 text-sm truncate" id="dlgChatTitle">Р”РёР°Р»РѕРі СЃ ${peerId}</h3>
+              <div class="text-xs text-slate-500" id="dlgChatSub">вЂ”</div>
             </div>
             <div class="flex items-center gap-2">
-              <button id="dlgDeleteBtn" class="text-xs px-2 py-1 rounded bg-rose-900/40 hover:bg-rose-800 text-rose-200 border border-rose-700/50">🗑 Удалить</button>
+              <button id="dlgDeleteBtn" class="text-xs px-2 py-1 rounded bg-rose-900/40 hover:bg-rose-800 text-rose-200 border border-rose-700/50">рџ—‘ РЈРґР°Р»РёС‚СЊ</button>
             </div>
           </div>
           <div id="dlgMessages" class="flex-1 overflow-y-auto cb-scroll p-4 space-y-2 bg-ink-950/40">
-            <div class="text-slate-500 text-sm text-center">Загрузка…</div>
+            <div class="text-slate-500 text-sm text-center">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>
           </div>
           <div id="dlgComposer" class="border-t border-ink-700 p-3"></div>
         </section>
@@ -1633,7 +1649,7 @@ async function renderDialogs(accountIdStr, peerStr) {
       state.dialogs.accountSearch = ev.target.value || "";
       paintDialogsAccounts(state.cache.accounts || [], accountId);
     });
-    // Курсор в конец, чтобы при перерисовке не «прыгал».
+    // РљСѓСЂСЃРѕСЂ РІ РєРѕРЅРµС†, С‡С‚РѕР±С‹ РїСЂРё РїРµСЂРµСЂРёСЃРѕРІРєРµ РЅРµ В«РїСЂС‹РіР°Р»В».
     requestAnimationFrame(() => {
       const v = searchInput.value;
       try { searchInput.setSelectionRange(v.length, v.length); } catch (_) {}
@@ -1646,8 +1662,8 @@ async function renderDialogs(accountIdStr, peerStr) {
     $("#dlgDeleteBtn").addEventListener("click", () => deleteCurrentDialog(accountId, peerId));
   }
 
-  // force=true: при заходе в раздел всегда тянем актуальные last_dialog_at,
-  // чтобы порядок «как в мессенджере» отражал свежие сообщения.
+  // force=true: РїСЂРё Р·Р°С…РѕРґРµ РІ СЂР°Р·РґРµР» РІСЃРµРіРґР° С‚СЏРЅРµРј Р°РєС‚СѓР°Р»СЊРЅС‹Рµ last_dialog_at,
+  // С‡С‚РѕР±С‹ РїРѕСЂСЏРґРѕРє В«РєР°Рє РІ РјРµСЃСЃРµРЅРґР¶РµСЂРµВ» РѕС‚СЂР°Р¶Р°Р» СЃРІРµР¶РёРµ СЃРѕРѕР±С‰РµРЅРёСЏ.
   await loadDialogsAccounts(accountId, peerId, { force: true });
   await loadDialogsGroups();
   if (accountId) await loadDialogsList(accountId, peerId);
@@ -1675,9 +1691,9 @@ async function loadDialogsAccounts(activeAccountId, activePeerId, opts = {}) {
   const el = $("#dlgAccountsList");
   if (!el) return;
   try {
-    // Всегда тянем свежий список, чтобы last_dialog_at был актуальным
-    // и порядок «как в мессенджере» не врал. Кэш используем только
-    // для синхронных перерисовок при наборе текста в поиске.
+    // Р’СЃРµРіРґР° С‚СЏРЅРµРј СЃРІРµР¶РёР№ СЃРїРёСЃРѕРє, С‡С‚РѕР±С‹ last_dialog_at Р±С‹Р» Р°РєС‚СѓР°Р»СЊРЅС‹Рј
+    // Рё РїРѕСЂСЏРґРѕРє В«РєР°Рє РІ РјРµСЃСЃРµРЅРґР¶РµСЂРµВ» РЅРµ РІСЂР°Р». РљСЌС€ РёСЃРїРѕР»СЊР·СѓРµРј С‚РѕР»СЊРєРѕ
+    // РґР»СЏ СЃРёРЅС…СЂРѕРЅРЅС‹С… РїРµСЂРµСЂРёСЃРѕРІРѕРє РїСЂРё РЅР°Р±РѕСЂРµ С‚РµРєСЃС‚Р° РІ РїРѕРёСЃРєРµ.
     const list = (!opts.force && state.cache.accounts)
       ? state.cache.accounts
       : await api("/business/accounts");
@@ -1685,7 +1701,7 @@ async function loadDialogsAccounts(activeAccountId, activePeerId, opts = {}) {
     state.cache.accountById = new Map(list.map(a => [a.id, a]));
     paintDialogsAccounts(list, activeAccountId);
   } catch (e) {
-    el.innerHTML = `<div class="p-4 text-rose-400 text-sm">Ошибка: ${escapeHTML(e.message)}</div>`;
+    el.innerHTML = `<div class="p-4 text-rose-400 text-sm">РћС€РёР±РєР°: ${escapeHTML(e.message)}</div>`;
   }
 }
 
@@ -1693,7 +1709,7 @@ function paintDialogsAccounts(list, activeAccountId) {
   const el = $("#dlgAccountsList");
   if (!el) return;
   if (!list.length) {
-    el.innerHTML = `<div class="p-4 text-slate-500 text-sm">Нет аккаунтов.</div>`;
+    el.innerHTML = `<div class="p-4 text-slate-500 text-sm">РќРµС‚ Р°РєРєР°СѓРЅС‚РѕРІ.</div>`;
     return;
   }
 
@@ -1705,17 +1721,17 @@ function paintDialogsAccounts(list, activeAccountId) {
   const q = (state.dialogs.accountSearch || "").trim().toLowerCase();
   const filtered = q
     ? scoped.filter(a => {
-        // Поиск по «имени аккаунта внутри бота» (list_label) — приоритет,
-        // плюс fallback на username/phone, чтобы пользователь
-        // мог найти безымянные аккаунты.
+        // РџРѕРёСЃРє РїРѕ В«РёРјРµРЅРё Р°РєРєР°СѓРЅС‚Р° РІРЅСѓС‚СЂРё Р±РѕС‚Р°В» (list_label) вЂ” РїСЂРёРѕСЂРёС‚РµС‚,
+        // РїР»СЋСЃ fallback РЅР° username/phone, С‡С‚РѕР±С‹ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ
+        // РјРѕРі РЅР°Р№С‚Рё Р±РµР·С‹РјСЏРЅРЅС‹Рµ Р°РєРєР°СѓРЅС‚С‹.
         const hay = [a.list_label, a.username, a.phone, `#${a.id}`]
           .filter(Boolean).join(" ").toLowerCase();
         return hay.includes(q);
       })
     : scoped.slice();
 
-  // Сортировка «как в Telegram»: сначала свежие диалоги.
-  // Аккаунты без диалогов — в самом низу, среди них стабильный порядок по id.
+  // РЎРѕСЂС‚РёСЂРѕРІРєР° В«РєР°Рє РІ TelegramВ»: СЃРЅР°С‡Р°Р»Р° СЃРІРµР¶РёРµ РґРёР°Р»РѕРіРё.
+  // РђРєРєР°СѓРЅС‚С‹ Р±РµР· РґРёР°Р»РѕРіРѕРІ вЂ” РІ СЃР°РјРѕРј РЅРёР·Сѓ, СЃСЂРµРґРё РЅРёС… СЃС‚Р°Р±РёР»СЊРЅС‹Р№ РїРѕСЂСЏРґРѕРє РїРѕ id.
   filtered.sort((a, b) => {
     const ta = a.last_dialog_at ? Date.parse(a.last_dialog_at) : 0;
     const tb = b.last_dialog_at ? Date.parse(b.last_dialog_at) : 0;
@@ -1724,21 +1740,21 @@ function paintDialogsAccounts(list, activeAccountId) {
   });
 
   if (!filtered.length) {
-    el.innerHTML = `<div class="p-4 text-slate-500 text-sm">Ничего не найдено.</div>`;
+    el.innerHTML = `<div class="p-4 text-slate-500 text-sm">РќРёС‡РµРіРѕ РЅРµ РЅР°Р№РґРµРЅРѕ.</div>`;
     return;
   }
 
   el.innerHTML = filtered.map(a => {
-    // Имя «как в боте»: list_label, fallback на username/phone/#id —
-    // именно по нему ведётся поиск.
+    // РРјСЏ В«РєР°Рє РІ Р±РѕС‚РµВ»: list_label, fallback РЅР° username/phone/#id вЂ”
+    // РёРјРµРЅРЅРѕ РїРѕ РЅРµРјСѓ РІРµРґС‘С‚СЃСЏ РїРѕРёСЃРє.
     const internalTitle = a.list_label || a.username || a.phone || `#${a.id}`;
-    // Имя «как в Telegram»: first_name + last_name, либо @username.
+    // РРјСЏ В«РєР°Рє РІ TelegramВ»: first_name + last_name, Р»РёР±Рѕ @username.
     const tgFull = [a.first_name, a.last_name].filter(Boolean).join(" ").trim();
     const tgHandle = a.username ? `@${a.username}` : "";
     let tgLabel = tgFull || tgHandle;
     if (tgLabel && tgLabel === internalTitle) tgLabel = "";
     if (tgLabel && tgFull && tgHandle && tgLabel === tgFull && a.username && a.username !== a.list_label) {
-      tgLabel = `${tgFull} · ${tgHandle}`;
+      tgLabel = `${tgFull} В· ${tgHandle}`;
     }
 
     const isActive = a.id === activeAccountId;
@@ -1746,19 +1762,19 @@ function paintDialogsAccounts(list, activeAccountId) {
       ? '<span class="pill pill-amber">M</span>'
       : '<span class="pill pill-green">AI</span>';
     const pendingBadge = a.pending_outbound > 0
-      ? `<span class="pill pill-amber">↑${a.pending_outbound}</span>` : '';
+      ? `<span class="pill pill-amber">в†‘${a.pending_outbound}</span>` : '';
     const lastWhen = a.last_dialog_at ? fmtRelative(a.last_dialog_at) : '';
     return `
       <a href="#/dialogs/${a.id}" class="block px-4 py-2 border-b border-ink-700 ${isActive ? 'bg-ink-800' : 'hover:bg-ink-800/60'}">
         <div class="flex items-center justify-between gap-2">
           <div class="min-w-0 text-sm text-slate-100 truncate">
             ${escapeHTML(internalTitle)}
-            ${tgLabel ? `<span class="text-[11px] text-slate-400 ml-1">· ${escapeHTML(tgLabel)}</span>` : ''}
+            ${tgLabel ? `<span class="text-[11px] text-slate-400 ml-1">В· ${escapeHTML(tgLabel)}</span>` : ''}
           </div>
           <div class="flex items-center gap-1 shrink-0">${modePill}${pendingBadge}</div>
         </div>
         <div class="flex items-center justify-between gap-2 mt-0.5">
-          <div class="text-[11px] text-slate-500 truncate">диалогов: ${a.dialogs_count}</div>
+          <div class="text-[11px] text-slate-500 truncate">РґРёР°Р»РѕРіРѕРІ: ${a.dialogs_count}</div>
           <div class="text-[11px] text-slate-500 shrink-0">${lastWhen}</div>
         </div>
       </a>
@@ -1773,7 +1789,7 @@ async function loadDialogsGroups() {
     const groups = await api("/business/groups");
     const selected = state.dialogs.selectedGroupId;
     const rows = [
-      { id: null, name: "Все", accounts_count: state.cache.accounts?.length || 0 },
+      { id: null, name: "Р’СЃРµ", accounts_count: state.cache.accounts?.length || 0 },
       ...(groups || []),
     ];
     el.innerHTML = rows.map((g) => {
@@ -1793,7 +1809,7 @@ async function loadDialogsGroups() {
         const raw = btn.dataset.dlgGroupId;
         if (raw === "all") {
           state.dialogs.selectedGroupId = null;
-          state.dialogs.selectedGroupName = "Все";
+          state.dialogs.selectedGroupName = "Р’СЃРµ";
           state.dialogs.groupAccountIds = null;
         } else {
           const gid = Number(raw);
@@ -1808,7 +1824,7 @@ async function loadDialogsGroups() {
       });
     });
   } catch (e) {
-    el.innerHTML = `<div class="p-4 text-rose-400 text-sm">Ошибка: ${escapeHTML(e.message)}</div>`;
+    el.innerHTML = `<div class="p-4 text-rose-400 text-sm">РћС€РёР±РєР°: ${escapeHTML(e.message)}</div>`;
   }
 }
 
@@ -1818,13 +1834,13 @@ async function loadDialogsList(accountId, activePeerId) {
   try {
     const list = await api(`/business/accounts/${accountId}/dialogs?limit=200`);
     if (!list.length) {
-      el.innerHTML = `<div class="p-4 text-slate-500 text-sm">У этого аккаунта пока нет диалогов в нейрочате.</div>`;
+      el.innerHTML = `<div class="p-4 text-slate-500 text-sm">РЈ СЌС‚РѕРіРѕ Р°РєРєР°СѓРЅС‚Р° РїРѕРєР° РЅРµС‚ РґРёР°Р»РѕРіРѕРІ РІ РЅРµР№СЂРѕС‡Р°С‚Рµ.</div>`;
       return;
     }
     el.innerHTML = list.map(d => {
       const title = d.client_username ? `@${d.client_username}` : `id ${d.peer_user_id}`;
       const isActive = d.peer_user_id === activePeerId;
-      const lastWho = d.last_role === "assistant" ? "Бот" : "Клиент";
+      const lastWho = d.last_role === "assistant" ? "Р‘РѕС‚" : "РљР»РёРµРЅС‚";
       return `
         <a href="#/dialogs/${accountId}/${d.peer_user_id}" class="block px-4 py-3 border-b border-ink-700 ${isActive ? 'bg-ink-800' : 'hover:bg-ink-800/60'}">
           <div class="flex items-center justify-between gap-2">
@@ -1832,12 +1848,12 @@ async function loadDialogsList(accountId, activePeerId) {
             <div class="text-[11px] text-slate-500 shrink-0">${fmtRelative(d.last_message_at)}</div>
           </div>
           <div class="text-xs text-slate-400 truncate mt-0.5"><span class="text-slate-500">${lastWho}:</span> ${escapeHTML(d.last_message || "")}</div>
-          <div class="text-[11px] text-slate-500 mt-1">${d.messages_count} сообщ.</div>
+          <div class="text-[11px] text-slate-500 mt-1">${d.messages_count} СЃРѕРѕР±С‰.</div>
         </a>
       `;
     }).join("");
   } catch (e) {
-    el.innerHTML = `<div class="p-4 text-rose-400 text-sm">Ошибка: ${escapeHTML(e.message)}</div>`;
+    el.innerHTML = `<div class="p-4 text-rose-400 text-sm">РћС€РёР±РєР°: ${escapeHTML(e.message)}</div>`;
   }
 }
 
@@ -1846,13 +1862,13 @@ async function loadDialogMessages(accountId, peerId) {
   if (!el) return;
   try {
     const list = await api(`/business/accounts/${accountId}/dialogs/${peerId}/messages?limit=200`);
-    // Важно: сбрасываем дедуп-курсор ПЕРЕД повторным рендером, иначе
-    // appendMessageToChat() выкинет все «старые» сообщения как уже виденные
-    // и в ленте останутся только новые/queue. messageMaxId обновляется
-    // внутри appendMessageToChat (он сам берёт max).
+    // Р’Р°Р¶РЅРѕ: СЃР±СЂР°СЃС‹РІР°РµРј РґРµРґСѓРї-РєСѓСЂСЃРѕСЂ РџР•Р Р•Р” РїРѕРІС‚РѕСЂРЅС‹Рј СЂРµРЅРґРµСЂРѕРј, РёРЅР°С‡Рµ
+    // appendMessageToChat() РІС‹РєРёРЅРµС‚ РІСЃРµ В«СЃС‚Р°СЂС‹РµВ» СЃРѕРѕР±С‰РµРЅРёСЏ РєР°Рє СѓР¶Рµ РІРёРґРµРЅРЅС‹Рµ
+    // Рё РІ Р»РµРЅС‚Рµ РѕСЃС‚Р°РЅСѓС‚СЃСЏ С‚РѕР»СЊРєРѕ РЅРѕРІС‹Рµ/queue. messageMaxId РѕР±РЅРѕРІР»СЏРµС‚СЃСЏ
+    // РІРЅСѓС‚СЂРё appendMessageToChat (РѕРЅ СЃР°Рј Р±РµСЂС‘С‚ max).
     state.current.messageMaxId = 0;
     if (!list.length) {
-      el.innerHTML = `<div class="text-slate-500 text-sm text-center">Сообщений пока нет.</div>`;
+      el.innerHTML = `<div class="text-slate-500 text-sm text-center">РЎРѕРѕР±С‰РµРЅРёР№ РїРѕРєР° РЅРµС‚.</div>`;
     } else {
       el.innerHTML = "";
       list.forEach(appendMessageToChat);
@@ -1866,11 +1882,11 @@ async function loadDialogMessages(accountId, peerId) {
 
 function _queueStatusBadge(status) {
   switch (status) {
-    case "pending":   return '<span class="qpill qpill-pend">в очереди</span>';
-    case "sending":   return '<span class="qpill qpill-send">отправляется</span>';
-    case "failed":    return '<span class="qpill qpill-fail">не доставлено</span>';
-    case "cancelled": return '<span class="qpill qpill-cncl">отменено</span>';
-    case "sent":      return '<span class="qpill qpill-ok">отправлено</span>';
+    case "pending":   return '<span class="qpill qpill-pend">РІ РѕС‡РµСЂРµРґРё</span>';
+    case "sending":   return '<span class="qpill qpill-send">РѕС‚РїСЂР°РІР»СЏРµС‚СЃСЏ</span>';
+    case "failed":    return '<span class="qpill qpill-fail">РЅРµ РґРѕСЃС‚Р°РІР»РµРЅРѕ</span>';
+    case "cancelled": return '<span class="qpill qpill-cncl">РѕС‚РјРµРЅРµРЅРѕ</span>';
+    case "sent":      return '<span class="qpill qpill-ok">РѕС‚РїСЂР°РІР»РµРЅРѕ</span>';
     default:          return `<span class="qpill">${escapeHTML(status || "?")}</span>`;
   }
 }
@@ -1878,7 +1894,7 @@ function _queueStatusBadge(status) {
 function appendMessageToChat(msg) {
   const el = $("#dlgMessages");
   if (!el) return;
-  // Дубли только по реальным neuro-сообщениям (положительный id).
+  // Р”СѓР±Р»Рё С‚РѕР»СЊРєРѕ РїРѕ СЂРµР°Р»СЊРЅС‹Рј neuro-СЃРѕРѕР±С‰РµРЅРёСЏРј (РїРѕР»РѕР¶РёС‚РµР»СЊРЅС‹Р№ id).
   if (msg.source !== "queue" && (msg.id || 0) > 0 && msg.id <= state.current.messageMaxId) return;
   if (msg.source !== "queue") {
     state.current.messageMaxId = Math.max(state.current.messageMaxId, msg.id || 0);
@@ -1894,26 +1910,26 @@ function appendMessageToChat(msg) {
 
   if (isQueue) {
     bubbleCls += " bubble-queue qstatus-" + escapeHTML(msg.queue_status || "pending");
-    metaExtra = ` · ${_queueStatusBadge(msg.queue_status)}`;
-    if (msg.queue_attempts) metaExtra += ` · попытка ${msg.queue_attempts}`;
+    metaExtra = ` В· ${_queueStatusBadge(msg.queue_status)}`;
+    if (msg.queue_attempts) metaExtra += ` В· РїРѕРїС‹С‚РєР° ${msg.queue_attempts}`;
     if (msg.queue_error) {
-      metaExtra += ` · <span class="text-rose-400" title="${escapeHTML(msg.queue_error)}">${escapeHTML(msg.queue_error.slice(0, 60))}</span>`;
+      metaExtra += ` В· <span class="text-rose-400" title="${escapeHTML(msg.queue_error)}">${escapeHTML(msg.queue_error.slice(0, 60))}</span>`;
     }
   }
 
   let actions = "";
   if (isQueue) {
     if (msg.queue_status === "failed" || msg.queue_status === "cancelled") {
-      actions += `<button class="qbtn qbtn-retry" data-action="retry" data-qid="${msg.queue_id}">Повторить</button>`;
+      actions += `<button class="qbtn qbtn-retry" data-action="retry" data-qid="${msg.queue_id}">РџРѕРІС‚РѕСЂРёС‚СЊ</button>`;
     }
     if (msg.queue_status === "pending" || msg.queue_status === "failed") {
-      actions += `<button class="qbtn qbtn-cancel" data-action="cancel" data-qid="${msg.queue_id}">Отменить</button>`;
+      actions += `<button class="qbtn qbtn-cancel" data-action="cancel" data-qid="${msg.queue_id}">РћС‚РјРµРЅРёС‚СЊ</button>`;
     }
   }
 
   wrap.innerHTML = `
     <div class="${bubbleCls}">${escapeHTML(msg.content || "")}</div>
-    <div class="bubble-meta">${isAssistant ? "бот" : "клиент"} · ${fmtDate(msg.created_at)}${metaExtra}</div>
+    <div class="bubble-meta">${isAssistant ? "Р±РѕС‚" : "РєР»РёРµРЅС‚"} В· ${fmtDate(msg.created_at)}${metaExtra}</div>
     ${actions ? `<div class="bubble-actions">${actions}</div>` : ""}
   `;
 
@@ -1932,17 +1948,17 @@ async function onQueueAction(action, queueId) {
   try {
     if (action === "retry") {
       await api(`/business/queue/${queueId}/retry`, { method: "POST" });
-      toast("Поставлено на повторную отправку", "success", 1500);
+      toast("РџРѕСЃС‚Р°РІР»РµРЅРѕ РЅР° РїРѕРІС‚РѕСЂРЅСѓСЋ РѕС‚РїСЂР°РІРєСѓ", "success", 1500);
     } else if (action === "cancel") {
-      if (!confirm("Отменить отправку этого сообщения?")) return;
+      if (!confirm("РћС‚РјРµРЅРёС‚СЊ РѕС‚РїСЂР°РІРєСѓ СЌС‚РѕРіРѕ СЃРѕРѕР±С‰РµРЅРёСЏ?")) return;
       await api(`/business/queue/${queueId}/cancel`, { method: "POST", raw: true });
-      toast("Отменено", "success", 1500);
+      toast("РћС‚РјРµРЅРµРЅРѕ", "success", 1500);
     }
     if (state.current.accountId && state.current.peerId) {
       loadDialogMessages(state.current.accountId, state.current.peerId);
     }
   } catch (e) {
-    toast(`Ошибка: ${e.message}`, "error");
+    toast(`РћС€РёР±РєР°: ${e.message}`, "error");
   }
 }
 
@@ -1952,13 +1968,13 @@ function renderComposer(accountId, peerId) {
   const acc = state.cache.accountById.get(accountId);
   const isManual = acc?.ai_mode === "MANUAL";
   const hint = isManual
-    ? "Аккаунт в MANUAL — сообщения клиенту шлёте только вы."
-    : "Аккаунт в AI_ACTIVE — ручное сообщение перехватит инициативу, ИИ продолжит видеть его в истории.";
+    ? "РђРєРєР°СѓРЅС‚ РІ MANUAL вЂ” СЃРѕРѕР±С‰РµРЅРёСЏ РєР»РёРµРЅС‚Сѓ С€Р»С‘С‚Рµ С‚РѕР»СЊРєРѕ РІС‹."
+    : "РђРєРєР°СѓРЅС‚ РІ AI_ACTIVE вЂ” СЂСѓС‡РЅРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ РїРµСЂРµС…РІР°С‚РёС‚ РёРЅРёС†РёР°С‚РёРІСѓ, РР РїСЂРѕРґРѕР»Р¶РёС‚ РІРёРґРµС‚СЊ РµРіРѕ РІ РёСЃС‚РѕСЂРёРё.";
   el.innerHTML = `
     <form id="dlgSendForm" class="flex items-end gap-2">
-      <textarea id="dlgInput" rows="2" maxlength="4000" placeholder="Введите ответ от имени аккаунта…"
+      <textarea id="dlgInput" rows="2" maxlength="4000" placeholder="Р’РІРµРґРёС‚Рµ РѕС‚РІРµС‚ РѕС‚ РёРјРµРЅРё Р°РєРєР°СѓРЅС‚Р°вЂ¦"
         class="flex-1 resize-none px-3 py-2 rounded-lg bg-ink-800 border border-ink-600 text-sm text-slate-100 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"></textarea>
-      <button class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm font-medium" type="submit">Отправить</button>
+      <button class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm font-medium" type="submit">РћС‚РїСЂР°РІРёС‚СЊ</button>
     </form>
     <div class="text-[11px] text-slate-500 mt-1">${escapeHTML(hint)}</div>
   `;
@@ -1973,23 +1989,23 @@ function renderComposer(accountId, peerId) {
         body: { text },
       });
       ta.value = "";
-      toast("Сообщение поставлено в очередь", "success", 1500);
-      // Сразу подтягиваем, чтобы placeholder появился в ленте.
+      toast("РЎРѕРѕР±С‰РµРЅРёРµ РїРѕСЃС‚Р°РІР»РµРЅРѕ РІ РѕС‡РµСЂРµРґСЊ", "success", 1500);
+      // РЎСЂР°Р·Сѓ РїРѕРґС‚СЏРіРёРІР°РµРј, С‡С‚РѕР±С‹ placeholder РїРѕСЏРІРёР»СЃСЏ РІ Р»РµРЅС‚Рµ.
       loadDialogMessages(accountId, peerId);
     } catch (e) {
-      toast(`Не удалось отправить: ${e.message}`, "error");
+      toast(`РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ: ${e.message}`, "error");
     }
   });
 }
 
 async function deleteCurrentDialog(accountId, peerId) {
-  if (!confirm("Удалить диалог? Все сообщения и связанные исходящие будут вычищены из БД.")) return;
+  if (!confirm("РЈРґР°Р»РёС‚СЊ РґРёР°Р»РѕРі? Р’СЃРµ СЃРѕРѕР±С‰РµРЅРёСЏ Рё СЃРІСЏР·Р°РЅРЅС‹Рµ РёСЃС…РѕРґСЏС‰РёРµ Р±СѓРґСѓС‚ РІС‹С‡РёС‰РµРЅС‹ РёР· Р‘Р”.")) return;
   try {
     await api(`/business/accounts/${accountId}/dialogs/${peerId}`, { method: "DELETE", raw: true });
-    toast("Диалог удалён", "success");
+    toast("Р”РёР°Р»РѕРі СѓРґР°Р»С‘РЅ", "success");
     window.location.hash = `#/dialogs/${accountId}`;
   } catch (e) {
-    toast(`Ошибка удаления: ${e.message}`, "error");
+    toast(`РћС€РёР±РєР° СѓРґР°Р»РµРЅРёСЏ: ${e.message}`, "error");
   }
 }
 
@@ -1997,24 +2013,24 @@ async function deleteCurrentDialog(accountId, peerId) {
 
 async function renderMailings(idStr) {
   const id = idStr ? Number(idStr) : null;
-  setHeader("Рассылки", id ? `Рассылка #${id}` : "Список и управление кампаниями");
+  setHeader("Р Р°СЃСЃС‹Р»РєРё", id ? `Р Р°СЃСЃС‹Р»РєР° #${id}` : "РЎРїРёСЃРѕРє Рё СѓРїСЂР°РІР»РµРЅРёРµ РєР°РјРїР°РЅРёСЏРјРё");
   const root = $("#pageRoot");
   if (!id) {
     root.innerHTML = `
       <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
         <div class="card">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="font-semibold text-slate-100">Новая рассылка</h3>
-            <span class="text-xs text-slate-500">Создаётся как draft, дальше — настройка в карточке</span>
+            <h3 class="font-semibold text-slate-100">РќРѕРІР°СЏ СЂР°СЃСЃС‹Р»РєР°</h3>
+            <span class="text-xs text-slate-500">РЎРѕР·РґР°С‘С‚СЃСЏ РєР°Рє draft, РґР°Р»СЊС€Рµ вЂ” РЅР°СЃС‚СЂРѕР№РєР° РІ РєР°СЂС‚РѕС‡РєРµ</span>
           </div>
           <form id="mailCreateForm" class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
             <label class="block md:col-span-2">
-              <span class="text-slate-400 text-xs">Название *</span>
-              <input name="name" required placeholder="Новая кампания"
+              <span class="text-slate-400 text-xs">РќР°Р·РІР°РЅРёРµ *</span>
+              <input name="name" required placeholder="РќРѕРІР°СЏ РєР°РјРїР°РЅРёСЏ"
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Аудитория</span>
+              <span class="text-slate-400 text-xs">РђСѓРґРёС‚РѕСЂРёСЏ</span>
               <select name="audience_mode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
                 <option value="classes">classes</option>
                 <option value="test">test</option>
@@ -2023,23 +2039,23 @@ async function renderMailings(idStr) {
             </label>
             <label class="flex items-center gap-2 mt-6 text-slate-300">
               <input name="neurochat_enabled" type="checkbox" class="rounded border-ink-600 bg-ink-800" />
-              Нейрочат включён
+              РќРµР№СЂРѕС‡Р°С‚ РІРєР»СЋС‡С‘РЅ
             </label>
             <label class="block md:col-span-4">
-              <span class="text-slate-400 text-xs">Первое сообщение (можно пустое)</span>
+              <span class="text-slate-400 text-xs">РџРµСЂРІРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ (РјРѕР¶РЅРѕ РїСѓСЃС‚РѕРµ)</span>
               <textarea name="message_text" rows="2"
                         class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100"></textarea>
             </label>
             <div class="md:col-span-4 flex items-center gap-3">
-              <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Создать рассылку</button>
+              <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">РЎРѕР·РґР°С‚СЊ СЂР°СЃСЃС‹Р»РєСѓ</button>
               <span id="mailCreateMsg" class="text-xs text-slate-400"></span>
             </div>
           </form>
         </div>
         <div class="flex items-center gap-3 text-sm">
-          <label class="text-slate-400">Статус:</label>
+          <label class="text-slate-400">РЎС‚Р°С‚СѓСЃ:</label>
           <select id="mailFilter" class="bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100">
-            <option value="">все</option>
+            <option value="">РІСЃРµ</option>
             <option value="running">running</option>
             <option value="paused">paused</option>
             <option value="completed">completed</option>
@@ -2047,16 +2063,16 @@ async function renderMailings(idStr) {
             <option value="cancelled">cancelled</option>
             <option value="error">error</option>
           </select>
-          <button id="mailRefresh" class="px-3 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white text-sm">⟳ Обновить</button>
+          <button id="mailRefresh" class="px-3 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white text-sm">вџі РћР±РЅРѕРІРёС‚СЊ</button>
         </div>
         <div class="card p-0 overflow-hidden">
           <table class="cb-table">
             <thead><tr>
-              <th>ID</th><th>Название</th><th>Статус</th>
-              <th class="text-right">Отправлено</th><th class="text-right">Ошибок</th>
-              <th>Аудитория</th><th>AI</th><th>Создана</th><th></th>
+              <th>ID</th><th>РќР°Р·РІР°РЅРёРµ</th><th>РЎС‚Р°С‚СѓСЃ</th>
+              <th class="text-right">РћС‚РїСЂР°РІР»РµРЅРѕ</th><th class="text-right">РћС€РёР±РѕРє</th>
+              <th>РђСѓРґРёС‚РѕСЂРёСЏ</th><th>AI</th><th>РЎРѕР·РґР°РЅР°</th><th></th>
             </tr></thead>
-            <tbody id="mailBody"><tr><td colspan="9" class="text-center text-slate-500 py-8">Загрузка…</td></tr></tbody>
+            <tbody id="mailBody"><tr><td colspan="9" class="text-center text-slate-500 py-8">Р—Р°РіСЂСѓР·РєР°вЂ¦</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -2068,7 +2084,7 @@ async function renderMailings(idStr) {
     return;
   }
   // detail
-  root.innerHTML = `<div id="mailDetail" class="p-6 cb-scroll overflow-y-auto h-full">Загрузка…</div>`;
+  root.innerHTML = `<div id="mailDetail" class="p-6 cb-scroll overflow-y-auto h-full">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>`;
   await loadMailingDetail(id);
 }
 
@@ -2082,10 +2098,10 @@ async function onCreateMailingSubmit(ev) {
     neurochat_enabled: !!fd.get("neurochat_enabled"),
   };
   const out = $("#mailCreateMsg");
-  out.textContent = "…";
+  out.textContent = "вЂ¦";
   try {
     const created = await api("/business/mailings", { method: "POST", body });
-    toast(`Рассылка #${created.id} создана`, "success");
+    toast(`Р Р°СЃСЃС‹Р»РєР° #${created.id} СЃРѕР·РґР°РЅР°`, "success");
     out.textContent = `ok (#${created.id})`;
     out.className = "text-xs text-emerald-300";
     ev.currentTarget.reset();
@@ -2104,7 +2120,7 @@ async function loadMailingsList() {
     const list = await api(`/business/mailings${qs}`);
     const tbody = $("#mailBody");
     if (!list.length) {
-      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-slate-500 py-8">Нет рассылок.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-slate-500 py-8">РќРµС‚ СЂР°СЃСЃС‹Р»РѕРє.</td></tr>`;
       return;
     }
     tbody.innerHTML = list.map(m => `
@@ -2112,9 +2128,9 @@ async function loadMailingsList() {
         <td class="text-slate-500">#${m.id}</td>
         <td><a href="#/mailings/${m.id}" class="text-slate-100 hover:text-accent-500">${escapeHTML(m.name)}</a></td>
         <td>${mailingStatusPill(m.status)}</td>
-        <td class="text-right text-slate-300">${m.sent}/${m.total || "—"}</td>
+        <td class="text-right text-slate-300">${m.sent}/${m.total || "вЂ”"}</td>
         <td class="text-right ${m.failed ? "text-rose-300" : "text-slate-400"}">${m.failed}</td>
-        <td class="text-xs text-slate-400">${escapeHTML(m.audience_mode || "—")}</td>
+        <td class="text-xs text-slate-400">${escapeHTML(m.audience_mode || "вЂ”")}</td>
         <td>${m.neurochat_enabled ? '<span class="pill pill-blue">on</span>' : '<span class="pill pill-gray">off</span>'}</td>
         <td class="text-xs text-slate-400">${fmtDate(m.created_at)}</td>
         <td class="text-right">
@@ -2125,7 +2141,7 @@ async function loadMailingsList() {
     tbody.querySelectorAll("button[data-mail-act]").forEach(b => {
       b.addEventListener("click", () => onMailingAction(Number(b.dataset.mid), b.dataset.mailAct));
     });
-  } catch (e) { toast(`Рассылки: ${e.message}`, "error"); }
+  } catch (e) { toast(`Р Р°СЃСЃС‹Р»РєРё: ${e.message}`, "error"); }
 }
 
 function mailingStatusPill(s) {
@@ -2139,29 +2155,29 @@ function mailingStatusPill(s) {
 function mailingActionButtons(m) {
   const buttons = [];
   if (m.status === "running") {
-    buttons.push(`<button class="px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-xs" data-mail-act="pause" data-mid="${m.id}">⏸ Пауза</button>`);
-    buttons.push(`<button class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs ml-1" data-mail-act="stop" data-mid="${m.id}">⏹ Стоп</button>`);
+    buttons.push(`<button class="px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-xs" data-mail-act="pause" data-mid="${m.id}">вЏё РџР°СѓР·Р°</button>`);
+    buttons.push(`<button class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs ml-1" data-mail-act="stop" data-mid="${m.id}">вЏ№ РЎС‚РѕРї</button>`);
   } else if (m.status === "paused") {
-    buttons.push(`<button class="px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs" data-mail-act="start" data-mid="${m.id}">▶ Запуск</button>`);
-    buttons.push(`<button class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs ml-1" data-mail-act="stop" data-mid="${m.id}">⏹ Стоп</button>`);
+    buttons.push(`<button class="px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs" data-mail-act="start" data-mid="${m.id}">в–¶ Р—Р°РїСѓСЃРє</button>`);
+    buttons.push(`<button class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs ml-1" data-mail-act="stop" data-mid="${m.id}">вЏ№ РЎС‚РѕРї</button>`);
   } else {
-    buttons.push(`<button class="px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs" data-mail-act="start" data-mid="${m.id}">▶ Запуск</button>`);
+    buttons.push(`<button class="px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs" data-mail-act="start" data-mid="${m.id}">в–¶ Р—Р°РїСѓСЃРє</button>`);
   }
   return buttons.join("");
 }
 
 async function onMailingAction(mailingId, action) {
   if (!mailingId || !action) return;
-  if (action === "stop" && !confirm(`Остановить рассылку #${mailingId}?`)) return;
+  if (action === "stop" && !confirm(`РћСЃС‚Р°РЅРѕРІРёС‚СЊ СЂР°СЃСЃС‹Р»РєСѓ #${mailingId}?`)) return;
   try {
     const r = await api(`/business/mailings/${mailingId}/${action}`, { method: "POST" });
     if (r.status === "queued") {
-      toast(`Команда ${action} поставлена в очередь`, "success", 1500);
+      toast(`РљРѕРјР°РЅРґР° ${action} РїРѕСЃС‚Р°РІР»РµРЅР° РІ РѕС‡РµСЂРµРґСЊ`, "success", 1500);
     } else {
       toast(`${action}: ${r.detail || r.status}`, "info", 1500);
     }
     setTimeout(() => loadMailingsList(), 1500);
-  } catch (e) { toast(`Ошибка ${action}: ${e.message}`, "error"); }
+  } catch (e) { toast(`РћС€РёР±РєР° ${action}: ${e.message}`, "error"); }
 }
 
 async function loadMailingDetail(id) {
@@ -2173,97 +2189,97 @@ async function loadMailingDetail(id) {
     ]);
     const editLocked = m.status === "running";
     const groupOptions = [
-      `<option value="0" ${!m.target_group_id ? "selected" : ""}>— все группы —</option>`,
+      `<option value="0" ${!m.target_group_id ? "selected" : ""}>вЂ” РІСЃРµ РіСЂСѓРїРїС‹ вЂ”</option>`,
       ...(groups || []).map(g => `<option value="${g.id}" ${m.target_group_id === g.id ? "selected" : ""}>${escapeHTML(g.name)}</option>`),
     ].join("");
     root.innerHTML = `
       <div class="space-y-4 max-w-5xl">
         <div class="flex items-center gap-3">
-          <a href="#/mailings" class="text-sm text-slate-400 hover:text-slate-200">← К списку</a>
+          <a href="#/mailings" class="text-sm text-slate-400 hover:text-slate-200">в†ђ Рљ СЃРїРёСЃРєСѓ</a>
           ${mailingStatusPill(m.status)}
           <h2 class="text-lg text-slate-100 font-semibold">${escapeHTML(m.name)}</h2>
           <div class="ml-auto flex gap-1">${mailingActionButtons(m)}</div>
         </div>
 
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          ${kpi("Отправлено", "mdSent", String(m.sent), `из ${m.total || "—"}`)}
-          ${kpi("Ошибок", "mdFail", String(m.failed), "", "text-rose-300")}
-          ${kpi("Старт", "mdStart", fmtDate(m.started_at) || "—", "")}
-          ${kpi("Финиш", "mdEnd", fmtDate(m.completed_at) || "—", "")}
+          ${kpi("РћС‚РїСЂР°РІР»РµРЅРѕ", "mdSent", String(m.sent), `РёР· ${m.total || "вЂ”"}`)}
+          ${kpi("РћС€РёР±РѕРє", "mdFail", String(m.failed), "", "text-rose-300")}
+          ${kpi("РЎС‚Р°СЂС‚", "mdStart", fmtDate(m.started_at) || "вЂ”", "")}
+          ${kpi("Р¤РёРЅРёС€", "mdEnd", fmtDate(m.completed_at) || "вЂ”", "")}
         </div>
 
         <!--
-          ВАЖНО: настройки рассылки и настройки нейрочата разнесены
-          в две независимые формы с собственными submit-кнопками,
-          чтобы по визуалу и UX совпадать с разделением «рассылка vs нейрочат».
-          Бэкенд использует один и тот же PATCH /business/mailings/{id}
-          и принимает любой подмножественный набор полей.
+          Р’РђР–РќРћ: РЅР°СЃС‚СЂРѕР№РєРё СЂР°СЃСЃС‹Р»РєРё Рё РЅР°СЃС‚СЂРѕР№РєРё РЅРµР№СЂРѕС‡Р°С‚Р° СЂР°Р·РЅРµСЃРµРЅС‹
+          РІ РґРІРµ РЅРµР·Р°РІРёСЃРёРјС‹Рµ С„РѕСЂРјС‹ СЃ СЃРѕР±СЃС‚РІРµРЅРЅС‹РјРё submit-РєРЅРѕРїРєР°РјРё,
+          С‡С‚РѕР±С‹ РїРѕ РІРёР·СѓР°Р»Сѓ Рё UX СЃРѕРІРїР°РґР°С‚СЊ СЃ СЂР°Р·РґРµР»РµРЅРёРµРј В«СЂР°СЃСЃС‹Р»РєР° vs РЅРµР№СЂРѕС‡Р°С‚В».
+          Р‘СЌРєРµРЅРґ РёСЃРїРѕР»СЊР·СѓРµС‚ РѕРґРёРЅ Рё С‚РѕС‚ Р¶Рµ PATCH /business/mailings/{id}
+          Рё РїСЂРёРЅРёРјР°РµС‚ Р»СЋР±РѕР№ РїРѕРґРјРЅРѕР¶РµСЃС‚РІРµРЅРЅС‹Р№ РЅР°Р±РѕСЂ РїРѕР»РµР№.
         -->
         <div class="card">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="font-semibold">Настройки рассылки</h3>
+            <h3 class="font-semibold">РќР°СЃС‚СЂРѕР№РєРё СЂР°СЃСЃС‹Р»РєРё</h3>
             ${editLocked
-              ? `<span class="text-xs text-amber-400">RUNNING — поставьте на паузу для редактирования</span>`
-              : `<span class="text-xs text-slate-500">Первое сообщение, аудитория, лимиты и задержки</span>`}
+              ? `<span class="text-xs text-amber-400">RUNNING вЂ” РїРѕСЃС‚Р°РІСЊС‚Рµ РЅР° РїР°СѓР·Сѓ РґР»СЏ СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёСЏ</span>`
+              : `<span class="text-xs text-slate-500">РџРµСЂРІРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ, Р°СѓРґРёС‚РѕСЂРёСЏ, Р»РёРјРёС‚С‹ Рё Р·Р°РґРµСЂР¶РєРё</span>`}
           </div>
           <form id="mailEditForm" class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm" ${editLocked ? "data-locked=1" : ""}>
             <label class="block md:col-span-3">
-              <span class="text-slate-400 text-xs">Название</span>
+              <span class="text-slate-400 text-xs">РќР°Р·РІР°РЅРёРµ</span>
               <input name="name" value="${escapeHTML(m.name || "")}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block md:col-span-3">
-              <span class="text-slate-400 text-xs">Текст основного сообщения</span>
+              <span class="text-slate-400 text-xs">РўРµРєСЃС‚ РѕСЃРЅРѕРІРЅРѕРіРѕ СЃРѕРѕР±С‰РµРЅРёСЏ</span>
               <textarea name="message_text" rows="4" ${editLocked ? "disabled" : ""}
                 class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs">${escapeHTML(m.message_text || "")}</textarea>
             </label>
             <label class="block md:col-span-3">
-              <span class="text-slate-400 text-xs">Варианты сообщения (по одному в строке)</span>
+              <span class="text-slate-400 text-xs">Р’Р°СЂРёР°РЅС‚С‹ СЃРѕРѕР±С‰РµРЅРёСЏ (РїРѕ РѕРґРЅРѕРјСѓ РІ СЃС‚СЂРѕРєРµ)</span>
               <textarea name="message_variants" rows="3" ${editLocked ? "disabled" : ""}
                 class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs">${escapeHTML((m.message_variants || []).join("\n"))}</textarea>
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Между сообщениями (с)</span>
+              <span class="text-slate-400 text-xs">РњРµР¶РґСѓ СЃРѕРѕР±С‰РµРЅРёСЏРјРё (СЃ)</span>
               <input name="delay_between_messages" type="number" step="0.1" min="0" max="600" value="${m.delay_between_messages}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Между аккаунтами (с)</span>
+              <span class="text-slate-400 text-xs">РњРµР¶РґСѓ Р°РєРєР°СѓРЅС‚Р°РјРё (СЃ)</span>
               <input name="delay_between_accounts" type="number" step="0.1" min="0" max="600" value="${m.delay_between_accounts}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Дневной лимит</span>
+              <span class="text-slate-400 text-xs">Р”РЅРµРІРЅРѕР№ Р»РёРјРёС‚</span>
               <input name="daily_limit" type="number" min="0" max="10000" value="${m.daily_limit}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">В пакете</span>
+              <span class="text-slate-400 text-xs">Р’ РїР°РєРµС‚Рµ</span>
               <input name="messages_per_batch" type="number" min="0" max="10000" value="${m.messages_per_batch}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Между пакетами (с)</span>
+              <span class="text-slate-400 text-xs">РњРµР¶РґСѓ РїР°РєРµС‚Р°РјРё (СЃ)</span>
               <input name="batch_delay" type="number" step="0.1" min="0" max="86400" value="${m.batch_delay}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Auto stop (ч), 0 = нет</span>
+              <span class="text-slate-400 text-xs">Auto stop (С‡), 0 = РЅРµС‚</span>
               <input name="auto_stop_hours" type="number" step="0.5" min="0" max="720" value="${m.auto_stop_hours ?? 0}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Целевая группа</span>
+              <span class="text-slate-400 text-xs">Р¦РµР»РµРІР°СЏ РіСЂСѓРїРїР°</span>
               <select name="target_group_id" ${editLocked ? "disabled" : ""}
                 class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">${groupOptions}</select>
             </label>
             <label class="block md:col-span-2">
-              <span class="text-slate-400 text-xs">Community link (для {link})</span>
+              <span class="text-slate-400 text-xs">Community link (РґР»СЏ {link})</span>
               <input name="community_link" value="${escapeHTML(m.community_link || "")}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Аудитория</span>
+              <span class="text-slate-400 text-xs">РђСѓРґРёС‚РѕСЂРёСЏ</span>
               <select name="audience_mode" ${editLocked ? "disabled" : ""}
                 class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
                 ${["classes","test","all"].map(v => `<option value="${v}" ${m.audience_mode === v ? "selected" : ""}>${v}</option>`).join("")}
@@ -2271,7 +2287,7 @@ async function loadMailingDetail(id) {
             </label>
             <div class="md:col-span-3 flex items-center gap-3">
               <button type="submit" ${editLocked ? "disabled" : ""}
-                class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed">Сохранить рассылку</button>
+                class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed">РЎРѕС…СЂР°РЅРёС‚СЊ СЂР°СЃСЃС‹Р»РєСѓ</button>
               <span id="mailEditMsg" class="text-xs text-slate-400"></span>
             </div>
           </form>
@@ -2279,45 +2295,45 @@ async function loadMailingDetail(id) {
 
         <div class="card">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="font-semibold">Настройки нейрочата</h3>
+            <h3 class="font-semibold">РќР°СЃС‚СЂРѕР№РєРё РЅРµР№СЂРѕС‡Р°С‚Р°</h3>
             ${editLocked
-              ? `<span class="text-xs text-amber-400">RUNNING — поставьте на паузу для редактирования</span>`
-              : `<span class="text-xs text-slate-500">Модель, sampling и system-промпт</span>`}
+              ? `<span class="text-xs text-amber-400">RUNNING вЂ” РїРѕСЃС‚Р°РІСЊС‚Рµ РЅР° РїР°СѓР·Сѓ РґР»СЏ СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёСЏ</span>`
+              : `<span class="text-xs text-slate-500">РњРѕРґРµР»СЊ, sampling Рё system-РїСЂРѕРјРїС‚</span>`}
           </div>
           <form id="neuroEditForm" class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm mb-5" ${editLocked ? "data-locked=1" : ""}>
             <label class="flex items-center gap-2 md:col-span-1 mt-6 text-slate-300">
               <input name="neurochat_enabled" type="checkbox" ${m.neurochat_enabled ? "checked" : ""} ${editLocked ? "disabled" : ""}
                      class="rounded border-ink-600 bg-ink-800" />
-              Нейрочат включён
+              РќРµР№СЂРѕС‡Р°С‚ РІРєР»СЋС‡С‘РЅ
             </label>
             <label class="block md:col-span-2">
-              <span class="text-slate-400 text-xs">Модель OpenRouter (например, openai/gpt-4o-mini)</span>
+              <span class="text-slate-400 text-xs">РњРѕРґРµР»СЊ OpenRouter (РЅР°РїСЂРёРјРµСЂ, openai/gpt-4o-mini)</span>
               <input name="neuro_model" value="${escapeHTML(m.neuro_model || "")}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono" />
             </label>
             <label class="block md:col-span-3">
-              <span class="text-slate-400 text-xs">Sampling overrides (JSON: temperature/top_p/max_tokens/…)</span>
+              <span class="text-slate-400 text-xs">Sampling overrides (JSON: temperature/top_p/max_tokens/вЂ¦)</span>
               <textarea name="neuro_sampling_json" rows="2" ${editLocked ? "disabled" : ""}
                 class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs">${escapeHTML(m.neuro_sampling_json || "{}")}</textarea>
             </label>
             <div class="md:col-span-3 flex items-center gap-3">
               <button type="submit" ${editLocked ? "disabled" : ""}
-                class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed">Сохранить нейрочат</button>
+                class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed">РЎРѕС…СЂР°РЅРёС‚СЊ РЅРµР№СЂРѕС‡Р°С‚</button>
               <span id="neuroEditMsg" class="text-xs text-slate-400"></span>
             </div>
           </form>
 
           <div class="border-t border-ink-700 pt-4">
             <div class="flex items-center justify-between mb-2">
-              <h4 class="font-medium text-slate-200">System-промпт</h4>
-              <div id="mailPromptStatus" class="text-xs text-slate-500">…</div>
+              <h4 class="font-medium text-slate-200">System-РїСЂРѕРјРїС‚</h4>
+              <div id="mailPromptStatus" class="text-xs text-slate-500">вЂ¦</div>
             </div>
-            <p class="text-xs text-slate-500 mb-3">Сохраняется в <code>data/neuro/mailings/${id}/system.txt</code>. Если файла нет — используется значение из <code>DEFAULT_NEURO_SYSTEM_PROMPT</code>. Доступные плейсхолдеры см. в боте.</p>
+            <p class="text-xs text-slate-500 mb-3">РЎРѕС…СЂР°РЅСЏРµС‚СЃСЏ РІ <code>data/neuro/mailings/${id}/system.txt</code>. Р•СЃР»Рё С„Р°Р№Р»Р° РЅРµС‚ вЂ” РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ Р·РЅР°С‡РµРЅРёРµ РёР· <code>DEFAULT_NEURO_SYSTEM_PROMPT</code>. Р”РѕСЃС‚СѓРїРЅС‹Рµ РїР»РµР№СЃС…РѕР»РґРµСЂС‹ СЃРј. РІ Р±РѕС‚Рµ.</p>
             <textarea id="mailPromptText" rows="14"
-              class="w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs">Загрузка…</textarea>
+              class="w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs">Р—Р°РіСЂСѓР·РєР°вЂ¦</textarea>
             <div class="flex items-center gap-3 mt-3">
-              <button id="mailPromptSave" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm">Сохранить промпт</button>
-              <button id="mailPromptReset" class="px-3 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 text-slate-200 text-sm">Сбросить к DEFAULT</button>
+              <button id="mailPromptSave" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm">РЎРѕС…СЂР°РЅРёС‚СЊ РїСЂРѕРјРїС‚</button>
+              <button id="mailPromptReset" class="px-3 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 text-slate-200 text-sm">РЎР±СЂРѕСЃРёС‚СЊ Рє DEFAULT</button>
               <span id="mailPromptMsg" class="text-xs text-slate-400"></span>
             </div>
           </div>
@@ -2349,10 +2365,10 @@ async function loadMailingDetail(id) {
           audience_mode: (fd.get("audience_mode") || "classes").toString(),
         };
         const out = $("#mailEditMsg");
-        out.textContent = "…";
+        out.textContent = "вЂ¦";
         try {
           await api(`/business/mailings/${id}`, { method: "PATCH", body });
-          toast("Рассылка сохранена", "success");
+          toast("Р Р°СЃСЃС‹Р»РєР° СЃРѕС…СЂР°РЅРµРЅР°", "success");
           out.textContent = "ok";
           out.className = "text-xs text-emerald-300";
           await loadMailingDetail(id);
@@ -2371,10 +2387,10 @@ async function loadMailingDetail(id) {
           neuro_sampling_json: (fd.get("neuro_sampling_json") || "{}").toString(),
         };
         const out = $("#neuroEditMsg");
-        out.textContent = "…";
+        out.textContent = "вЂ¦";
         try {
           await api(`/business/mailings/${id}`, { method: "PATCH", body });
-          toast("Нейрочат сохранён", "success");
+          toast("РќРµР№СЂРѕС‡Р°С‚ СЃРѕС…СЂР°РЅС‘РЅ", "success");
           out.textContent = "ok";
           out.className = "text-xs text-emerald-300";
           await loadMailingDetail(id);
@@ -2396,11 +2412,11 @@ async function fetchMailingPromptText(id) {
   try {
     const r = await api(`/business/mailings/${id}/prompt`);
     ta.value = r.text || "";
-    status.textContent = r.has_custom_file ? "файл задан" : "по умолчанию (.env)";
+    status.textContent = r.has_custom_file ? "С„Р°Р№Р» Р·Р°РґР°РЅ" : "РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ (.env)";
     status.className = `text-xs ${r.has_custom_file ? "text-emerald-300" : "text-slate-500"}`;
   } catch (e) {
     ta.value = "";
-    status.textContent = `ошибка: ${e.message}`;
+    status.textContent = `РѕС€РёР±РєР°: ${e.message}`;
     status.className = "text-xs text-rose-400";
   }
 }
@@ -2410,13 +2426,13 @@ function bindMailingPromptHandlers(id) {
     const ta = $("#mailPromptText");
     const out = $("#mailPromptMsg");
     if (!ta) return;
-    out.textContent = "…";
+    out.textContent = "вЂ¦";
     try {
       await api(`/business/mailings/${id}/prompt`, {
         method: "PUT",
         body: { text: ta.value },
       });
-      toast("Промпт сохранён", "success");
+      toast("РџСЂРѕРјРїС‚ СЃРѕС…СЂР°РЅС‘РЅ", "success");
       out.textContent = "ok";
       out.className = "text-xs text-emerald-300";
       await fetchMailingPromptText(id);
@@ -2426,10 +2442,10 @@ function bindMailingPromptHandlers(id) {
     }
   });
   $("#mailPromptReset").addEventListener("click", async () => {
-    if (!confirm("Удалить файл system.txt и вернуться к промпту по умолчанию?")) return;
+    if (!confirm("РЈРґР°Р»РёС‚СЊ С„Р°Р№Р» system.txt Рё РІРµСЂРЅСѓС‚СЊСЃСЏ Рє РїСЂРѕРјРїС‚Сѓ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ?")) return;
     try {
       await api(`/business/mailings/${id}/prompt`, { method: "DELETE" });
-      toast("Сброшено", "success");
+      toast("РЎР±СЂРѕС€РµРЅРѕ", "success");
       await fetchMailingPromptText(id);
     } catch (e) { toast(e.message, "error"); }
   });
@@ -2439,15 +2455,15 @@ function bindMailingPromptHandlers(id) {
 
 async function renderClients(idStr) {
   const id = idStr ? Number(idStr) : null;
-  setHeader("Клиенты", id ? `Клиент #${id}` : "База контактов и фильтр по классам");
+  setHeader("РљР»РёРµРЅС‚С‹", id ? `РљР»РёРµРЅС‚ #${id}` : "Р‘Р°Р·Р° РєРѕРЅС‚Р°РєС‚РѕРІ Рё С„РёР»СЊС‚СЂ РїРѕ РєР»Р°СЃСЃР°Рј");
   const root = $("#pageRoot");
   if (!id) {
     root.innerHTML = `
       <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
         <div class="flex items-center gap-3 text-sm flex-wrap">
-          <input id="clQ" placeholder="поиск по @username" class="px-3 py-1.5 rounded bg-ink-800 border border-ink-600 text-slate-100 w-64" />
+          <input id="clQ" placeholder="РїРѕРёСЃРє РїРѕ @username" class="px-3 py-1.5 rounded bg-ink-800 border border-ink-600 text-slate-100 w-64" />
           <select id="clClass" class="bg-ink-800 border border-ink-600 rounded px-2 py-1.5 text-slate-100">
-            <option value="">все классы</option>
+            <option value="">РІСЃРµ РєР»Р°СЃСЃС‹</option>
             <option value="accept">accept</option>
             <option value="alive">alive</option>
             <option value="pulse">pulse</option>
@@ -2457,16 +2473,16 @@ async function renderClients(idStr) {
             <option value="stop">stop</option>
             <option value="send_link">send_link</option>
           </select>
-          <button id="clApply" class="px-3 py-1.5 rounded bg-accent-600 hover:bg-accent-500 text-white">Применить</button>
+          <button id="clApply" class="px-3 py-1.5 rounded bg-accent-600 hover:bg-accent-500 text-white">РџСЂРёРјРµРЅРёС‚СЊ</button>
           <span class="text-slate-500 text-xs ml-auto" id="clCount"></span>
         </div>
         <div class="card p-0 overflow-hidden">
           <table class="cb-table">
             <thead><tr>
-              <th>ID</th><th>Username</th><th>TG ID</th><th>Статус</th>
-              <th>Классы</th><th>Добавлен</th><th>Контакт</th><th></th>
+              <th>ID</th><th>Username</th><th>TG ID</th><th>РЎС‚Р°С‚СѓСЃ</th>
+              <th>РљР»Р°СЃСЃС‹</th><th>Р”РѕР±Р°РІР»РµРЅ</th><th>РљРѕРЅС‚Р°РєС‚</th><th></th>
             </tr></thead>
-            <tbody id="clBody"><tr><td colspan="8" class="text-center text-slate-500 py-8">Загрузка…</td></tr></tbody>
+            <tbody id="clBody"><tr><td colspan="8" class="text-center text-slate-500 py-8">Р—Р°РіСЂСѓР·РєР°вЂ¦</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -2476,7 +2492,7 @@ async function renderClients(idStr) {
     await loadClientsList();
     return;
   }
-  root.innerHTML = `<div id="clDetail" class="p-6 cb-scroll overflow-y-auto h-full">Загрузка…</div>`;
+  root.innerHTML = `<div id="clDetail" class="p-6 cb-scroll overflow-y-auto h-full">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>`;
   await loadClientDetail(id);
 }
 
@@ -2490,40 +2506,40 @@ async function loadClientsList() {
     params.set("limit", "100");
     const list = await api(`/business/clients?${params.toString()}`);
     const tbody = $("#clBody");
-    $("#clCount").textContent = `найдено: ${list.length}`;
+    $("#clCount").textContent = `РЅР°Р№РґРµРЅРѕ: ${list.length}`;
     if (!list.length) {
-      tbody.innerHTML = `<tr><td colspan="8" class="text-center text-slate-500 py-8">Нет клиентов под фильтр.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center text-slate-500 py-8">РќРµС‚ РєР»РёРµРЅС‚РѕРІ РїРѕРґ С„РёР»СЊС‚СЂ.</td></tr>`;
       return;
     }
     tbody.innerHTML = list.map(c => {
-      const classes = c.classes.map(x => `<span class="pill cls-${escapeHTML(x.class_key)} pill-gray" title="${x.count}">${escapeHTML(x.class_key)}:${x.count}</span>`).join(" ") || `<span class="text-slate-500">—</span>`;
+      const classes = c.classes.map(x => `<span class="pill cls-${escapeHTML(x.class_key)} pill-gray" title="${x.count}">${escapeHTML(x.class_key)}:${x.count}</span>`).join(" ") || `<span class="text-slate-500">вЂ”</span>`;
       return `
         <tr>
           <td class="text-slate-500">#${c.id}</td>
           <td><a href="#/clients/${c.id}" class="text-slate-100 hover:text-accent-500">@${escapeHTML(c.username)}</a></td>
-          <td class="text-xs text-slate-400">${c.telegram_user_id ?? "—"}</td>
+          <td class="text-xs text-slate-400">${c.telegram_user_id ?? "вЂ”"}</td>
           <td>${escapeHTML(c.status)}</td>
           <td>${classes}</td>
           <td class="text-xs text-slate-400">${fmtDate(c.added_at)}</td>
           <td class="text-xs text-slate-400">${fmtRelative(c.last_contacted_at)}</td>
           <td class="text-right">
-            <button data-cl-del="${c.id}" class="px-2 py-1 rounded bg-rose-900/40 hover:bg-rose-800 text-xs text-rose-200 border border-rose-700/50">🗑</button>
+            <button data-cl-del="${c.id}" class="px-2 py-1 rounded bg-rose-900/40 hover:bg-rose-800 text-xs text-rose-200 border border-rose-700/50">рџ—‘</button>
           </td>
         </tr>`;
     }).join("");
     tbody.querySelectorAll("button[data-cl-del]").forEach(b => {
       b.addEventListener("click", () => deleteClient(Number(b.dataset.clDel)));
     });
-  } catch (e) { toast(`Клиенты: ${e.message}`, "error"); }
+  } catch (e) { toast(`РљР»РёРµРЅС‚С‹: ${e.message}`, "error"); }
 }
 
 async function deleteClient(id) {
-  if (!confirm(`Удалить клиента #${id}? Каскадно удалит классы/теги/события (NeuroChat — отдельно).`)) return;
+  if (!confirm(`РЈРґР°Р»РёС‚СЊ РєР»РёРµРЅС‚Р° #${id}? РљР°СЃРєР°РґРЅРѕ СѓРґР°Р»РёС‚ РєР»Р°СЃСЃС‹/С‚РµРіРё/СЃРѕР±С‹С‚РёСЏ (NeuroChat вЂ” РѕС‚РґРµР»СЊРЅРѕ).`)) return;
   try {
     await api(`/business/clients/${id}`, { method: "DELETE", raw: true });
-    toast(`Клиент #${id} удалён`, "success");
+    toast(`РљР»РёРµРЅС‚ #${id} СѓРґР°Р»С‘РЅ`, "success");
     loadClientsList();
-  } catch (e) { toast(`Ошибка: ${e.message}`, "error"); }
+  } catch (e) { toast(`РћС€РёР±РєР°: ${e.message}`, "error"); }
 }
 
 async function loadClientDetail(id) {
@@ -2536,45 +2552,45 @@ async function loadClientDetail(id) {
     root.innerHTML = `
       <div class="space-y-4 max-w-4xl">
         <div class="flex items-center gap-3">
-          <a href="#/clients" class="text-sm text-slate-400 hover:text-slate-200">← К списку</a>
+          <a href="#/clients" class="text-sm text-slate-400 hover:text-slate-200">в†ђ Рљ СЃРїРёСЃРєСѓ</a>
           <h2 class="text-lg text-slate-100 font-semibold">@${escapeHTML(c.username)}</h2>
-          <div class="text-xs text-slate-500">tg_id ${c.telegram_user_id ?? "—"} · ${escapeHTML(c.status)}</div>
+          <div class="text-xs text-slate-500">tg_id ${c.telegram_user_id ?? "вЂ”"} В· ${escapeHTML(c.status)}</div>
         </div>
 
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          ${kpi("Добавлен", "cdAdd", fmtDate(c.added_at), "")}
-          ${kpi("Послед. контакт", "cdLast", fmtDate(c.last_contacted_at) || "—", "")}
-          ${kpi("Событий", "cdInter", String(c.interactions_count), "client_interactions")}
-          ${kpi("Классов", "cdCls", String(c.classes.length), "счётчики")}
+          ${kpi("Р”РѕР±Р°РІР»РµРЅ", "cdAdd", fmtDate(c.added_at), "")}
+          ${kpi("РџРѕСЃР»РµРґ. РєРѕРЅС‚Р°РєС‚", "cdLast", fmtDate(c.last_contacted_at) || "вЂ”", "")}
+          ${kpi("РЎРѕР±С‹С‚РёР№", "cdInter", String(c.interactions_count), "client_interactions")}
+          ${kpi("РљР»Р°СЃСЃРѕРІ", "cdCls", String(c.classes.length), "СЃС‡С‘С‚С‡РёРєРё")}
         </div>
 
         <div class="card">
-          <h3 class="font-semibold mb-2">Классы</h3>
+          <h3 class="font-semibold mb-2">РљР»Р°СЃСЃС‹</h3>
           <div id="cdClassList" class="flex flex-wrap gap-2 mb-3">
             ${c.classes.map(x => `
               <span class="pill cls-${escapeHTML(x.class_key)} pill-gray flex items-center gap-1">
                 ${escapeHTML(x.class_key)}:${x.count}
-                <button data-cl-cdec="${escapeHTML(x.class_key)}" class="text-rose-300">−</button>
+                <button data-cl-cdec="${escapeHTML(x.class_key)}" class="text-rose-300">в€’</button>
                 <button data-cl-cinc="${escapeHTML(x.class_key)}" class="text-emerald-300">+</button>
-              </span>`).join("") || `<span class="text-slate-500">—</span>`}
+              </span>`).join("") || `<span class="text-slate-500">вЂ”</span>`}
           </div>
           <form id="cdAddForm" class="flex items-center gap-2 text-sm">
-            <input id="cdNewKey" placeholder="новый класс" class="px-3 py-1.5 rounded bg-ink-800 border border-ink-600 text-slate-100" />
+            <input id="cdNewKey" placeholder="РЅРѕРІС‹Р№ РєР»Р°СЃСЃ" class="px-3 py-1.5 rounded bg-ink-800 border border-ink-600 text-slate-100" />
             <input id="cdNewVal" type="number" value="1" min="1" max="9999" class="px-3 py-1.5 rounded bg-ink-800 border border-ink-600 text-slate-100 w-24" />
-            <button class="px-3 py-1.5 rounded bg-accent-600 hover:bg-accent-500 text-white">Добавить</button>
+            <button class="px-3 py-1.5 rounded bg-accent-600 hover:bg-accent-500 text-white">Р”РѕР±Р°РІРёС‚СЊ</button>
           </form>
         </div>
 
         ${c.tags?.length ? `
           <div class="card">
-            <h3 class="font-semibold mb-2">Теги</h3>
+            <h3 class="font-semibold mb-2">РўРµРіРё</h3>
             <div class="flex flex-wrap gap-2">
               ${c.tags.map(t => `<span class="pill pill-gray">${escapeHTML(t)}</span>`).join("")}
             </div>
           </div>` : ""}
 
         <div class="card">
-          <h3 class="font-semibold mb-2">Последние взаимодействия (${interactions.length})</h3>
+          <h3 class="font-semibold mb-2">РџРѕСЃР»РµРґРЅРёРµ РІР·Р°РёРјРѕРґРµР№СЃС‚РІРёСЏ (${interactions.length})</h3>
           ${interactions.length ? `
             <div class="space-y-2 text-sm">
               ${interactions.map(it => `
@@ -2582,10 +2598,10 @@ async function loadClientDetail(id) {
                   <span class="pill ${it.direction === 'out' ? 'pill-blue' : it.direction === 'in' ? 'pill-gray' : 'pill-amber'}">${escapeHTML(it.direction)}</span>
                   <div class="min-w-0 flex-1">
                     <div class="text-slate-300 truncate">${escapeHTML(it.kind)}${it.body ? ': ' + escapeHTML(it.body.slice(0, 200)) : ''}</div>
-                    <div class="text-[11px] text-slate-500">acc#${it.account_id ?? "—"} · mailing#${it.mailing_id ?? "—"} · ${fmtDate(it.created_at)}</div>
+                    <div class="text-[11px] text-slate-500">acc#${it.account_id ?? "вЂ”"} В· mailing#${it.mailing_id ?? "вЂ”"} В· ${fmtDate(it.created_at)}</div>
                   </div>
                 </div>`).join("")}
-            </div>` : `<div class="text-slate-500">Событий нет.</div>`}
+            </div>` : `<div class="text-slate-500">РЎРѕР±С‹С‚РёР№ РЅРµС‚.</div>`}
         </div>
       </div>
     `;
@@ -2619,24 +2635,24 @@ async function bumpClientClass(clientId, key, delta) {
 /* ------------------------------ Archive view --------------------------- */
 
 async function renderArchive() {
-  setHeader("Архив", "Восстановление мягко-удалённых диалогов");
+  setHeader("РђСЂС…РёРІ", "Р’РѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ РјСЏРіРєРѕ-СѓРґР°Р»С‘РЅРЅС‹С… РґРёР°Р»РѕРіРѕРІ");
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4 max-w-4xl">
       <div class="card">
-        <p class="text-sm text-slate-400 mb-3">При cleanup в режиме <b>archive</b> (по умолчанию в Настройках) сообщения и события переносятся в таблицы <code>*_archive</code>. Здесь можно восстановить переписки полностью или по фильтру.</p>
+        <p class="text-sm text-slate-400 mb-3">РџСЂРё cleanup РІ СЂРµР¶РёРјРµ <b>archive</b> (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ РІ РќР°СЃС‚СЂРѕР№РєР°С…) СЃРѕРѕР±С‰РµРЅРёСЏ Рё СЃРѕР±С‹С‚РёСЏ РїРµСЂРµРЅРѕСЃСЏС‚СЃСЏ РІ С‚Р°Р±Р»РёС†С‹ <code>*_archive</code>. Р—РґРµСЃСЊ РјРѕР¶РЅРѕ РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ РїРµСЂРµРїРёСЃРєРё РїРѕР»РЅРѕСЃС‚СЊСЋ РёР»Рё РїРѕ С„РёР»СЊС‚СЂСѓ.</p>
         <div class="flex items-center gap-3 text-sm">
-          <label class="text-slate-400">Аккаунт ID:</label>
+          <label class="text-slate-400">РђРєРєР°СѓРЅС‚ ID:</label>
           <input id="arAcc" type="number" min="1" class="bg-ink-800 border border-ink-600 rounded px-2 py-1.5 text-slate-100 w-32" />
-          <button id="arRefresh" class="px-3 py-1.5 rounded bg-accent-600 hover:bg-accent-500 text-white">Показать архив</button>
+          <button id="arRefresh" class="px-3 py-1.5 rounded bg-accent-600 hover:bg-accent-500 text-white">РџРѕРєР°Р·Р°С‚СЊ Р°СЂС…РёРІ</button>
         </div>
       </div>
       <div class="card p-0 overflow-hidden">
         <table class="cb-table">
           <thead><tr>
-            <th>Аккаунт</th><th>Peer</th><th class="text-right">Сообщений</th><th>Архивирован</th><th></th>
+            <th>РђРєРєР°СѓРЅС‚</th><th>Peer</th><th class="text-right">РЎРѕРѕР±С‰РµРЅРёР№</th><th>РђСЂС…РёРІРёСЂРѕРІР°РЅ</th><th></th>
           </tr></thead>
-          <tbody id="arBody"><tr><td colspan="5" class="text-center text-slate-500 py-8">Введите фильтр и нажмите «Показать архив».</td></tr></tbody>
+          <tbody id="arBody"><tr><td colspan="5" class="text-center text-slate-500 py-8">Р’РІРµРґРёС‚Рµ С„РёР»СЊС‚СЂ Рё РЅР°Р¶РјРёС‚Рµ В«РџРѕРєР°Р·Р°С‚СЊ Р°СЂС…РёРІВ».</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -2654,7 +2670,7 @@ async function loadArchive() {
   try {
     const list = await api(`/business/archive/dialogs?${params.toString()}`);
     if (!list.length) {
-      tbody.innerHTML = `<tr><td colspan="5" class="text-center text-slate-500 py-8">Архив пуст.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="text-center text-slate-500 py-8">РђСЂС…РёРІ РїСѓСЃС‚.</td></tr>`;
       return;
     }
     tbody.innerHTML = list.map(d => `
@@ -2665,61 +2681,61 @@ async function loadArchive() {
         <td class="text-xs text-slate-400">${fmtDate(d.last_archived_at)}</td>
         <td class="text-right">
           <button class="px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs"
-            data-restore-acc="${d.account_id}" data-restore-peer="${d.peer_user_id}">↶ Восстановить</button>
+            data-restore-acc="${d.account_id}" data-restore-peer="${d.peer_user_id}">в†¶ Р’РѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ</button>
         </td>
       </tr>
     `).join("");
     tbody.querySelectorAll("button[data-restore-acc]").forEach(b => {
       b.addEventListener("click", () => restoreArchive(Number(b.dataset.restoreAcc), Number(b.dataset.restorePeer)));
     });
-  } catch (e) { toast(`Архив: ${e.message}`, "error"); }
+  } catch (e) { toast(`РђСЂС…РёРІ: ${e.message}`, "error"); }
 }
 
 async function restoreArchive(accountId, peerId) {
-  if (!confirm(`Восстановить архивный диалог acc=${accountId} peer=${peerId}?`)) return;
+  if (!confirm(`Р’РѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ Р°СЂС…РёРІРЅС‹Р№ РґРёР°Р»РѕРі acc=${accountId} peer=${peerId}?`)) return;
   try {
     const r = await api(`/business/archive/restore`, {
       method: "POST",
       body: { account_id: accountId, peer_user_id: peerId },
     });
-    toast(`Восстановлено: сообщений ${r.messages_restored}, событий ${r.interactions_restored}`, "success");
+    toast(`Р’РѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРѕ: СЃРѕРѕР±С‰РµРЅРёР№ ${r.messages_restored}, СЃРѕР±С‹С‚РёР№ ${r.interactions_restored}`, "success");
     loadArchive();
-  } catch (e) { toast(`Ошибка: ${e.message}`, "error"); }
+  } catch (e) { toast(`РћС€РёР±РєР°: ${e.message}`, "error"); }
 }
 
 /* ------------------------------- Logs view ----------------------------- */
 
 async function renderLogs() {
-  setHeader("Логи", "События телеметрии (ingest от агентов бота)");
+  setHeader("Р›РѕРіРё", "РЎРѕР±С‹С‚РёСЏ С‚РµР»РµРјРµС‚СЂРёРё (ingest РѕС‚ Р°РіРµРЅС‚РѕРІ Р±РѕС‚Р°)");
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
       <div class="flex items-center gap-3 text-sm flex-wrap">
-        <label class="text-slate-400">Канал:</label>
+        <label class="text-slate-400">РљР°РЅР°Р»:</label>
         <select id="logsChannel" class="bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100">
           <option value="ingest">ingest (dashboard/logs)</option>
           <option value="openrouter">openrouter (file log)</option>
         </select>
-        <label class="text-slate-400">Уровень:</label>
+        <label class="text-slate-400">РЈСЂРѕРІРµРЅСЊ:</label>
         <select id="logsLevel" class="bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100">
-          <option value="">все</option>
+          <option value="">РІСЃРµ</option>
           <option value="info">info</option>
           <option value="warning">warning</option>
           <option value="error">error</option>
           <option value="critical">critical</option>
         </select>
-        <label class="text-slate-400">Лимит:</label>
+        <label class="text-slate-400">Р›РёРјРёС‚:</label>
         <input id="logsLimit" type="number" value="100" min="1" max="500" class="w-20 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
-        <input id="logsProvider" placeholder="provider (напр. openai)" class="hidden w-44 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
+        <input id="logsProvider" placeholder="provider (РЅР°РїСЂ. openai)" class="hidden w-44 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
         <input id="logsModel" placeholder="model contains" class="hidden w-56 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
         <input id="logsPromptId" placeholder="prompt_id" class="hidden w-36 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
-        <input id="logsQ" placeholder="поиск в сообщении" class="hidden w-56 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
-        <button id="logsApply" class="px-3 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white">Применить</button>
+        <input id="logsQ" placeholder="РїРѕРёСЃРє РІ СЃРѕРѕР±С‰РµРЅРёРё" class="hidden w-56 bg-ink-800 border border-ink-600 rounded-md px-2 py-1 text-slate-100" />
+        <button id="logsApply" class="px-3 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white">РџСЂРёРјРµРЅРёС‚СЊ</button>
       </div>
       <div class="card p-0 overflow-hidden">
         <table class="cb-table">
-          <thead><tr id="logsHeadRow"><th>Время</th><th>Уровень</th><th>Категория</th><th>Сообщение</th></tr></thead>
-          <tbody id="logsBody"><tr><td colspan="4" class="text-center text-slate-500 py-8">Загрузка…</td></tr></tbody>
+          <thead><tr id="logsHeadRow"><th>Р’СЂРµРјСЏ</th><th>РЈСЂРѕРІРµРЅСЊ</th><th>РљР°С‚РµРіРѕСЂРёСЏ</th><th>РЎРѕРѕР±С‰РµРЅРёРµ</th></tr></thead>
+          <tbody id="logsBody"><tr><td colspan="4" class="text-center text-slate-500 py-8">Р—Р°РіСЂСѓР·РєР°вЂ¦</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -2735,8 +2751,8 @@ async function renderLogs() {
     const head = $("#logsHeadRow");
     if (head) {
       head.innerHTML = openrouter
-        ? "<th>Время</th><th>Уровень</th><th>Provider/Model</th><th>Prompt</th><th>Сообщение</th>"
-        : "<th>Время</th><th>Уровень</th><th>Категория</th><th>Сообщение</th>";
+        ? "<th>Р’СЂРµРјСЏ</th><th>РЈСЂРѕРІРµРЅСЊ</th><th>Provider/Model</th><th>Prompt</th><th>РЎРѕРѕР±С‰РµРЅРёРµ</th>"
+        : "<th>Р’СЂРµРјСЏ</th><th>РЈСЂРѕРІРµРЅСЊ</th><th>РљР°С‚РµРіРѕСЂРёСЏ</th><th>РЎРѕРѕР±С‰РµРЅРёРµ</th>";
     }
   };
   $("#logsChannel").addEventListener("change", () => { toggleMode(); loadLogs(); });
@@ -2770,7 +2786,7 @@ async function loadLogs() {
     }
     const tbody = $("#logsBody");
     if (!list.length) {
-      tbody.innerHTML = `<tr><td colspan="4" class="text-center text-slate-500 py-8">Нет записей.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4" class="text-center text-slate-500 py-8">РќРµС‚ Р·Р°РїРёСЃРµР№.</td></tr>`;
       return;
     }
     if (channel === "openrouter") {
@@ -2779,11 +2795,11 @@ async function loadLogs() {
           <td class="text-xs text-slate-400 whitespace-nowrap">${fmtDate(l.created_at)}</td>
           <td>${logLevelPill(l.level)}</td>
           <td class="text-slate-300">
-            <span class="text-slate-400">${escapeHTML(l.provider || "—")}</span>
+            <span class="text-slate-400">${escapeHTML(l.provider || "вЂ”")}</span>
             <span class="text-slate-500">/</span>
-            <span class="text-slate-200">${escapeHTML(l.model || "—")}</span>
+            <span class="text-slate-200">${escapeHTML(l.model || "вЂ”")}</span>
           </td>
-          <td class="text-xs text-slate-400">${escapeHTML(l.prompt_id || "—")}</td>
+          <td class="text-xs text-slate-400">${escapeHTML(l.prompt_id || "вЂ”")}</td>
           <td class="text-slate-200">${escapeHTML(l.message)}</td>
         </tr>
       `).join("");
@@ -2798,7 +2814,7 @@ async function loadLogs() {
       `).join("");
     }
   } catch (e) {
-    toast(`Ошибка логов: ${e.message}`, "error");
+    toast(`РћС€РёР±РєР° Р»РѕРіРѕРІ: ${e.message}`, "error");
   }
 }
 function logLevelPill(level) {
@@ -2809,113 +2825,113 @@ function logLevelPill(level) {
 /* ---------------------------- Settings view ---------------------------- */
 
 async function renderSettings() {
-  setHeader("Настройки", "Глобальные настройки инстанса, ключи и обслуживание");
+  setHeader("РќР°СЃС‚СЂРѕР№РєРё", "Р“Р»РѕР±Р°Р»СЊРЅС‹Рµ РЅР°СЃС‚СЂРѕР№РєРё РёРЅСЃС‚Р°РЅСЃР°, РєР»СЋС‡Рё Рё РѕР±СЃР»СѓР¶РёРІР°РЅРёРµ");
   const readOnly = isReadOnlyRole();
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-6">
 
       <div class="card">
-        <h3 class="font-semibold mb-1">Инстанс</h3>
-        <p class="text-sm text-slate-400 mb-4">Глобальные переключатели бота. NULL в БД = используется значение из <code>.env</code> при старте.</p>
-        <div id="instanceCard" class="text-sm text-slate-400">Загрузка…</div>
+        <h3 class="font-semibold mb-1">РРЅСЃС‚Р°РЅСЃ</h3>
+        <p class="text-sm text-slate-400 mb-4">Р“Р»РѕР±Р°Р»СЊРЅС‹Рµ РїРµСЂРµРєР»СЋС‡Р°С‚РµР»Рё Р±РѕС‚Р°. NULL РІ Р‘Р” = РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ Р·РЅР°С‡РµРЅРёРµ РёР· <code>.env</code> РїСЂРё СЃС‚Р°СЂС‚Рµ.</p>
+        <div id="instanceCard" class="text-sm text-slate-400">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>
       </div>
 
       <div class="card">
-        <h3 class="font-semibold mb-1">Ключ OpenRouter</h3>
-        <p class="text-sm text-slate-400 mb-4">Шифруется Fernet-ключом из <code>OPENROUTER_KEY_ENCRYPTION_KEY</code>. Без этой переменной значение хранится в открытом виде с префиксом <code>p:</code>. ${readOnly ? "Роль read-only: изменение секрета недоступно." : ""}</p>
-        <div id="orKeyCard" class="text-sm text-slate-400">Загрузка…</div>
+        <h3 class="font-semibold mb-1">РљР»СЋС‡ OpenRouter</h3>
+        <p class="text-sm text-slate-400 mb-4">РЁРёС„СЂСѓРµС‚СЃСЏ Fernet-РєР»СЋС‡РѕРј РёР· <code>OPENROUTER_KEY_ENCRYPTION_KEY</code>. Р‘РµР· СЌС‚РѕР№ РїРµСЂРµРјРµРЅРЅРѕР№ Р·РЅР°С‡РµРЅРёРµ С…СЂР°РЅРёС‚СЃСЏ РІ РѕС‚РєСЂС‹С‚РѕРј РІРёРґРµ СЃ РїСЂРµС„РёРєСЃРѕРј <code>p:</code>. ${readOnly ? "Р РѕР»СЊ read-only: РёР·РјРµРЅРµРЅРёРµ СЃРµРєСЂРµС‚Р° РЅРµРґРѕСЃС‚СѓРїРЅРѕ." : ""}</p>
+        <div id="orKeyCard" class="text-sm text-slate-400">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>
       </div>
 
       <div class="card">
-        <h3 class="font-semibold mb-1">Очистка диалогов</h3>
-        <p class="text-sm text-slate-400 mb-4">Удаление выполняется батчами с проверкой ограничений. Системные таблицы (логи рассылок, MailingLog, аккаунты, прокси, классы клиентов) <b>не</b> удаляются — только переписки и client_interactions. ${readOnly ? "Роль read-only: cleanup недоступен." : ""}</p>
+        <h3 class="font-semibold mb-1">РћС‡РёСЃС‚РєР° РґРёР°Р»РѕРіРѕРІ</h3>
+        <p class="text-sm text-slate-400 mb-4">РЈРґР°Р»РµРЅРёРµ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ Р±Р°С‚С‡Р°РјРё СЃ РїСЂРѕРІРµСЂРєРѕР№ РѕРіСЂР°РЅРёС‡РµРЅРёР№. РЎРёСЃС‚РµРјРЅС‹Рµ С‚Р°Р±Р»РёС†С‹ (Р»РѕРіРё СЂР°СЃСЃС‹Р»РѕРє, MailingLog, Р°РєРєР°СѓРЅС‚С‹, РїСЂРѕРєСЃРё, РєР»Р°СЃСЃС‹ РєР»РёРµРЅС‚РѕРІ) <b>РЅРµ</b> СѓРґР°Р»СЏСЋС‚СЃСЏ вЂ” С‚РѕР»СЊРєРѕ РїРµСЂРµРїРёСЃРєРё Рё client_interactions. ${readOnly ? "Р РѕР»СЊ read-only: cleanup РЅРµРґРѕСЃС‚СѓРїРµРЅ." : ""}</p>
         <form id="cleanupForm" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
           <label class="block">
-            <span class="text-slate-400 text-xs">Аккаунт ID (опц.)</span>
+            <span class="text-slate-400 text-xs">РђРєРєР°СѓРЅС‚ ID (РѕРїС†.)</span>
             <input name="account_id" type="number" min="1" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Peer User ID (опц.)</span>
+            <span class="text-slate-400 text-xs">Peer User ID (РѕРїС†.)</span>
             <input name="peer_user_id" type="number" min="1" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Старше N дней</span>
-            <input name="older_than_days" type="number" min="1" max="3650" placeholder="например, 30" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+            <span class="text-slate-400 text-xs">РЎС‚Р°СЂС€Рµ N РґРЅРµР№</span>
+            <input name="older_than_days" type="number" min="1" max="3650" placeholder="РЅР°РїСЂРёРјРµСЂ, 30" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Классы клиентов (через запятую)</span>
+            <span class="text-slate-400 text-xs">РљР»Р°СЃСЃС‹ РєР»РёРµРЅС‚РѕРІ (С‡РµСЂРµР· Р·Р°РїСЏС‚СѓСЋ)</span>
             <input name="classes" type="text" placeholder="dead, bl, decline" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Режим</span>
+            <span class="text-slate-400 text-xs">Р РµР¶РёРј</span>
             <select name="mode" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
-              <option value="archive" selected>archive — переносить в *_archive (восстановимо)</option>
-              <option value="hard">hard — физически удалить</option>
+              <option value="archive" selected>archive вЂ” РїРµСЂРµРЅРѕСЃРёС‚СЊ РІ *_archive (РІРѕСЃСЃС‚Р°РЅРѕРІРёРјРѕ)</option>
+              <option value="hard">hard вЂ” С„РёР·РёС‡РµСЃРєРё СѓРґР°Р»РёС‚СЊ</option>
             </select>
           </label>
           <label class="flex items-center gap-2 col-span-full text-slate-300">
             <input name="dry_run" type="checkbox" class="rounded border-ink-600 bg-ink-800" checked />
-            Только посчитать (dry-run, без удаления)
+            РўРѕР»СЊРєРѕ РїРѕСЃС‡РёС‚Р°С‚СЊ (dry-run, Р±РµР· СѓРґР°Р»РµРЅРёСЏ)
           </label>
           <div class="col-span-full flex items-center gap-3">
-            <button class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white" type="submit">Запустить</button>
-            <a href="#/archive" class="text-sm text-slate-400 hover:text-slate-200">→ Архив для восстановления</a>
+            <button class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white" type="submit">Р—Р°РїСѓСЃС‚РёС‚СЊ</button>
+            <a href="#/archive" class="text-sm text-slate-400 hover:text-slate-200">в†’ РђСЂС…РёРІ РґР»СЏ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ</a>
             <span id="cleanupResult" class="text-sm text-slate-400"></span>
           </div>
         </form>
       </div>
 
       <div class="card">
-        <h3 class="font-semibold mb-1">Аккаунт</h3>
-        <p class="text-sm text-slate-400 mb-2">Текущий пользователь: <span class="text-slate-200">${escapeHTML(state.user?.username || "—")}</span></p>
+        <h3 class="font-semibold mb-1">РђРєРєР°СѓРЅС‚</h3>
+        <p class="text-sm text-slate-400 mb-2">РўРµРєСѓС‰РёР№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ: <span class="text-slate-200">${escapeHTML(state.user?.username || "вЂ”")}</span></p>
         <form id="myPassForm" class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm mb-4">
           <label class="block">
-            <span class="text-slate-400 text-xs">Текущий пароль</span>
+            <span class="text-slate-400 text-xs">РўРµРєСѓС‰РёР№ РїР°СЂРѕР»СЊ</span>
             <input name="current_password" type="password" autocomplete="current-password"
                    class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <label class="block">
-            <span class="text-slate-400 text-xs">Новый пароль</span>
+            <span class="text-slate-400 text-xs">РќРѕРІС‹Р№ РїР°СЂРѕР»СЊ</span>
             <input name="new_password" type="password" autocomplete="new-password" minlength="6"
                    class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
           </label>
           <div class="flex items-end gap-3">
-            <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Сменить пароль</button>
+            <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">РЎРјРµРЅРёС‚СЊ РїР°СЂРѕР»СЊ</button>
             <span id="myPassMsg" class="text-xs text-slate-400"></span>
           </div>
         </form>
 
           <div class="border-t border-ink-700 pt-4">
-          <h4 class="font-medium text-slate-200 mb-2">Операторы панели</h4>
-            ${readOnly ? `<p class="text-sm text-slate-500 mb-3">Роль read-only: управление операторами недоступно.</p>` : ""}
+          <h4 class="font-medium text-slate-200 mb-2">РћРїРµСЂР°С‚РѕСЂС‹ РїР°РЅРµР»Рё</h4>
+            ${readOnly ? `<p class="text-sm text-slate-500 mb-3">Р РѕР»СЊ read-only: СѓРїСЂР°РІР»РµРЅРёРµ РѕРїРµСЂР°С‚РѕСЂР°РјРё РЅРµРґРѕСЃС‚СѓРїРЅРѕ.</p>` : ""}
           <form id="opCreateForm" class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm mb-4">
             <label class="block">
-              <span class="text-slate-400 text-xs">Логин</span>
+              <span class="text-slate-400 text-xs">Р›РѕРіРёРЅ</span>
               <input name="username" minlength="3" required
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Пароль</span>
+              <span class="text-slate-400 text-xs">РџР°СЂРѕР»СЊ</span>
               <input name="password" type="password" minlength="6" required
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>
             <label class="block">
-              <span class="text-slate-400 text-xs">Роль</span>
+              <span class="text-slate-400 text-xs">Р РѕР»СЊ</span>
               <select name="role" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
                 <option value="tenant_viewer">tenant_viewer (read-only)</option>
-                <option value="tenant_admin">tenant_admin (оператор)</option>
+                <option value="tenant_admin">tenant_admin (РѕРїРµСЂР°С‚РѕСЂ)</option>
               </select>
             </label>
             <div class="flex items-end gap-3">
-              <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Создать</button>
+              <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">РЎРѕР·РґР°С‚СЊ</button>
               <span id="opCreateMsg" class="text-xs text-slate-400"></span>
             </div>
           </form>
           <div class="card p-0 overflow-hidden">
             <table class="cb-table">
-              <thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Tenant</th><th>Создан</th><th></th></tr></thead>
-              <tbody id="opUsersBody"><tr><td colspan="6" class="text-center text-slate-500 py-6">Загрузка…</td></tr></tbody>
+              <thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Tenant</th><th>РЎРѕР·РґР°РЅ</th><th></th></tr></thead>
+              <tbody id="opUsersBody"><tr><td colspan="6" class="text-center text-slate-500 py-6">Р—Р°РіСЂСѓР·РєР°вЂ¦</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -2926,7 +2942,7 @@ async function renderSettings() {
   $("#cleanupForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     if (readOnly) {
-      toast("Роль read-only: cleanup запрещен", "error");
+      toast("Р РѕР»СЊ read-only: cleanup Р·Р°РїСЂРµС‰РµРЅ", "error");
       return;
     }
     const fd = new FormData(ev.currentTarget);
@@ -2940,15 +2956,15 @@ async function renderSettings() {
     body.mode = (fd.get("mode") || "archive").toString();
 
     const out = $("#cleanupResult");
-    out.textContent = "…";
+    out.textContent = "вЂ¦";
     try {
       const r = await api("/business/cleanup/v2", { method: "POST", body });
       const arch = (r.messages_archived || r.interactions_archived)
-        ? ` · в архив: ${r.messages_archived}/${r.interactions_archived}`
+        ? ` В· РІ Р°СЂС…РёРІ: ${r.messages_archived}/${r.interactions_archived}`
         : "";
-      out.textContent = `${body.dry_run ? "[DRY] " : ""}[${r.mode}] диалогов: ${r.dialogs_deleted}, сообщений: ${r.messages_deleted}, событий: ${r.interactions_deleted}${arch}`;
+      out.textContent = `${body.dry_run ? "[DRY] " : ""}[${r.mode}] РґРёР°Р»РѕРіРѕРІ: ${r.dialogs_deleted}, СЃРѕРѕР±С‰РµРЅРёР№: ${r.messages_deleted}, СЃРѕР±С‹С‚РёР№: ${r.interactions_deleted}${arch}`;
       out.className = "text-sm " + (body.dry_run ? "text-amber-300" : "text-emerald-300");
-      toast(body.dry_run ? "Подсчёт готов" : `Cleanup [${r.mode}] выполнен`, "success");
+      toast(body.dry_run ? "РџРѕРґСЃС‡С‘С‚ РіРѕС‚РѕРІ" : `Cleanup [${r.mode}] РІС‹РїРѕР»РЅРµРЅ`, "success");
     } catch (e) {
       out.textContent = e.message;
       out.className = "text-sm text-rose-400";
@@ -2962,7 +2978,7 @@ async function renderSettings() {
   } else {
     const opBody = $("#opUsersBody");
     if (opBody) {
-      opBody.innerHTML = `<tr><td colspan="6" class="text-center text-slate-500 py-6">Недоступно для роли read-only.</td></tr>`;
+      opBody.innerHTML = `<tr><td colspan="6" class="text-center text-slate-500 py-6">РќРµРґРѕСЃС‚СѓРїРЅРѕ РґР»СЏ СЂРѕР»Рё read-only.</td></tr>`;
     }
     $("#opCreateForm")?.querySelectorAll("input,select,button").forEach((el) => { el.disabled = true; });
     $("#cleanupForm")?.querySelectorAll("input,select,button").forEach((el) => { el.disabled = true; });
@@ -2979,12 +2995,12 @@ async function onChangeMyPassword(ev) {
     new_password: (fd.get("new_password") || "").toString(),
   };
   const out = $("#myPassMsg");
-  out.textContent = "…";
+  out.textContent = "вЂ¦";
   try {
     await api("/admin/me/password", { method: "POST", body });
     out.textContent = "ok";
     out.className = "text-xs text-emerald-300";
-    toast("Пароль обновлён", "success");
+    toast("РџР°СЂРѕР»СЊ РѕР±РЅРѕРІР»С‘РЅ", "success");
     ev.currentTarget.reset();
   } catch (e) {
     out.textContent = e.message;
@@ -3001,12 +3017,12 @@ async function onCreateOperator(ev) {
     role: (fd.get("role") || "tenant_viewer").toString(),
   };
   const out = $("#opCreateMsg");
-  out.textContent = "…";
+  out.textContent = "вЂ¦";
   try {
     const r = await api("/admin/users/create", { method: "POST", body });
     out.textContent = `ok (#${r.id})`;
     out.className = "text-xs text-emerald-300";
-    toast(`Пользователь ${r.username} создан`, "success");
+    toast(`РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ ${r.username} СЃРѕР·РґР°РЅ`, "success");
     ev.currentTarget.reset();
     await loadOperators();
   } catch (e) {
@@ -3021,7 +3037,7 @@ async function loadOperators() {
   try {
     const users = await api("/admin/users");
     if (!users.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-slate-500 py-6">Нет пользователей.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-slate-500 py-6">РќРµС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№.</td></tr>`;
       return;
     }
     tbody.innerHTML = users.map(u => `
@@ -3033,7 +3049,7 @@ async function loadOperators() {
         <td class="text-xs text-slate-400">${fmtDate(u.created_at)}</td>
         <td class="text-right">
           <button data-op-reset="${u.id}" data-op-user="${escapeHTML(u.username)}"
-            class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs">Сброс пароля</button>
+            class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs">РЎР±СЂРѕСЃ РїР°СЂРѕР»СЏ</button>
         </td>
       </tr>
     `).join("");
@@ -3041,16 +3057,16 @@ async function loadOperators() {
       b.addEventListener("click", async () => {
         const uid = Number(b.dataset.opReset);
         const uname = b.dataset.opUser || `#${uid}`;
-        const pw = prompt(`Новый пароль для ${uname}:`);
+        const pw = prompt(`РќРѕРІС‹Р№ РїР°СЂРѕР»СЊ РґР»СЏ ${uname}:`);
         if (!pw) return;
         try {
           await api(`/admin/users/${uid}/password`, {
             method: "POST",
             body: { new_password: pw },
           });
-          toast(`Пароль обновлён: ${uname}`, "success");
+          toast(`РџР°СЂРѕР»СЊ РѕР±РЅРѕРІР»С‘РЅ: ${uname}`, "success");
         } catch (e) {
-          toast(`Ошибка: ${e.message}`, "error");
+          toast(`РћС€РёР±РєР°: ${e.message}`, "error");
         }
       });
     });
@@ -3068,23 +3084,23 @@ async function loadInstanceSettings() {
     inst.innerHTML = `
       <form id="instanceForm" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
         <label class="block">
-          <span class="text-slate-400 text-xs">Нейрочат включён глобально</span>
+          <span class="text-slate-400 text-xs">РќРµР№СЂРѕС‡Р°С‚ РІРєР»СЋС‡С‘РЅ РіР»РѕР±Р°Р»СЊРЅРѕ</span>
           <select name="neurochat_enabled" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
-            <option value="">из .env (${s.neurochat_enabled_effective ? "включён" : "выключен"})</option>
-            <option value="true" ${s.neurochat_enabled_db === true ? "selected" : ""}>Принудительно ВКЛ</option>
-            <option value="false" ${s.neurochat_enabled_db === false ? "selected" : ""}>Принудительно ВЫКЛ</option>
+            <option value="">РёР· .env (${s.neurochat_enabled_effective ? "РІРєР»СЋС‡С‘РЅ" : "РІС‹РєР»СЋС‡РµРЅ"})</option>
+            <option value="true" ${s.neurochat_enabled_db === true ? "selected" : ""}>РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕ Р’РљР›</option>
+            <option value="false" ${s.neurochat_enabled_db === false ? "selected" : ""}>РџСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕ Р’Р«РљР›</option>
           </select>
         </label>
         <label class="block">
-          <span class="text-slate-400 text-xs">Базовый UTC-сдвиг для {date}/{time} (часы)</span>
+          <span class="text-slate-400 text-xs">Р‘Р°Р·РѕРІС‹Р№ UTC-СЃРґРІРёРі РґР»СЏ {date}/{time} (С‡Р°СЃС‹)</span>
           <input name="mailing_base_utc_offset" type="number" min="-12" max="14"
                  value="${s.mailing_base_utc_offset_db ?? ""}"
-                 placeholder="из .env (${s.mailing_base_utc_offset_effective})"
+                 placeholder="РёР· .env (${s.mailing_base_utc_offset_effective})"
                  class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
         </label>
         <div class="col-span-full flex items-center gap-3">
-          <button class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white" type="submit">Сохранить</button>
-          <button id="instanceResetBtn" type="button" class="px-3 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 text-sm">Сбросить оба к .env</button>
+          <button class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white" type="submit">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+          <button id="instanceResetBtn" type="button" class="px-3 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 text-sm">РЎР±СЂРѕСЃРёС‚СЊ РѕР±Р° Рє .env</button>
           <span id="instanceMsg" class="text-xs text-slate-400"></span>
         </div>
       </form>
@@ -3101,10 +3117,10 @@ async function loadInstanceSettings() {
       if (off === "") body.reset_mailing_base_utc_offset = true;
       else body.mailing_base_utc_offset = Number(off);
       const out = $("#instanceMsg");
-      out.textContent = "…";
+      out.textContent = "вЂ¦";
       try {
         await api("/business/instance/settings", { method: "PATCH", body });
-        toast("Инстанс обновлён", "success");
+        toast("РРЅСЃС‚Р°РЅСЃ РѕР±РЅРѕРІР»С‘РЅ", "success");
         await loadInstanceSettings();
       } catch (e) {
         out.textContent = e.message;
@@ -3117,7 +3133,7 @@ async function loadInstanceSettings() {
           method: "PATCH",
           body: { reset_neurochat_enabled: true, reset_mailing_base_utc_offset: true },
         });
-        toast("Сброшено к .env", "success");
+        toast("РЎР±СЂРѕС€РµРЅРѕ Рє .env", "success");
         await loadInstanceSettings();
       } catch (e) {
         toast(e.message, "error");
@@ -3125,41 +3141,41 @@ async function loadInstanceSettings() {
     });
 
     const encBadge = s.openrouter_key_encrypted
-      ? `<span class="text-xs px-2 py-0.5 rounded bg-emerald-700/30 text-emerald-300 border border-emerald-700/40">шифр</span>`
+      ? `<span class="text-xs px-2 py-0.5 rounded bg-emerald-700/30 text-emerald-300 border border-emerald-700/40">С€РёС„СЂ</span>`
       : (s.openrouter_key_set
         ? `<span class="text-xs px-2 py-0.5 rounded bg-amber-700/30 text-amber-300 border border-amber-700/40">plain</span>`
-        : `<span class="text-xs px-2 py-0.5 rounded bg-slate-700/40 text-slate-400 border border-slate-600/40">не задан</span>`);
+        : `<span class="text-xs px-2 py-0.5 rounded bg-slate-700/40 text-slate-400 border border-slate-600/40">РЅРµ Р·Р°РґР°РЅ</span>`);
     ork.innerHTML = `
       <div class="flex items-center gap-3 mb-3">
-        <span class="text-slate-200 font-mono">${escapeHTML(s.openrouter_key_masked || "—")}</span>
+        <span class="text-slate-200 font-mono">${escapeHTML(s.openrouter_key_masked || "вЂ”")}</span>
         ${encBadge}
-        ${s.openrouter_key_set ? `<button id="orKeyDelete" class="ml-auto text-xs text-rose-400 hover:text-rose-300">Удалить</button>` : ""}
+        ${s.openrouter_key_set ? `<button id="orKeyDelete" class="ml-auto text-xs text-rose-400 hover:text-rose-300">РЈРґР°Р»РёС‚СЊ</button>` : ""}
       </div>
       <form id="orKeyForm" class="flex items-center gap-2">
-        <input name="key" type="password" placeholder="sk-or-v1-…"
+        <input name="key" type="password" placeholder="sk-or-v1-вЂ¦"
                class="flex-1 bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
-        <button type="submit" class="px-3 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm">Сохранить ключ</button>
+        <button type="submit" class="px-3 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-sm">РЎРѕС…СЂР°РЅРёС‚СЊ РєР»СЋС‡</button>
       </form>
-      <p class="text-xs text-slate-500 mt-2">Ключ применяется при следующем запросе нейрочата (без рестарта бота).</p>
+      <p class="text-xs text-slate-500 mt-2">РљР»СЋС‡ РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РїСЂРё СЃР»РµРґСѓСЋС‰РµРј Р·Р°РїСЂРѕСЃРµ РЅРµР№СЂРѕС‡Р°С‚Р° (Р±РµР· СЂРµСЃС‚Р°СЂС‚Р° Р±РѕС‚Р°).</p>
     `;
     $("#orKeyForm").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const fd = new FormData(ev.currentTarget);
       const key = (fd.get("key") || "").toString().trim();
-      if (!key) { toast("Пустой ключ", "warning"); return; }
+      if (!key) { toast("РџСѓСЃС‚РѕР№ РєР»СЋС‡", "warning"); return; }
       try {
         await api("/business/instance/openrouter-key", { method: "POST", body: { key } });
-        toast("Ключ сохранён", "success");
+        toast("РљР»СЋС‡ СЃРѕС…СЂР°РЅС‘РЅ", "success");
         await loadInstanceSettings();
       } catch (e) { toast(e.message, "error"); }
     });
     const delBtn = $("#orKeyDelete");
     if (delBtn) {
       delBtn.addEventListener("click", async () => {
-        if (!confirm("Удалить ключ OpenRouter? Нейрочат не сможет генерировать ответы.")) return;
+        if (!confirm("РЈРґР°Р»РёС‚СЊ РєР»СЋС‡ OpenRouter? РќРµР№СЂРѕС‡Р°С‚ РЅРµ СЃРјРѕР¶РµС‚ РіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ РѕС‚РІРµС‚С‹.")) return;
         try {
           await api("/business/instance/openrouter-key", { method: "DELETE" });
-          toast("Ключ удалён", "success");
+          toast("РљР»СЋС‡ СѓРґР°Р»С‘РЅ", "success");
           await loadInstanceSettings();
         } catch (e) { toast(e.message, "error"); }
       });
@@ -3173,24 +3189,24 @@ async function loadInstanceSettings() {
 /* ----------------------------- Groups view ----------------------------- */
 
 async function renderGroups(groupIdStr) {
-  setHeader("Группы аккаунтов", "Объединение userbot-аккаунтов в пулы для рассылок");
+  setHeader("Р“СЂСѓРїРїС‹ Р°РєРєР°СѓРЅС‚РѕРІ", "РћР±СЉРµРґРёРЅРµРЅРёРµ userbot-Р°РєРєР°СѓРЅС‚РѕРІ РІ РїСѓР»С‹ РґР»СЏ СЂР°СЃСЃС‹Р»РѕРє");
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full grid grid-cols-1 lg:grid-cols-3 gap-4">
       <div class="card lg:col-span-1">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="font-semibold">Группы</h3>
-          <button id="grpRefresh" class="text-xs text-slate-400 hover:text-slate-200">⟳</button>
+          <h3 class="font-semibold">Р“СЂСѓРїРїС‹</h3>
+          <button id="grpRefresh" class="text-xs text-slate-400 hover:text-slate-200">вџі</button>
         </div>
         <form id="grpCreateForm" class="flex gap-2 mb-4">
-          <input name="name" placeholder="Название (например, USA)"
+          <input name="name" placeholder="РќР°Р·РІР°РЅРёРµ (РЅР°РїСЂРёРјРµСЂ, USA)"
                  class="flex-1 bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 text-sm" />
-          <button type="submit" class="px-3 py-2 rounded-md bg-accent-600 hover:bg-accent-500 text-white text-sm">+ Создать</button>
+          <button type="submit" class="px-3 py-2 rounded-md bg-accent-600 hover:bg-accent-500 text-white text-sm">+ РЎРѕР·РґР°С‚СЊ</button>
         </form>
-        <div id="grpList" class="space-y-1 text-sm">Загрузка…</div>
+        <div id="grpList" class="space-y-1 text-sm">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>
       </div>
       <div class="card lg:col-span-2">
-        <div id="grpDetail" class="text-slate-500 text-sm">Выберите группу слева, чтобы изменить состав.</div>
+        <div id="grpDetail" class="text-slate-500 text-sm">Р’С‹Р±РµСЂРёС‚Рµ РіСЂСѓРїРїСѓ СЃР»РµРІР°, С‡С‚РѕР±С‹ РёР·РјРµРЅРёС‚СЊ СЃРѕСЃС‚Р°РІ.</div>
       </div>
     </div>
   `;
@@ -3202,7 +3218,7 @@ async function renderGroups(groupIdStr) {
     if (!name) return;
     try {
       const g = await api("/business/groups", { method: "POST", body: { name } });
-      toast(`Группа «${g.name}» создана`, "success");
+      toast(`Р“СЂСѓРїРїР° В«${g.name}В» СЃРѕР·РґР°РЅР°`, "success");
       ev.currentTarget.reset();
       window.location.hash = `#/groups/${g.id}`;
     } catch (e) { toast(e.message, "error"); }
@@ -3216,7 +3232,7 @@ async function loadGroupsList(activeId = null) {
   try {
     const groups = await api("/business/groups");
     if (!groups.length) {
-      list.innerHTML = `<div class="text-slate-500 text-xs">Групп ещё нет.</div>`;
+      list.innerHTML = `<div class="text-slate-500 text-xs">Р“СЂСѓРїРї РµС‰С‘ РЅРµС‚.</div>`;
     } else {
       list.innerHTML = groups.map(g => `
         <a href="#/groups/${g.id}" data-gid="${g.id}"
@@ -3232,7 +3248,7 @@ async function loadGroupsList(activeId = null) {
       await loadGroupDetail(activeId);
     } else {
       const det = $("#grpDetail");
-      if (det) det.innerHTML = `<div class="text-slate-500 text-sm">Выберите группу слева, чтобы изменить состав.</div>`;
+      if (det) det.innerHTML = `<div class="text-slate-500 text-sm">Р’С‹Р±РµСЂРёС‚Рµ РіСЂСѓРїРїСѓ СЃР»РµРІР°, С‡С‚РѕР±С‹ РёР·РјРµРЅРёС‚СЊ СЃРѕСЃС‚Р°РІ.</div>`;
     }
   } catch (e) {
     list.innerHTML = `<div class="text-rose-400 text-sm">${escapeHTML(e.message)}</div>`;
@@ -3242,7 +3258,7 @@ async function loadGroupsList(activeId = null) {
 async function loadGroupDetail(groupId) {
   const det = $("#grpDetail");
   if (!det) return;
-  det.innerHTML = `<div class="text-slate-500 text-sm">Загрузка…</div>`;
+  det.innerHTML = `<div class="text-slate-500 text-sm">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>`;
   try {
     const [groups, members, allAccounts] = await Promise.all([
       api("/business/groups"),
@@ -3251,7 +3267,7 @@ async function loadGroupDetail(groupId) {
     ]);
     const g = groups.find(x => x.id === groupId);
     if (!g) {
-      det.innerHTML = `<div class="text-rose-400 text-sm">Группа не найдена.</div>`;
+      det.innerHTML = `<div class="text-rose-400 text-sm">Р“СЂСѓРїРїР° РЅРµ РЅР°Р№РґРµРЅР°.</div>`;
       return;
     }
     const memberIds = new Set(members.map(m => m.id));
@@ -3267,33 +3283,33 @@ async function loadGroupDetail(groupId) {
       <div class="flex items-center justify-between mb-4">
         <div>
           <h3 class="font-semibold text-white">${escapeHTML(g.name)}</h3>
-          <p class="text-xs text-slate-500">id=${g.id} · аккаунтов: ${g.accounts_count}</p>
+          <p class="text-xs text-slate-500">id=${g.id} В· Р°РєРєР°СѓРЅС‚РѕРІ: ${g.accounts_count}</p>
         </div>
         <div class="flex gap-2">
-          <button id="grpRenameBtn" class="px-3 py-1.5 rounded-md bg-ink-700 hover:bg-ink-600 text-sm">✎ Переименовать</button>
-          <button id="grpDeleteBtn" class="px-3 py-1.5 rounded-md bg-rose-700 hover:bg-rose-600 text-sm text-white">🗑 Удалить</button>
+          <button id="grpRenameBtn" class="px-3 py-1.5 rounded-md bg-ink-700 hover:bg-ink-600 text-sm">вњЋ РџРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ</button>
+          <button id="grpDeleteBtn" class="px-3 py-1.5 rounded-md bg-rose-700 hover:bg-rose-600 text-sm text-white">рџ—‘ РЈРґР°Р»РёС‚СЊ</button>
         </div>
       </div>
       <div class="mb-3 flex items-center justify-between">
-        <span class="text-sm text-slate-400">Аккаунты в группе:</span>
-        <button id="grpSaveBtn" class="px-3 py-1.5 rounded-md bg-accent-600 hover:bg-accent-500 text-sm text-white">💾 Сохранить состав</button>
+        <span class="text-sm text-slate-400">РђРєРєР°СѓРЅС‚С‹ РІ РіСЂСѓРїРїРµ:</span>
+        <button id="grpSaveBtn" class="px-3 py-1.5 rounded-md bg-accent-600 hover:bg-accent-500 text-sm text-white">рџ’ѕ РЎРѕС…СЂР°РЅРёС‚СЊ СЃРѕСЃС‚Р°РІ</button>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-1 max-h-[60vh] overflow-y-auto cb-scroll">${checkboxes}</div>
     `;
     $("#grpRenameBtn").addEventListener("click", async () => {
-      const name = prompt("Новое имя группы:", g.name);
+      const name = prompt("РќРѕРІРѕРµ РёРјСЏ РіСЂСѓРїРїС‹:", g.name);
       if (!name) return;
       try {
         await api(`/business/groups/${groupId}`, { method: "PATCH", body: { name } });
-        toast("Переименовано", "success");
+        toast("РџРµСЂРµРёРјРµРЅРѕРІР°РЅРѕ", "success");
         await loadGroupsList(groupId);
       } catch (e) { toast(e.message, "error"); }
     });
     $("#grpDeleteBtn").addEventListener("click", async () => {
-      if (!confirm(`Удалить группу «${g.name}»? Аккаунты в ней останутся, но потеряют привязку.`)) return;
+      if (!confirm(`РЈРґР°Р»РёС‚СЊ РіСЂСѓРїРїСѓ В«${g.name}В»? РђРєРєР°СѓРЅС‚С‹ РІ РЅРµР№ РѕСЃС‚Р°РЅСѓС‚СЃСЏ, РЅРѕ РїРѕС‚РµСЂСЏСЋС‚ РїСЂРёРІСЏР·РєСѓ.`)) return;
       try {
         await api(`/business/groups/${groupId}`, { method: "DELETE" });
-        toast("Удалено", "success");
+        toast("РЈРґР°Р»РµРЅРѕ", "success");
         window.location.hash = "#/groups";
       } catch (e) { toast(e.message, "error"); }
     });
@@ -3307,7 +3323,7 @@ async function loadGroupDetail(groupId) {
           method: "PUT",
           body: { account_ids: ids },
         });
-        toast("Состав группы обновлён", "success");
+        toast("РЎРѕСЃС‚Р°РІ РіСЂСѓРїРїС‹ РѕР±РЅРѕРІР»С‘РЅ", "success");
         await loadGroupsList(groupId);
       } catch (e) { toast(e.message, "error"); }
     });
@@ -3319,22 +3335,22 @@ async function loadGroupDetail(groupId) {
 /* ----------------------------- Proxies view ---------------------------- */
 
 async function renderProxies() {
-  setHeader("Прокси", "SOCKS5/HTTP — пулы соединений для аккаунтов");
+  setHeader("РџСЂРѕРєСЃРё", "SOCKS5/HTTP вЂ” РїСѓР»С‹ СЃРѕРµРґРёРЅРµРЅРёР№ РґР»СЏ Р°РєРєР°СѓРЅС‚РѕРІ");
   const root = $("#pageRoot");
   root.innerHTML = `
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
       <div class="card">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="font-semibold">Список прокси</h3>
+          <h3 class="font-semibold">РЎРїРёСЃРѕРє РїСЂРѕРєСЃРё</h3>
           <div class="flex gap-2">
-            <button id="prxRefresh" class="px-3 py-1.5 rounded-md bg-ink-700 hover:bg-ink-600 text-sm">⟳</button>
-            <button id="prxNewBtn" class="px-3 py-1.5 rounded-md bg-accent-600 hover:bg-accent-500 text-sm text-white">+ Добавить</button>
+            <button id="prxRefresh" class="px-3 py-1.5 rounded-md bg-ink-700 hover:bg-ink-600 text-sm">вџі</button>
+            <button id="prxNewBtn" class="px-3 py-1.5 rounded-md bg-accent-600 hover:bg-accent-500 text-sm text-white">+ Р”РѕР±Р°РІРёС‚СЊ</button>
           </div>
         </div>
-        <div id="prxTable" class="text-sm text-slate-400">Загрузка…</div>
+        <div id="prxTable" class="text-sm text-slate-400">Р—Р°РіСЂСѓР·РєР°вЂ¦</div>
       </div>
       <div id="prxFormCard" class="card hidden">
-        <h3 class="font-semibold mb-3" id="prxFormTitle">Новый прокси</h3>
+        <h3 class="font-semibold mb-3" id="prxFormTitle">РќРѕРІС‹Р№ РїСЂРѕРєСЃРё</h3>
         <div id="prxForm"></div>
       </div>
     </div>
@@ -3350,16 +3366,16 @@ async function loadProxiesTable() {
   try {
     const list = await api("/business/proxies");
     if (!list.length) {
-      tbl.innerHTML = `<div class="text-slate-500 text-xs">Прокси пока нет. Добавьте через «+ Добавить».</div>`;
+      tbl.innerHTML = `<div class="text-slate-500 text-xs">РџСЂРѕРєСЃРё РїРѕРєР° РЅРµС‚. Р”РѕР±Р°РІСЊС‚Рµ С‡РµСЂРµР· В«+ Р”РѕР±Р°РІРёС‚СЊВ».</div>`;
       return;
     }
     tbl.innerHTML = `
       <table class="cb-table">
         <thead>
           <tr>
-            <th>ID</th><th>Имя</th><th>Тип</th><th>Хост:Порт</th>
-            <th>Логин</th><th>Группа</th><th>Аккаунтов</th>
-            <th>Статус</th><th>Проверка</th><th></th>
+            <th>ID</th><th>РРјСЏ</th><th>РўРёРї</th><th>РҐРѕСЃС‚:РџРѕСЂС‚</th>
+            <th>Р›РѕРіРёРЅ</th><th>Р“СЂСѓРїРїР°</th><th>РђРєРєР°СѓРЅС‚РѕРІ</th>
+            <th>РЎС‚Р°С‚СѓСЃ</th><th>РџСЂРѕРІРµСЂРєР°</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -3369,8 +3385,8 @@ async function loadProxiesTable() {
               <td class="font-medium text-slate-100">${escapeHTML(p.name)}</td>
               <td><span class="pill pill-gray">${p.proxy_type}</span></td>
               <td class="text-slate-300 font-mono text-xs">${escapeHTML(p.host)}:${p.port}</td>
-              <td class="text-slate-400 text-xs">${escapeHTML(p.username || '—')}</td>
-              <td class="text-slate-400">${escapeHTML(p.group_name || '—')}</td>
+              <td class="text-slate-400 text-xs">${escapeHTML(p.username || 'вЂ”')}</td>
+              <td class="text-slate-400">${escapeHTML(p.group_name || 'вЂ”')}</td>
               <td class="text-right text-slate-300">${p.accounts_count}</td>
               <td>
                 ${p.is_active
@@ -3379,11 +3395,11 @@ async function loadProxiesTable() {
                       : `<span class="pill pill-red">fail</span>`)
                   : `<span class="pill pill-gray">off</span>`}
               </td>
-              <td class="text-xs text-slate-500">${p.last_checked ? fmtRelative(p.last_checked) : '—'}</td>
+              <td class="text-xs text-slate-500">${p.last_checked ? fmtRelative(p.last_checked) : 'вЂ”'}</td>
               <td class="text-right whitespace-nowrap">
-                <button data-act="test" class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs mr-1">Тест</button>
-                <button data-act="edit" class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs mr-1">✎</button>
-                <button data-act="delete" class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs text-white">🗑</button>
+                <button data-act="test" class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs mr-1">РўРµСЃС‚</button>
+                <button data-act="edit" class="px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 text-xs mr-1">вњЋ</button>
+                <button data-act="delete" class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs text-white">рџ—‘</button>
               </td>
             </tr>
           `).join("")}
@@ -3394,24 +3410,24 @@ async function loadProxiesTable() {
       const pid = Number(tr.dataset.pid);
       tr.querySelector('[data-act="test"]').addEventListener("click", async (ev) => {
         const btn = ev.currentTarget;
-        btn.disabled = true; btn.textContent = "…";
+        btn.disabled = true; btn.textContent = "вЂ¦";
         try {
           const r = await api(`/business/proxies/${pid}/test`, { method: "POST" });
-          toast(`#${pid} ${r.ok ? '✓' : '✗'} ${r.elapsed_ms}ms — ${r.detail || ''}`, r.ok ? "success" : "warning");
+          toast(`#${pid} ${r.ok ? 'вњ“' : 'вњ—'} ${r.elapsed_ms}ms вЂ” ${r.detail || ''}`, r.ok ? "success" : "warning");
           await loadProxiesTable();
         } catch (e) {
           toast(e.message, "error");
-          btn.disabled = false; btn.textContent = "Тест";
+          btn.disabled = false; btn.textContent = "РўРµСЃС‚";
         }
       });
       tr.querySelector('[data-act="edit"]').addEventListener("click", () => {
         openProxyForm(list.find(x => x.id === pid));
       });
       tr.querySelector('[data-act="delete"]').addEventListener("click", async () => {
-        if (!confirm(`Удалить прокси #${pid}? У аккаунтов, использовавших его, prox_id обнулится.`)) return;
+        if (!confirm(`РЈРґР°Р»РёС‚СЊ РїСЂРѕРєСЃРё #${pid}? РЈ Р°РєРєР°СѓРЅС‚РѕРІ, РёСЃРїРѕР»СЊР·РѕРІР°РІС€РёС… РµРіРѕ, prox_id РѕР±РЅСѓР»РёС‚СЃСЏ.`)) return;
         try {
           await api(`/business/proxies/${pid}`, { method: "DELETE" });
-          toast("Удалено", "success");
+          toast("РЈРґР°Р»РµРЅРѕ", "success");
           await loadProxiesTable();
         } catch (e) { toast(e.message, "error"); }
       });
@@ -3424,9 +3440,9 @@ async function loadProxiesTable() {
 async function openProxyForm(existing) {
   const wrap = $("#prxFormCard");
   const form = $("#prxForm");
-  $("#prxFormTitle").textContent = existing ? `Прокси #${existing.id}` : "Новый прокси";
+  $("#prxFormTitle").textContent = existing ? `РџСЂРѕРєСЃРё #${existing.id}` : "РќРѕРІС‹Р№ РїСЂРѕРєСЃРё";
   wrap.classList.remove("hidden");
-  let groupOptions = `<option value="0">— без группы —</option>`;
+  let groupOptions = `<option value="0">вЂ” Р±РµР· РіСЂСѓРїРїС‹ вЂ”</option>`;
   try {
     const groups = await api("/business/proxy-groups");
     groupOptions += (groups || []).map(g =>
@@ -3436,49 +3452,49 @@ async function openProxyForm(existing) {
   form.innerHTML = `
     <form id="prxFormInner" class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
       <label class="block">
-        <span class="text-slate-400 text-xs">Имя</span>
+        <span class="text-slate-400 text-xs">РРјСЏ</span>
         <input name="name" required value="${escapeHTML(existing?.name || "")}"
                class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
       </label>
       <label class="block">
-        <span class="text-slate-400 text-xs">Хост</span>
+        <span class="text-slate-400 text-xs">РҐРѕСЃС‚</span>
         <input name="host" required value="${escapeHTML(existing?.host || "")}"
                class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
       </label>
       <label class="block">
-        <span class="text-slate-400 text-xs">Порт</span>
+        <span class="text-slate-400 text-xs">РџРѕСЂС‚</span>
         <input name="port" type="number" min="1" max="65535" required value="${existing?.port || 1080}"
                class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
       </label>
       <label class="block">
-        <span class="text-slate-400 text-xs">Логин</span>
+        <span class="text-slate-400 text-xs">Р›РѕРіРёРЅ</span>
         <input name="username" value="${escapeHTML(existing?.username || "")}"
                class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
       </label>
       <label class="block">
-        <span class="text-slate-400 text-xs">Пароль</span>
-        <input name="password" placeholder="${existing ? "(оставить как есть)" : ""}"
+        <span class="text-slate-400 text-xs">РџР°СЂРѕР»СЊ</span>
+        <input name="password" placeholder="${existing ? "(РѕСЃС‚Р°РІРёС‚СЊ РєР°Рє РµСЃС‚СЊ)" : ""}"
                class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
       </label>
       <label class="block">
-        <span class="text-slate-400 text-xs">Тип</span>
+        <span class="text-slate-400 text-xs">РўРёРї</span>
         <select name="proxy_type" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
           <option value="socks5" ${(!existing || existing.proxy_type === "socks5") ? "selected" : ""}>socks5</option>
           <option value="http" ${existing && existing.proxy_type === "http" ? "selected" : ""}>http</option>
         </select>
       </label>
       <label class="block">
-        <span class="text-slate-400 text-xs">Группа</span>
+        <span class="text-slate-400 text-xs">Р“СЂСѓРїРїР°</span>
         <select name="group_id" class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">${groupOptions}</select>
       </label>
       <label class="flex items-center gap-2 mt-6 text-slate-300">
         <input name="is_active" type="checkbox" ${(!existing || existing.is_active) ? "checked" : ""}
                class="rounded border-ink-600 bg-ink-800" />
-        Активен
+        РђРєС‚РёРІРµРЅ
       </label>
       <div class="md:col-span-3 flex items-center gap-3 mt-2">
-        <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">${existing ? "Сохранить" : "Создать"}</button>
-        <button type="button" id="prxFormCancel" class="px-3 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 text-slate-200 text-sm">Отмена</button>
+        <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">${existing ? "РЎРѕС…СЂР°РЅРёС‚СЊ" : "РЎРѕР·РґР°С‚СЊ"}</button>
+        <button type="button" id="prxFormCancel" class="px-3 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 text-slate-200 text-sm">РћС‚РјРµРЅР°</button>
         <span id="prxFormMsg" class="text-xs text-slate-400"></span>
       </div>
     </form>
@@ -3502,14 +3518,14 @@ async function openProxyForm(existing) {
     const pwd = (fd.get("password") || "").toString();
     if (pwd) body.password = pwd;
     const out = $("#prxFormMsg");
-    out.textContent = "…";
+    out.textContent = "вЂ¦";
     try {
       if (existing) {
         await api(`/business/proxies/${existing.id}`, { method: "PATCH", body });
-        toast("Сохранено", "success");
+        toast("РЎРѕС…СЂР°РЅРµРЅРѕ", "success");
       } else {
         await api(`/business/proxies`, { method: "POST", body });
-        toast("Создано", "success");
+        toast("РЎРѕР·РґР°РЅРѕ", "success");
       }
       wrap.classList.add("hidden");
       form.innerHTML = "";
@@ -3529,11 +3545,184 @@ function setHeader(title, sub = "") {
 }
 
 function renderNotFound() {
-  setHeader("Не найдено", "Раздел не существует");
-  $("#pageRoot").innerHTML = `<div class="p-6 text-slate-400">Нет такого раздела.</div>`;
+  setHeader("РќРµ РЅР°Р№РґРµРЅРѕ", "Р Р°Р·РґРµР» РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚");
+  $("#pageRoot").innerHTML = `<div class="p-6 text-slate-400">РќРµС‚ С‚Р°РєРѕРіРѕ СЂР°Р·РґРµР»Р°.</div>`;
 }
 
 /* ---------------------------- Bootstrap -------------------------------- */
+
+
+/* ======================= Command Palette (Ctrl+K) ======================= */
+
+const CP_COMMANDS = [
+  { label: "Дашборд", section: "Навигация", ico: "📊", action: () => { window.location.hash = "#/dashboard"; } },
+  { label: "Аккаунты", section: "Навигация", ico: "👤", action: () => { window.location.hash = "#/accounts"; } },
+  { label: "Диалоги", section: "Навигация", ico: "💬", action: () => { window.location.hash = "#/dialogs"; } },
+  { label: "Очередь", section: "Навигация", ico: "📨", action: () => { window.location.hash = "#/queue"; } },
+  { label: "Парсинг", section: "Навигация", ico: "🔎", action: () => { window.location.hash = "#/parsing/channels"; } },
+  { label: "Рассылки", section: "Навигация", ico: "📢", action: () => { window.location.hash = "#/mailings"; } },
+  { label: "Клиенты", section: "Навигация", ico: "🧑‍🤝‍🧑", action: () => { window.location.hash = "#/clients"; } },
+  { label: "Группы", section: "Навигация", ico: "📁", action: () => { window.location.hash = "#/groups"; } },
+  { label: "Прокси", section: "Навигация", ico: "🌐", action: () => { window.location.hash = "#/proxies"; } },
+  { label: "Архив", section: "Навигация", ico: "🗃", action: () => { window.location.hash = "#/archive"; } },
+  { label: "Логи", section: "Навигация", ico: "📄", action: () => { window.location.hash = "#/logs"; } },
+  { label: "Настройки", section: "Навигация", ico: "⚙️", action: () => { window.location.hash = "#/settings"; } },
+  { label: "Импорт TData ZIP", section: "Действия", ico: "📦", action: () => { window.location.hash = "#/accounts"; setTimeout(() => document.getElementById("tdataDropZone")?.scrollIntoView({ behavior: "smooth", block: "center" }), 300); } },
+  { label: "Новый аккаунт", section: "Действия", ico: "➕", action: () => { window.location.hash = "#/accounts"; setTimeout(() => document.querySelector("#accountCreateForm input[name=phone]")?.focus(), 300); } },
+  { label: "Новая рассылка", section: "Действия", ico: "✉️", action: () => { window.location.hash = "#/mailings"; setTimeout(() => document.querySelector("#mailingCreateForm input[name=name]")?.focus(), 300); } },
+  { label: "Обновить данные", section: "Действия", ico: "⟳", action: () => navigate(window.location.hash) },
+];
+
+const cpState = { open: false, selected: 0, filtered: [] };
+
+function cpOpen() {
+  if (!state.token) return;
+  cpState.open = true;
+  cpState.selected = 0;
+  $("#cpBackdrop").classList.add("open");
+  $("#cpInput").value = "";
+  cpRender("");
+  $("#cpInput").focus();
+}
+
+function cpClose() {
+  cpState.open = false;
+  $("#cpBackdrop").classList.remove("open");
+  $("#cpInput").blur();
+}
+
+function cpToggle() { cpState.open ? cpClose() : cpOpen(); }
+
+function cpScore(cmd, q) {
+  if (!q) return 1;
+  const label = cmd.label.toLowerCase();
+  const section = cmd.section.toLowerCase();
+  if (label.includes(q)) return 100 - label.indexOf(q);
+  if (section.includes(q)) return 50;
+  return 0;
+}
+
+function cpRender(query) {
+  const q = (query || "").trim().toLowerCase();
+  cpState.filtered = CP_COMMANDS
+    .map(cmd => ({ cmd, score: cpScore(cmd, q) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(x => x.cmd)
+    .slice(0, 50);
+
+  if (cpState.selected >= cpState.filtered.length) cpState.selected = 0;
+
+  const box = $("#cpResults");
+  if (!cpState.filtered.length) {
+    box.innerHTML = '<div class="cp-empty">Ничего не найдено</div>';
+    return;
+  }
+  box.innerHTML = cpState.filtered.map((cmd, i) => `
+    <div class="cp-item${i === cpState.selected ? " active" : ""}" data-idx="${i}" role="option" aria-selected="${i === cpState.selected}">
+      <span class="cp-ico">${cmd.ico}</span>
+      <span class="cp-label">${escapeHTML(cmd.label)}</span>
+      <span class="cp-section">${escapeHTML(cmd.section)}</span>
+    </div>
+  `).join("");
+
+  $$("#cpResults .cp-item").forEach(el => {
+    el.addEventListener("click", () => cpExecute(Number(el.dataset.idx)));
+    el.addEventListener("mousemove", () => { cpState.selected = Number(el.dataset.idx); cpHighlight(); });
+  });
+}
+
+function cpHighlight() {
+  $$("#cpResults .cp-item").forEach(el => {
+    const active = Number(el.dataset.idx) === cpState.selected;
+    el.classList.toggle("active", active);
+    el.setAttribute("aria-selected", String(active));
+  });
+}
+
+function cpMove(delta) {
+  if (!cpState.filtered.length) return;
+  cpState.selected = (cpState.selected + delta + cpState.filtered.length) % cpState.filtered.length;
+  cpHighlight();
+  $$("#cpResults .cp-item")[cpState.selected]?.scrollIntoView({ block: "nearest" });
+}
+
+function cpExecute(idx) {
+  const cmd = cpState.filtered[idx];
+  if (!cmd) return;
+  cpClose();
+  try { cmd.action(); } catch (e) { toast("Команда недоступна: " + e.message, "error"); }
+}
+
+function cpHandleKeys(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    cpToggle();
+    return;
+  }
+  if (!cpState.open) return;
+  switch (e.key) {
+    case "Escape": e.preventDefault(); cpClose(); break;
+    case "ArrowDown": e.preventDefault(); cpMove(1); break;
+    case "ArrowUp": e.preventDefault(); cpMove(-1); break;
+    case "Enter": e.preventDefault(); cpExecute(cpState.selected); break;
+  }
+}
+
+document.addEventListener("keydown", cpHandleKeys);
+$("#cpBackdrop")?.addEventListener("click", (e) => { if (e.target.id === "cpBackdrop") cpClose(); });
+$("#cpInput")?.addEventListener("input", (e) => { cpState.selected = 0; cpRender(e.currentTarget.value); });
+
+/* ======================= TData ZIP Import ======================= */
+
+async function uploadTdataZip(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith(".zip")) {
+    toast("Нужен ZIP-архив с TData", "error");
+    return;
+  }
+  const btn = $("#tdataUploadBtn");
+  const msg = $("#tdataMsg");
+  if (btn) { btn.disabled = true; btn.textContent = "Импорт…"; }
+  if (msg) { msg.textContent = "Конвертация выполняется, это может занять время…"; msg.className = "text-xs text-slate-400"; }
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const token = state.token;
+    const res = await fetch("/business/tdata/import", {
+      method: "POST",
+      headers: token ? { Authorization: "Bearer " + token } : {},
+      body: fd,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Ошибка импорта");
+    const line = `Готово: ${data.converted}/${data.total} сконвертировано` + (data.failed ? `, ошибок: ${data.failed}` : "");
+    if (msg) { msg.textContent = line; msg.className = "text-xs " + (data.failed ? "text-amber-300" : "text-emerald-300"); }
+    toast(line, data.failed ? "warn" : "success", 5000);
+    await refreshAccountsTable();
+  } catch (e) {
+    if (msg) { msg.textContent = e.message; msg.className = "text-xs text-rose-400"; }
+    toast("Импорт TData: " + e.message, "error", 5000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Загрузить ZIP"; }
+    const inp = $("#tdataFileInput");
+    if (inp) inp.value = "";
+  }
+}
+
+function bindTdataZone() {
+  const zone = $("#tdataDropZone");
+  const input = $("#tdataFileInput");
+  const btn = $("#tdataUploadBtn");
+  if (!zone || !input || !btn) return;
+
+  zone.addEventListener("click", () => input.click());
+  ["dragenter", "dragover"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add("dragover"); }));
+  ["dragleave", "drop"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove("dragover"); }));
+  zone.addEventListener("drop", e => { const f = e.dataTransfer?.files?.[0]; if (f) uploadTdataZip(f); });
+  input.addEventListener("change", () => { const f = input.files?.[0]; if (f) uploadTdataZip(f); });
+  btn.addEventListener("click", () => input.click());
+}
 
 function bootstrap() {
   try {
@@ -3543,6 +3732,7 @@ function bootstrap() {
     $("#loginForm").addEventListener("submit", loginFlow);
     $("#logoutBtn").addEventListener("click", () => handleLogout(false));
     $("#globalRefreshBtn").addEventListener("click", () => navigate(window.location.hash));
+    bindTdataZone();
 
     if (state.token) enterApp();
     else handleLogout(true);
@@ -3550,7 +3740,7 @@ function bootstrap() {
     const box = document.getElementById("bootError");
     if (box) {
       box.style.display = "block";
-      box.textContent = "Ошибка инициализации: " + (err && err.message ? err.message : String(err));
+      box.textContent = "РћС€РёР±РєР° РёРЅРёС†РёР°Р»РёР·Р°С†РёРё: " + (err && err.message ? err.message : String(err));
     }
     console.error("[bootstrap]", err);
   }

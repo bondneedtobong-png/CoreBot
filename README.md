@@ -1,8 +1,8 @@
 # CoreBot
 
-Управление сетью userbot-аккаунтов Telegram: рассылки, нейрочат, ручные ответы и аналитика. Управляющий бот в Telegram + веб-панель для оператора. Без облаков и сторонних SaaS — всё крутится в одном venv на одном VPS.
+Управление сетью userbot-аккаунтов Telegram: массовые рассылки, нейрочат, парсинг аудитории, ручные ответы и аналитика — через Telegram-бота владельца и веб-панель оператора. Self-hosted: всё работает в одном Python-окружении на одном VPS, без облаков и сторонних SaaS.
 
-> Status: Active development · Python 3.11+ · SQLite · self-hosted
+> Статус: активная разработка · Python 3.11+ · SQLite · self-hosted (systemd)
 
 ---
 
@@ -10,140 +10,102 @@
 
 CoreBot — двухкомпонентная система:
 
-1. **Control Bot** (aiogram 3) — Telegram-бот владельца. Через него управляются аккаунты, прокси, клиенты, рассылки и нейрочат.
+1. **Control Bot** (aiogram 3) — Telegram-бот владельца. Через него управляются аккаунты, прокси, клиенты, парсинг, рассылки и нейрочат.
 2. **Worker accounts** (Telethon) — userbot-аккаунты, которые физически шлют сообщения, ведут диалоги и отвечают LLM-ответами.
 
-Поверх этого — **Control Plane** (FastAPI + SPA) с реал-тайм-просмотром диалогов, ручными ответами, CRUD-редакторами рассылок/аккаунтов/прокси и встроенной телеметрией.
+Поверх этого — **Control Plane** (FastAPI + SPA) с real-time-просмотром диалогов, ручными ответами, CRUD-редакторами рассылок, аккаунтов, клиентов, прокси и групп, встроенной телеметрией и парсингом.
+
+---
+
+## Стек
+
+| Слой | Стек |
+|------|------|
+| Язык / рантайм | Python 3.11+ (проверено на 3.12–3.14) |
+| Control Bot | aiogram >=3.3, aiohttp |
+| Workers | Telethon >=1.34, tgconvertor[tddata], PyQt5 |
+| LLM | OpenRouter (любая совместимая модель; по умолчанию `openai/gpt-oss-120b:free`) |
+| Web backend | FastAPI >=0.115, uvicorn, Pydantic v2, PyJWT, passlib[bcrypt], cryptography |
+| Web frontend | Vanilla JS (hash-роутер), Tailwind CDN, Alpine.js, EventSource (SSE) |
+| ORM | SQLAlchemy >=2.0 |
+| БД | SQLite (aiosqlite), WAL-режим |
+| Логирование | loguru |
+| Прокси | aiohttp-socks |
+| Тесты | pytest >=8 |
+
+Полный список версий — в [`requirements.txt`](requirements.txt) (Python 3.11+).
 
 ---
 
 ## Возможности
 
 ### Аккаунты
-
 - Импорт через Tdata-ZIP с автоматической конвертацией в `.session`.
-- Карточка аккаунта: статус, прокси, аватарки, 2FA, теги, дневной лимит, warmup-профиль.
+- Карточка аккаунта: статус, proxy, аватарки, 2FA, теги, дневной лимит, warmup-профиль.
 - Редактирование профиля: имя, bio, username, фото (массово или поштучно).
 - Группы аккаунтов (many-to-many) с массовым переназначением прокси и редактированием профилей.
-- Per-account режим работы: **AI_ACTIVE** (нейрочат) / **MANUAL** (ручные ответы из веба).
+- Per-account режим: **AI_ACTIVE** (нейрочат) / **MANUAL** (ручные ответы из веба).
 - Авто-проверка прокси и `@SpamBot`-блока, FloodWait-tracking.
+- Безопасная загрузка: аккаунты с мёртвым/отсутствующим прокси не подключаются (защита от банов).
+- Массовая чистка флота (прокси / аккаунты) с подтверждением.
 
 ### Прокси
-
 - SOCKS5 / HTTP через UI бота или веб-панель.
 - Группы прокси (для назначения пулом).
 - Карточка прокси: маскированный пароль, Exit IP, статус, время последней проверки.
 - Быстрая TCP-проверка из веба (без Telegram-handshake).
 
-### Клиенты и классовая система
+### Парсинг аудитории
+- Сбор каналов, групп и пользователей из Telegram по запросам (`workers/parser/`).
+- Пул аккаунтов для парсинга, handлинг FloodWait, фильтры и расширение по глубине.
 
+### Клиенты и классовая система
 - Импорт `@username`-листов из TXT с дедупликацией и отчётом.
-- **Классы-счётчики** (`new`, `pulse`, `alive`, `accept`, `decline`, `bl`, `stop`, …) — монотонные счётчики, в которые пишут события из рассылок и нейрочата.
-- **Pulse**: каждое входящее в нейро-контексте, после первого касания рассылки.
-- **Alive**: окно 60 минут с защитой от двойного учёта при рестартах (таблица `client_alive_windows`).
-- Гибкий audience filter рассылки по классам (включить/исключить, AND/OR).
-- Поиск в двух режимах: простой конструктор и текстовый DSL (`{class{subclass}}`, `>=`, `and`, `or`, `not`).
+- **Классы-счётчики** (`new`, `pulse`, `alive`, `accept`, `decline`, `bl`, `stop`, …) — монотонные счётчики, в которые пишут события рассылок и нейрочата.
+- **Pulse**: каждое входящее в нейро-контексте после первого касания рассылки.
+- **Alive**: окно 60 минут с защитой от двойного учёта при рестартах.
+- Гибкий audience filter по классам (включить/исключить, AND/OR) + простой конструктор и текстовый DSL.
 
 ### Рассылки
-
-- Шаблоны сообщений с плейсхолдерами: `{firstname}`, `{username}`, `{fullname}`, `{date}`, `{time}`, `{datetime}`, `{random4}`, `{link}`.
-- Несколько вариантов сообщения (по одному в строке) — рандомизация на стороне отправки.
-- Тонкие настройки: задержки между сообщениями/аккаунтами/пакетами, дневной лимит, размер пакета, auto-stop через N часов.
-- Аудитория: `classes` (по фильтру), `test` (TXT-список без подмены), `all`.
-- Ротация по `messages_per_batch` — нагрузка размазывается по всем активным аккаунтам.
-- Управление через очередь `bot_commands` (UI-команды `start/pause/stop` ставятся в очередь, исполнение остаётся внутри процесса бота).
+- Шаблоны с плейсхолдерами: `{firstname}`, `{username}`, `{fullname}`, `{date}`, `{time}`, `{datetime}`, `{random4}`, `{link}`.
+- Несколько вариантов сообщения на одну кампанию — рандомизация на стороне отправки.
+- Тонкие настройки: задержки, дневной лимит, размер пакета, auto-stop через N часов.
+- Аудитория: по классам / тест-список TXT / все.
+- Ротация нагрузки по всем активным аккаунтам (`messages_per_batch`).
+- Управление через очередь `bot_commands` (start/pause/stop из UI).
 - Запрет редактирования RUNNING-кампании на уровне API и UI.
 
 ### Нейрочат
-
-- Отдельный сервисный слой `services/neurochat/*` (manager, dialog, llm, post-actions, engagement).
-- LLM через **OpenRouter** (`openai/gpt-oss-120b:free` по умолчанию, любая совместимая модель).
-- Глобальный toggle (БД + `.env: NEUROCHAT_ENABLED`) и per-mailing toggle, с приоритетом `global → mailing local → account/filter`.
-- System-промпт: глобальный default из `.env` или per-mailing файл (`data/neuro/mailings/{id}/system.txt`), редактор в UI с кнопкой «Сбросить к DEFAULT».
-- Sampling overrides через JSON в карточке рассылки (temperature/top_p/top_k/max_tokens/…).
-- LLM-команды в ответе модели: `[ACCEPT]`, `[DECLINE]`, `[STOP]`, `[SEND_LINK]`, `[HATER]` — каждая увеличивает соответствующий класс и пишет событие в `interactions`.
-- Зашифрованное хранение `OPENROUTER_API_KEY` в БД (Fernet через `OPENROUTER_KEY_ENCRYPTION_KEY`).
-- Подробное логирование причин deny: `global_disabled`, `mailing_local_disabled`, `worker_disconnected`, `client_class_bl`, `client_class_stop`.
+- Сервисный слой `services/neurochat/*` (manager, dialog, llm, post-actions, engagement).
+- LLM через **OpenRouter**; модель и sampling настраиваются.
+- Глобальный toggle (БД + `.env`) и per-mailing toggle с иерархией приоритетов.
+- System-промпт: глобальный default из `.env` или per-mailing файл, редактор в UI.
+- LLM-команды в ответе модели: `[ACCEPT]`, `[DECLINE]`, `[STOP]`, `[SEND_LINK]`, `[HATER]`.
+- Зашифрованное хранение `OPENROUTER_API_KEY` (Fernet).
+- Логирование причин deny: `global_disabled`, `mailing_local_disabled`, `worker_disconnected`, `client_class_bl`, `client_class_stop`.
 
 ### Веб-панель (Control Plane)
-
-FastAPI-бэкенд + SPA на ванильном JS + Tailwind CDN (без сборщика, без зависимостей по npm).
-
-- **Дашборд**: бизнес-метрики (аккаунты по статусам, диалоги, очередь ручных, входящие/исходящие/ручные за 24 ч, активные рассылки с прогрессом), 24-часовая stacked-bar тайм-серия, распределение клиентских классов, топ-аккаунты, last-20 сообщений.
-- **Диалоги**: live-просмотр через SSE. Список аккаунтов слева отсортирован «как в мессенджере» (по последнему сообщению), с поиском по `list_label` и второй строкой — Telegram-имя/`@username`. Лента переписки справа, ручная отправка прямо из UI.
-- **Аккаунты**: таблица + редактор (имя, bio, теги, прокси, группы, лимит, warmup, статус/membership), безопасное удаление с каскадной очисткой зависимых таблиц.
-- **Группы / Прокси**: CRUD + назначение, TCP-тест прокси.
-- **Рассылки**: список + детальный редактор. Параметры рассылки (текст, варианты, задержки, аудитория) и нейрочат (toggle, модель, sampling, system-промпт) — в **двух разных карточках**.
-- **Клиенты**: фильтр по `q/class_key/status`, история взаимодействий, ручное изменение классов.
-- **Архив и Cleanup**: безопасное массовое удаление переписок (`mode=archive` пишет в `*_archive` таблицы, `mode=hard` удаляет; всё батчами, с `dry_run`). Восстановление из архива.
-- **Логи**: фильтр по уровню, постраничный просмотр.
-- **Настройки**: глобальный toggle нейрочата, базовый UTC-сдвиг, ключ OpenRouter (с шифрованием и маской), смена пароля админа.
-- **Live**: SSE `/business/stream?token=...` стримит новые сообщения в открытый диалог.
+FastAPI-бэкенд + SPA (vanilla JS, Tailwind CDN, без npm-сборки).
+- **Дашборд**: бизнес-метрики, 24-часовая stacked-bar тайм-серия, распределение классов, топ-аккаунты, последние сообщения.
+- **Диалоги**: live-просмотр через SSE, сортировка «как в мессенджере», поиск, ручная отправка из UI.
+- **Аккаунты / Группы / Прокси**: CRUD + назначение, TCP-тест.
+- **Рассылки**: детальный редактор, параметры рассылки и нейрочата — в отдельных карточках.
+- **Клиенты**: фильтры, история взаимодействий, ручное изменение классов.
+- **Архив и Cleanup**: мягкое (`archive`) и жёсткое (`hard`) удаление батчами, восстановление из архива.
+- **Настройки**: toggle нейрочата, UTC-сдвиг, ключ OpenRouter (с шифрованием), смена пароля.
+- **Live**: SSE-стрим новых сообщений в открытый диалог.
+- Роли: `super_admin` / `tenant_viewer` (read-only), JWT-авторизация.
 
 ### Ручные ответы из веба (без второй сессии)
-
-- Отдельная таблица `outbound_queue` + `OutboundConsumer` (worker внутри процесса бота), который шлёт через **тот же Telethon-клиент**, что и нейрочат — Telegram не видит «второй сессии».
-- Экспоненциальный бэк-офф (2–32 c +jitter) до 5 попыток на transient-ошибки.
-- Permanent-ошибки (`USER_DEACTIVATED`, `PEER_ID_INVALID`) — мгновенный `failed`.
-- После успешной отправки сообщение пишется в `neuro_chat_messages` (`role='assistant'`), поэтому при возврате аккаунта в AI_ACTIVE нейрочат продолжает диалог без потери контекста.
-- Ручные сообщения видны в ленте диалога с status-pill (`pending` / `sending` / `failed` / `cancelled`) и кнопками «Повторить» / «Отменить».
+- Таблица `outbound_queue` + `OutboundConsumer` внутри процесса бота — отправка через ту же Telethon-сессию, что и нейрочат.
+- Экспоненциальный бэк-офф (2–32 с + jitter), до 5 попыток; permanent-ошибки — мгновенный `failed`.
+- Контекст диалога сохраняется: ручное сообщение пишется в `neuro_chat_messages` как `assistant`.
 
 ### Безопасность и эксплуатация
-
 - Доступ к Control Bot — только `OWNER_ID` из `.env`.
-- Веб-панель слушает только `127.0.0.1:8081`. Доступ через SSH-туннель или nginx + Let's Encrypt.
-- JWT для веба, агентский токен для ingest, Fernet-шифрование для ключа OpenRouter.
-- Авто-миграции SQLite при старте (`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE … ADD COLUMN`). Никаких ручных миграций.
-- Graceful shutdown: остановка активной рассылки и `disconnect_all()` всех воркеров перед выходом.
-- WAL-режим SQLite — параллельное чтение/запись из бота и панели в один файл.
-
----
-
-## Технологии
-
-| Слой | Стек |
-|------|------|
-| Control Bot | aiogram 3.x, aiohttp |
-| Workers | Telethon, tgconvertor |
-| LLM | OpenRouter (любая модель) |
-| Web backend | FastAPI, uvicorn, Pydantic v2, PyJWT, passlib[bcrypt], cryptography |
-| Web frontend | Vanilla JS (hash router), Tailwind CDN, Alpine.js, EventSource (SSE) |
-| ORM | SQLAlchemy 2.x (async + sync) |
-| Storage | SQLite (aiosqlite) в WAL-режиме |
-| Логирование | loguru |
-| Прокси | aiohttp-socks |
-
-Минимальный Python — **3.11**, проверено также на 3.12–3.14.
-
----
-
-## Архитектура (упрощённо)
-
-```
-        Telegram
-           │
-   ┌───────┴───────┐
-   ▼               ▼
-Control Bot   Worker Accounts (Telethon)
-(aiogram 3)        │
-   │   ▲           │
-   ▼   │           ▼
-   └─► SQLite ◄──── OutboundConsumer / NeuroIncoming
-       (data/corebot.db, WAL)
-            ▲
-            │  sync engine (BOT_DATABASE_URL)
-            ▼
-       Control Plane
-       (FastAPI + SPA)
-            │
-       ssh -L 8081 ──► Browser
-```
-
-- Бот и панель работают в **разных systemd-юнитах** (`corebot.service` / `corebot-cp.service`), оба внутри одного venv.
-- БД бота (`corebot.db`) и БД панели (`control_plane.db`) — разные файлы.
-- Бот не дёргает Telegram из панели напрямую: всё проходит через `outbound_queue` и `bot_commands` — единая точка управления остаётся внутри процесса бота.
-
-Подробности — в `docs/ARCHITECTURE.md` и `docs/WEBPANEL_DEPLOY.md`.
+- Веб-панель слушает только `127.0.0.1:8081`; доступ через SSH-туннель или nginx + HTTPS.
+- JWT для веба, агентский токен для ingest, Fernet для ключа OpenRouter.
+- Авто-миграции SQLite при старте. Graceful shutdown воркеров. WAL-режим для параллельного чтения/записи.
 
 ---
 
@@ -154,53 +116,75 @@ CoreBot/
 ├── main.py                        Точка входа: логгер, конфиг, БД, запуск бота + воркеров
 ├── requirements.txt
 ├── .env.example
-│
 ├── bot/                           Control Bot (aiogram)
 │   ├── handlers/                  /start, аккаунты, прокси, клиенты, рассылка, нейрочат, БД
 │   ├── keyboards/                 inline-клавиатуры
 │   └── main.py                    Dispatcher, роутеры, сессия
-│
 ├── workers/                       Telethon-воркеры
 │   ├── manager.py                 Worker + WorkerManager (пул, рассылка, проверки)
 │   ├── neuro_incoming.py          thin-adapter входящих → services/neurochat/
 │   ├── outbound_consumer.py       Очередь ручных отправок из веба
-│   ├── bot_command_consumer.py    Очередь команд из веба (start/pause/stop рассылки)
-│   └── session_converter.py       Tdata → .session
-│
+│   ├── bot_command_consumer.py    Очередь команд из веба (start/pause/stop)
+│   ├── parser_worker.py           Поллит parsing_tasks, запускает парсинг
+│   ├── parser/                    Модуль парсинга (каналы/группы/пользователи)
+│   ├── session_converter.py       Tdata → .session
+│   └── warmup.py                  Тёплый пул аккаунтов при старте
 ├── services/                      Бизнес-логика
 │   ├── neurochat/                 manager, dialog, llm, post_actions, engagement, …
-│   └── database/                  CRM-сервисы (incrementы, accept-транскрипты)
-│
+│   └── database/                  CRM-сервисы (инкременты, accept-транскрипты)
 ├── database/                      Слой данных (SQLAlchemy 2)
 │   ├── models.py                  Все модели: accounts, mailings, clients, neuro_*, archive, …
 │   ├── repository.py              engine, авто-миграции, WAL
 │   └── repositories.py            CRUD-репозитории
-│
 ├── control_plane/                 Веб-панель (FastAPI)
 │   ├── main.py                    Монтаж панели + routes
 │   ├── routes/                    auth, dashboard, business, ingest, admin, …
 │   ├── business/                  Бизнес-API (accounts, dialogs, mailings, clients, groups, proxies, instance)
 │   └── services/                  alerts, telemetry-агрегаторы
-│
 ├── web-panel/                     SPA (vanilla JS + Tailwind CDN)
 │   ├── index.html
-│   ├── main.js                    Hash-router, SSE, рендер всех разделов
+│   ├── main.js                    Hash-роутер, SSE, рендер всех разделов
 │   └── styles.css
-│
 ├── utils/                         Логгер, прокси-чекер, OpenRouter-клиент, Fernet-helper
-│
 ├── data/                          (не в git) sessions, БД, neuro-промпты, файлы
 ├── logs/                          (не в git) corebot.log + error.log
-├── tests/                         pytest smoke + бэклог-фиксы
+├── tests/                         pytest smoke + регрессионные сценарии
 ├── scripts/                       cb_push.cmd, update_corebot.sh, init_env.sh, cleanup_dialogs.py
-└── docs/                          ARCHITECTURE / BACKLOG / WEBPANEL_DEPLOY / DATABASE_MODULE_SPEC / VPS_UPDATE_GUIDE
+└── docs/                          ARCHITECTURE / BACKLOG / PARSER_WORKER / WEBPANEL_DEPLOY / DATABASE_MODULE_SPEC / VPS_UPDATE_GUIDE
 ```
 
 ---
 
-## Быстрый старт (локально)
+## Как это работает
 
-### 1. Клонирование и зависимости
+Бот (`main.py`) и веб-панель (`control_plane/`) работают как два независимых процесса, оба в одном venv, на одном VPS, с SQLite в `data/`.
+
+- Поток данных бота и панели, диаграммы потоков рассылки / нейрочата / ручных ответов — в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- Парсинг аудитории: `WorkerManager` поднимает пул Telethon-клиентов; `parser_worker` + `workers/parser/*` выполняют сбор каналов/групп/пользователей по задачам из `parsing_tasks` (см. [`docs/PARSER_WORKER.md`](docs/PARSER_WORKER.md)).
+- Веб-панель не дёргает Telegram напрямую: всё управление идёт через `outbound_queue` и `bot_commands` — единая точка управления остаётся внутри процесса бота.
+
+---
+
+## Установка и запуск (локально)
+
+Минимальный Python — **3.11**.
+
+### Быстрый запуск на Windows
+
+После заполнения `.env` запустите двойным кликом:
+
+```bat
+start_corebot.bat
+```
+
+Скрипт сам создаёт `.venv` при первом запуске, устанавливает зависимости, проверяет конфигурацию, запускает Control Plane и Telegram-бота в отдельных окнах и открывает веб-панель. Дополнительные режимы:
+
+```bat
+start_corebot.bat --check
+start_corebot.bat --setup
+```
+
+### 1. Клонирование и зависимости вручную
 
 ```bash
 git clone https://github.com/<your-fork>/CoreBot.git
@@ -238,7 +222,7 @@ cp .env.example .env
 python main.py
 ```
 
-При первом запуске бот сам создаст `data/corebot.db`, выполнит миграции и подключит все добавленные аккаунты. В Telegram — отправь `/start` владельцем.
+При первом запуске бот сам создаст `data/corebot.db`, выполнит миграции и поднимет воркеры. В Telegram отправьте `/start` с аккаунта владельца.
 
 ### 4. Веб-панель (опционально)
 
@@ -248,45 +232,15 @@ python main.py
 uvicorn control_plane.main:app --host 127.0.0.1 --port 8081 --reload
 ```
 
-Открой `http://127.0.0.1:8081/panel/`, логин/пароль из `CP_BOOTSTRAP_ADMIN_USERNAME` / `CP_BOOTSTRAP_ADMIN_PASSWORD`.
+Откройте `http://127.0.0.1:8081/panel/`, логин/пароль из `CP_BOOTSTRAP_ADMIN_USERNAME` / `CP_BOOTSTRAP_ADMIN_PASSWORD`.
 
----
-
-## Прод-деплой на VPS
-
-Полный пошаговый гайд для нового сервера — `RUNBOOK.md`.
-
-Короткое резюме:
-
-1. Ubuntu 22.04/24.04, Python 3.11+, отдельный пользователь `corebot`, venv в `/opt/corebot/venv`, код в `/opt/corebot/app`.
-2. Два systemd-юнита: `corebot.service` (бот) и `corebot-cp.service` (панель), оба читают `/opt/corebot/app/.env`, оба `User=corebot`.
-3. Панель слушает только `127.0.0.1:8081`. Доступ через `ssh -L 8081:127.0.0.1:8081 root@<VPS_IP>` или nginx+HTTPS (см. `docs/WEBPANEL_DEPLOY.md` §7).
-4. Обновление: локально `scripts\cb_push.cmd "msg"` → на VPS `cb-update`. Подробно — `HELP.md` §1 и `docs/VPS_UPDATE_GUIDE.md`.
-
----
-
-## Документация
-
-| Файл | Когда читать |
-|------|-------------|
-| `HELP.md` | Шпаргалка по командам на каждый день |
-| `RUNBOOK.md` | Деплой на новый VPS с нуля |
-| `docs/VPS_UPDATE_GUIDE.md` | Обновление прод-инстанса (детали, ветки, fallback) |
-| `docs/WEBPANEL_DEPLOY.md` | Подключение веб-панели к существующему боту, nginx+HTTPS |
-| `docs/ARCHITECTURE.md` | Карта компонентов и потоков данных |
-| `docs/DATABASE_MODULE_SPEC.md` | Спецификация классовой системы и импорта листов |
-| `docs/BACKLOG.md` | Что ещё не сделано / приоритеты |
-| `corebot v2.md` | Журнал работ и ближайшая дорожная карта |
-
----
-
-## Тесты
+### 5. Тесты
 
 ```bash
 python -m pytest tests/ -q
 ```
 
-Smoke-сценарии в боте — раздел 2 в `corebot v2.md`. Sanity-check фронта:
+Sanity-check фронта:
 
 ```bash
 node -c web-panel/main.js
@@ -300,15 +254,79 @@ python -c "from fastapi.testclient import TestClient; from control_plane.main im
 
 ---
 
-## Безопасность и легальность
+## Переменные окружения
 
-- Доступ к боту только у `OWNER_ID` из `.env`.
-- Веб-панель не выставляется в интернет без HTTPS и nginx (см. `docs/WEBPANEL_DEPLOY.md` §1).
-- `.env`, `data/sessions/`, `data/corebot.db`, `data/control_plane.db` — никогда не коммитить.
-- Используйте проект ответственно и в соответствии с [Telegram Terms of Service](https://telegram.org/tos). Авторы не несут ответственности за нарушение правил Telegram, спам или иное использование, противоречащее ToS платформы и местному законодательству.
+Все переменные задаются в `.env` (шаблон — [`.env.example`](.env.example)). Значения в репозиторий не коммитятся.
+
+| Переменная | Обязательность | Назначение |
+|------------|----------------|------------|
+| `API_ID` / `API_HASH` | обязательные | Telegram API app (my.telegram.org) |
+| `BOT_TOKEN` | обязательная | Токен Control Bot (BotFather) |
+| `OWNER_ID` | обязательная | Telegram ID владельца (админ-доступ) |
+| `DATABASE_URL` | нет | SQLite-URL основной БД бота |
+| `LOG_LEVEL` | нет | Уровень логирования (по умолчанию INFO) |
+| `CONTROL_BOT_PROXY_*` | нет | Прокси для Control Bot (тип/хост/порт/логин/пароль) |
+| `CP_AGENT_ENABLED` / `CP_INGEST_URL` / `CP_AGENT_TOKEN` | нет | Агентская телеметрия бот → панель |
+| `CP_DATABASE_URL` | нет | SQLite-URL БД веб-панели |
+| `CP_JWT_SECRET` | нет | Секрет JWT веб-панели (задать длинный случайный) |
+| `CP_BOOTSTRAP_ADMIN_USERNAME` / `CP_BOOTSTRAP_ADMIN_PASSWORD` | нет | Стартовый админ панели |
+| `BOT_DATABASE_URL` | нет | Sync-URL до основной БД (для панели) |
+| `CP_BUSINESS_STREAM_INTERVAL` / `CP_BUSINESS_STREAM_BATCH` | нет | Параметры SSE-стрима |
+| `OPENROUTER_API_KEY` | нет | Ключ OpenRouter (можно задать в UI панели) |
+| `OPENROUTER_KEY_ENCRYPTION_KEY` | нет | Fernet-ключ для шифрования OpenRouter-ключа |
+| `OPENROUTER_BASE_URL` / `OPENROUTER_HTTP_REFERER` | нет | Endpoint OpenRouter |
+| `NEUROCHAT_ENABLED` | нет | Глобальный toggle нейрочата |
+| `DEFAULT_NEURO_MODEL` / `NEURO_DEFAULT_*` | нет | Дефолтные модель и sampling-параметры нейрочата |
+| `MAILING_BASE_UTC_OFFSET` | нет | UTC-сдвиг для плейсхолдеров `{date}`/`{time}`/`{datetime}` |
+| `PARSER_EMBEDDED` / `PARSER_POLL_SEC` | нет | Встроенный парсинг вместе с Control Plane |
 
 ---
 
-## Лицензия
+## Сборка и деплой на VPS
 
-MIT.
+Проект предназначен для self-hosted-деплоя на один VPS (Ubuntu 22.04/24.04) с systemd. Полный пошаговый гайд — [`RUNBOOK.md`](RUNBOOK.md).
+
+Для автоматизированной установки также доступен Codex-skill [`skills/corebot-vps-deploy`](skills/corebot-vps-deploy). Его локальная установленная копия вызывается как `$corebot-vps-deploy`.
+
+Коротко:
+
+1. Ubuntu 22.04/24.04, отдельный пользователь `corebot`, venv и код в `/opt/corebot/`.
+2. Два systemd-юнита: `corebot.service` (бот) и `corebot-cp.service` (панель), оба через `EnvironmentFile=/opt/corebot/app/.env`.
+3. Панель слушает только `127.0.0.1:8081`; доступ через `ssh -L 8081:127.0.0.1:8081 root@<VPS_IP>` или nginx + HTTPS (см. [`docs/WEBPANEL_DEPLOY.md`](docs/WEBPANEL_DEPLOY.md)).
+4. Обновление: локально `scripts\cb_push.cmd "msg"`, на VPS — `scripts/update_corebot.sh` (подробности — [`docs/VPS_UPDATE_GUIDE.md`](docs/VPS_UPDATE_GUIDE.md)).
+
+Без сборщика/бандлера: веб-панель раздаётся статикой из самой FastAPI-панели, прод-сборки фронта нет.
+
+---
+
+## Ограничения и известные проблемы
+
+- **Парсинг** — встроенный loop запускается вместе с Control Plane (`PARSER_EMBEDDED`); отдельный процесс — `python -m workers.parser_worker`. Оба варианта опциональны.
+- **Backlog**: авто-cleanup по расписанию (`instance_settings.cleanup_cron`) и импорт листов из веба — ещё не реализованы; полный список — [`docs/BACKLOG.md`](docs/BACKLOG.md).
+- **Accept-транскрипты**: Telethon-выгрузка переписки на accept отмечена TODO (не подключена к UI).
+- Единый `parse_mode=HTML` во всех ответах бота — пока местами Markdown.
+
+---
+
+## Документация
+
+| Файл | Когда читать |
+|------|-------------|
+| [`HELP.md`](HELP.md) | Шпаргалка команд на каждый день |
+| [`RUNBOOK.md`](RUNBOOK.md) | Деплой на новый VPS с нуля |
+| [`docs/VPS_UPDATE_GUIDE.md`](docs/VPS_UPDATE_GUIDE.md) | Обновление прод-инстанса (детали, ветки, fallback) |
+| [`docs/WEBPANEL_DEPLOY.md`](docs/WEBPANEL_DEPLOY.md) | Подключение веб-панели, nginx + HTTPS |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Карта компонентов и потоков данных |
+| [`docs/PARSER_WORKER.md`](docs/PARSER_WORKER.md) | Модуль парсинга аудитории |
+| [`docs/DATABASE_MODULE_SPEC.md`](docs/DATABASE_MODULE_SPEC.md) | Спецификация классовой системы и импорта листов |
+| [`docs/BACKLOG.md`](docs/BACKLOG.md) | Что ещё не сделано / приоритеты |
+| [`corebot v2.md`](corebot%20v2.md) | Журнал работ и ближайшая дорожная карта |
+
+---
+
+## Безопасность и легальность
+
+- Доступ к боту — только у `OWNER_ID` из `.env`.
+- Веб-панель не выставляется в интернет без HTTPS и nginx (см. [`docs/WEBPANEL_DEPLOY.md`](docs/WEBPANEL_DEPLOY.md)).
+- `.env`, `data/sessions/`, `data/corebot.db`, `data/control_plane.db` — никогда не коммитьте.
+- Используйте проект ответственно и в соответствии с [Telegram Terms of Service](https://telegram.org/tos). Авторы не несут ответственности за нарушение правил Telegram, спам или иное использование, противоречащее ToS платформы и местному законодательству.

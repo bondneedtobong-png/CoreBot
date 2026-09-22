@@ -85,8 +85,9 @@ async def _collect_from_messages(
     user_flt: dict[str, Any],
     log: LogFn,
     limit_messages: int = 40,
-) -> None:
+) -> int:
     seen: set[int] = set()
+    found = 0
     async for m in client.iter_messages(entity, limit=limit_messages):
         if not m or not m.sender_id:
             continue
@@ -118,6 +119,8 @@ async def _collect_from_messages(
         await storage.bump_task_counters(session, task_id, found_delta=1)
         await session.commit()
         await log(account_id, "info", "user_upsert", f"from_msg {uid}", {"telegram_id": uid})
+        found += 1
+    return found
 
 
 async def _collect_participants(
@@ -134,10 +137,11 @@ async def _collect_participants(
     log: LogFn,
     recent_only: bool,
     limit_users: int,
-) -> None:
+) -> int:
     kwargs: dict[str, Any] = {"limit": limit_users}
     if recent_only:
         kwargs["filter"] = ChannelParticipantsRecent()
+    found = 0
     async for u in client.iter_participants(entity, **kwargs):
         if not isinstance(u, User) or u.bot:
             continue
@@ -159,6 +163,65 @@ async def _collect_participants(
         await storage.bump_task_counters(session, task_id, found_delta=1)
         await session.commit()
         await log(account_id, "info", "user_upsert", f"member {u.id}", {"telegram_id": int(u.id)})
+        found += 1
+    return found
+
+
+async def _collect_channel_commenters_from_posts(
+    client: TelegramClient,
+    channel: Channel,
+    *,
+    task_id: int,
+    account_id: int,
+    source_entity_id: int,
+    session,
+    user_flt: dict[str, Any],
+    log: LogFn,
+    posts_limit: int = 25,
+    comments_per_post: int = 50,
+) -> int:
+    """
+    Реальный путь для каналов: собирать пользователей из комментариев к постам
+    (через discussion-thread reply_to=post.id).
+    """
+    seen_users: set[int] = set()
+    found = 0
+    async for post in client.iter_messages(channel, limit=posts_limit):
+        if not post or not getattr(post, "id", None):
+            continue
+        async for c in client.iter_messages(channel, reply_to=post.id, limit=comments_per_post):
+            if not c or not c.sender_id:
+                continue
+            uid = int(c.sender_id)
+            if uid in seen_users:
+                continue
+            seen_users.add(uid)
+            try:
+                u = await c.get_sender()
+            except Exception:
+                continue
+            if not isinstance(u, User) or u.bot:
+                continue
+            row = _build_user_row(u)
+            ok, _reason = filters.user_passes_filters(row, user_flt)
+            if not ok:
+                await storage.bump_task_counters(session, task_id, filtered_delta=1)
+                await session.commit()
+                continue
+            pu = await storage.upsert_user(session, source_task_id=task_id, **row)
+            await storage.add_user_source_edge(
+                session,
+                parsed_user=pu,
+                source_entity_id=source_entity_id,
+                source_entity_kind="channel",
+                source_kind="commenter",
+                source_task_id=task_id,
+            )
+            await storage.bump_task_counters(session, task_id, found_delta=1)
+            await session.commit()
+            await log(account_id, "info", "user_upsert", f"commenter {uid}", {"telegram_id": uid})
+            found += 1
+    return found
 
 
 async def run_users_task(
@@ -203,11 +266,15 @@ async def run_users_task(
         is_mg = isinstance(ent, Channel) and bool(getattr(ent, "megagroup", False))
         is_bc = isinstance(ent, Channel) and bool(getattr(ent, "broadcast", False)) and not is_mg
         has_discussion = False
+        discussion_entity = None
         if is_bc:
             try:
                 inp = await client.get_input_entity(ent)
                 full = await client(GetFullChannelRequest(channel=inp))
-                has_discussion = bool(getattr(full.full_chat, "linked_chat_id", None))
+                linked_chat_id = getattr(full.full_chat, "linked_chat_id", None)
+                has_discussion = bool(linked_chat_id)
+                if linked_chat_id:
+                    discussion_entity = await client.get_entity(linked_chat_id)
             except Exception:
                 has_discussion = False
 
@@ -222,15 +289,28 @@ async def run_users_task(
                 modes.append("commenters")
             if channel_active_if_discussion and has_discussion:
                 modes.append("active")
+            if not has_discussion and channel_commenters:
+                await log(
+                    account_id,
+                    "warn",
+                    "no_discussion",
+                    f"channel @{getattr(ent, 'username', None) or ent.id} has no linked discussion; commenters unavailable",
+                )
         if mode == "active_only":
             modes = [m for m in modes if m in ("active", "commenters")]
+        if not modes:
+            await log(account_id, "warn", "no_modes", f"no effective modes for {peer}")
+            return
 
+        found_before = 0
+        found_after = 0
         for mname in dict.fromkeys(modes):
             cur_status = await session.scalar(
                 select(ParsingTask.status).where(ParsingTask.id == task.id)
             )
             if cur_status == "cancelled":
                 return
+            found_before = int((await session.get(ParsingTask, task.id)).found_count or 0)
             if is_mg:
                 if mname in ("members", "active"):
                     await _collect_participants(
@@ -261,21 +341,37 @@ async def run_users_task(
                         log=log,
                     )
             elif is_bc:
-                if mname in ("commenters", "active", "members"):
-                    await _collect_from_messages(
+                if mname == "commenters":
+                    await _collect_channel_commenters_from_posts(
                         client,
                         ent,
                         task_id=task.id,
                         account_id=account_id,
                         source_entity_id=src_id,
-                        source_entity_kind="channel",
-                        source_kind="commenter" if mname == "commenters" else "active",
                         session=session,
                         user_flt=user_flt,
                         log=log,
                     )
+                elif mname == "active":
+                    target = discussion_entity or ent
+                    await _collect_from_messages(
+                        client,
+                        target,
+                        task_id=task.id,
+                        account_id=account_id,
+                        source_entity_id=src_id,
+                        source_entity_kind="channel",
+                        source_kind="active",
+                        session=session,
+                        user_flt=user_flt,
+                        log=log,
+                        limit_messages=120,
+                    )
             else:
                 await log(account_id, "warn", "skip_entity", f"unsupported entity for {peer}")
+            found_after = int((await session.get(ParsingTask, task.id)).found_count or 0)
+            if found_after == found_before:
+                await log(account_id, "info", "no_users_found", f"mode={mname} peer={peer}")
 
     total = max(len(peers), 1)
     for idx, peer in enumerate(peers):

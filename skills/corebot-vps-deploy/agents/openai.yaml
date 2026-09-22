@@ -1,0 +1,4 @@
+interface:
+  display_name: "CoreBot VPS Deploy"
+  short_description: "Safely install and verify CoreBot on an Ubuntu VPS"
+  default_prompt: "Install or update CoreBot on a VPS without overwriting secrets, databases, or Telegram sessions."

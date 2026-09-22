@@ -1,10 +1,11 @@
-"""Upsert распарсенных сущностей + счётчики (found/filtered) на задаче."""
+"""Conflict-safe persistence for parsed entities and task counters."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import (
@@ -30,43 +31,41 @@ async def upsert_channel(
     last_post_at: Optional[datetime] = None,
     is_active_7d: Optional[bool] = None,
 ) -> str:
-    """Возвращает 'insert' | 'update'."""
-    row = await session.scalar(select(ParsedChannel).where(ParsedChannel.telegram_id == telegram_id))
-    now = datetime.utcnow()
-    if row:
-        row.username = username or row.username
-        row.title = title or row.title
-        if subscribers is not None:
-            row.subscribers = subscribers
-        if is_public is not None:
-            row.is_public = is_public
-        if has_discussion is not None:
-            row.has_discussion = has_discussion
-        if lang is not None:
-            row.lang = lang
-        if last_post_at is not None:
-            row.last_post_at = last_post_at
-        if is_active_7d is not None:
-            row.is_active_7d = is_active_7d
-        row.source_task_id = source_task_id
-        row.updated_at = now
-        return "update"
-    session.add(
-        ParsedChannel(
-            telegram_id=telegram_id,
-            username=username,
-            title=title,
-            subscribers=subscribers,
-            is_public=is_public,
-            has_discussion=has_discussion,
-            lang=lang,
-            last_post_at=last_post_at,
-            is_active_7d=is_active_7d,
-            source_task_id=source_task_id,
-            updated_at=now,
-        )
+    existed = await session.scalar(
+        select(ParsedChannel.id).where(ParsedChannel.telegram_id == telegram_id)
     )
-    return "insert"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    stmt = sqlite_insert(ParsedChannel).values(
+        telegram_id=telegram_id,
+        username=username,
+        title=title,
+        subscribers=subscribers,
+        is_public=is_public,
+        has_discussion=has_discussion,
+        lang=lang,
+        last_post_at=last_post_at,
+        is_active_7d=is_active_7d,
+        source_task_id=source_task_id,
+        updated_at=now,
+    )
+    excluded = stmt.excluded
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[ParsedChannel.telegram_id],
+        set_={
+            "username": func.coalesce(excluded.username, ParsedChannel.username),
+            "title": func.coalesce(excluded.title, ParsedChannel.title),
+            "subscribers": func.coalesce(excluded.subscribers, ParsedChannel.subscribers),
+            "is_public": func.coalesce(excluded.is_public, ParsedChannel.is_public),
+            "has_discussion": func.coalesce(excluded.has_discussion, ParsedChannel.has_discussion),
+            "lang": func.coalesce(excluded.lang, ParsedChannel.lang),
+            "last_post_at": func.coalesce(excluded.last_post_at, ParsedChannel.last_post_at),
+            "is_active_7d": func.coalesce(excluded.is_active_7d, ParsedChannel.is_active_7d),
+            "source_task_id": source_task_id,
+            "updated_at": now,
+        },
+    )
+    await session.execute(stmt)
+    return "update" if existed is not None else "insert"
 
 
 async def upsert_group(
@@ -81,36 +80,37 @@ async def upsert_group(
     lang: Optional[str] = None,
     is_active_7d: Optional[bool] = None,
 ) -> str:
-    row = await session.scalar(select(ParsedGroup).where(ParsedGroup.telegram_id == telegram_id))
-    now = datetime.utcnow()
-    if row:
-        row.username = username or row.username
-        row.title = title or row.title
-        if members_count is not None:
-            row.members_count = members_count
-        if group_type is not None:
-            row.group_type = group_type
-        if lang is not None:
-            row.lang = lang
-        if is_active_7d is not None:
-            row.is_active_7d = is_active_7d
-        row.source_task_id = source_task_id
-        row.updated_at = now
-        return "update"
-    session.add(
-        ParsedGroup(
-            telegram_id=telegram_id,
-            username=username,
-            title=title,
-            members_count=members_count,
-            group_type=group_type,
-            lang=lang,
-            is_active_7d=is_active_7d,
-            source_task_id=source_task_id,
-            updated_at=now,
-        )
+    existed = await session.scalar(
+        select(ParsedGroup.id).where(ParsedGroup.telegram_id == telegram_id)
     )
-    return "insert"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    stmt = sqlite_insert(ParsedGroup).values(
+        telegram_id=telegram_id,
+        username=username,
+        title=title,
+        members_count=members_count,
+        group_type=group_type,
+        lang=lang,
+        is_active_7d=is_active_7d,
+        source_task_id=source_task_id,
+        updated_at=now,
+    )
+    excluded = stmt.excluded
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[ParsedGroup.telegram_id],
+        set_={
+            "username": func.coalesce(excluded.username, ParsedGroup.username),
+            "title": func.coalesce(excluded.title, ParsedGroup.title),
+            "members_count": func.coalesce(excluded.members_count, ParsedGroup.members_count),
+            "group_type": func.coalesce(excluded.group_type, ParsedGroup.group_type),
+            "lang": func.coalesce(excluded.lang, ParsedGroup.lang),
+            "is_active_7d": func.coalesce(excluded.is_active_7d, ParsedGroup.is_active_7d),
+            "source_task_id": source_task_id,
+            "updated_at": now,
+        },
+    )
+    await session.execute(stmt)
+    return "update" if existed is not None else "insert"
 
 
 async def upsert_user(
@@ -126,25 +126,8 @@ async def upsert_user(
     is_deleted: bool = False,
     is_suspicious: bool = False,
 ) -> ParsedUser:
-    row = await session.scalar(select(ParsedUser).where(ParsedUser.telegram_id == telegram_id))
-    now = datetime.utcnow()
-    if row:
-        if username:
-            row.username = username
-        if display_name:
-            row.display_name = display_name
-        if has_avatar is not None:
-            row.has_avatar = has_avatar
-        if last_seen_at is not None:
-            row.last_seen_at = last_seen_at
-        if lang_guess is not None:
-            row.lang_guess = lang_guess
-        row.is_deleted = is_deleted
-        row.is_suspicious = is_suspicious
-        row.source_task_id = source_task_id
-        row.updated_at = now
-        return row
-    u = ParsedUser(
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    stmt = sqlite_insert(ParsedUser).values(
         telegram_id=telegram_id,
         username=username,
         display_name=display_name,
@@ -156,9 +139,26 @@ async def upsert_user(
         source_task_id=source_task_id,
         updated_at=now,
     )
-    session.add(u)
-    await session.flush()
-    return u
+    excluded = stmt.excluded
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[ParsedUser.telegram_id],
+        set_={
+            "username": func.coalesce(excluded.username, ParsedUser.username),
+            "display_name": func.coalesce(excluded.display_name, ParsedUser.display_name),
+            "has_avatar": func.coalesce(excluded.has_avatar, ParsedUser.has_avatar),
+            "last_seen_at": func.coalesce(excluded.last_seen_at, ParsedUser.last_seen_at),
+            "lang_guess": func.coalesce(excluded.lang_guess, ParsedUser.lang_guess),
+            "is_deleted": is_deleted,
+            "is_suspicious": is_suspicious,
+            "source_task_id": source_task_id,
+            "updated_at": now,
+        },
+    ).returning(ParsedUser.id)
+    user_id = int((await session.execute(stmt)).scalar_one())
+    row = await session.get(ParsedUser, user_id)
+    if row is None:
+        raise RuntimeError(f"parsed user upsert did not return row: {telegram_id}")
+    return row
 
 
 async def add_user_source_edge(
@@ -170,25 +170,22 @@ async def add_user_source_edge(
     source_kind: str,
     source_task_id: int,
 ) -> None:
-    exists = await session.scalar(
-        select(ParsedUserSource.id).where(
-            ParsedUserSource.parsed_user_id == parsed_user.id,
-            ParsedUserSource.source_entity_id == source_entity_id,
-            ParsedUserSource.source_entity_kind == source_entity_kind,
-            ParsedUserSource.source_kind == source_kind,
-        )
+    stmt = sqlite_insert(ParsedUserSource).values(
+        parsed_user_id=parsed_user.id,
+        source_entity_id=source_entity_id,
+        source_entity_kind=source_entity_kind,
+        source_kind=source_kind,
+        source_task_id=source_task_id,
     )
-    if exists:
-        return
-    session.add(
-        ParsedUserSource(
-            parsed_user_id=parsed_user.id,
-            source_entity_id=source_entity_id,
-            source_entity_kind=source_entity_kind,
-            source_kind=source_kind,
-            source_task_id=source_task_id,
-        )
+    stmt = stmt.on_conflict_do_nothing(
+        index_elements=[
+            ParsedUserSource.parsed_user_id,
+            ParsedUserSource.source_entity_id,
+            ParsedUserSource.source_entity_kind,
+            ParsedUserSource.source_kind,
+        ]
     )
+    await session.execute(stmt)
 
 
 async def bump_task_counters(

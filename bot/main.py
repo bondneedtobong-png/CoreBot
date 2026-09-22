@@ -33,6 +33,7 @@ from bot.handlers.system_status import (
 )
 from bot.handlers.warmup_menu import router as warmup_menu_router
 from bot.handlers.username_list_tool import router as username_list_tool_router
+from utils.background_tasks import background_tasks
 from utils.logger import log
 
 # Старые сообщения с callback_data «cancel» (до разделения по разделам)
@@ -239,7 +240,10 @@ async def run_bot():
         await worker_manager.connect_all()
 
         await message.answer(f"🚀 Запуск рассылки \"{mailing.name or mailing.id}\"...")
-        asyncio.create_task(worker_manager.start_mailing(mailing.id))
+        background_tasks.create(
+            worker_manager.start_mailing(mailing.id),
+            name=f"mailing-{mailing.id}",
+        )
 
     @dp.message(Command("status"))
     async def cmd_status(message: Message):

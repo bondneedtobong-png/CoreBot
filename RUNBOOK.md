@@ -223,10 +223,10 @@ WantedBy=multi-user.target
 systemctl daemon-reload
 systemctl enable --now corebot-cp.service
 systemctl status corebot-cp.service
-curl -s http://127.0.0.1:8081/health
+curl --fail http://127.0.0.1:8081/health/ready
 ```
 
-Если health вернул `{"ok": true}` — всё хорошо.
+Если readiness вернул HTTP 200 и `{"ok": true, ...}` — обе БД и фоновые компоненты доступны.
 
 ### 5.2. Основной бот service
 
@@ -508,3 +508,45 @@ systemctl disable --now corebot-cp.service
 - [ ] `/start` проверен владельцем
 - [ ] Бэкап настроен
 - [ ] Инстанс внесён в вашу таблицу учёта
+
+---
+
+## 12) Обязательные проверки безопасного деплоя
+
+### 12.1. Только один parser-loop
+
+- Для встроенного режима оставьте `PARSER_EMBEDDED=1` и не создавайте отдельный parser service.
+- Для отдельного parser service задайте `PARSER_EMBEDDED=0` в Control Plane.
+
+### 12.2. Секреты
+
+Перед запуском проверьте, что `.env` не содержит `change-me`, `admin123` и пустых обязательных Telegram-переменных:
+
+```bash
+cd /opt/corebot/app
+grep -nE '^(API_ID|API_HASH|BOT_TOKEN|OWNER_ID)=$|change-me|admin123' .env && {
+  echo 'Небезопасная конфигурация .env'; exit 1;
+} || true
+chmod 600 .env
+```
+
+### 12.3. Бэкап перед обновлением
+
+```bash
+sudo -u corebot mkdir -p /opt/corebot/backups
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+sudo -u corebot tar -C /opt/corebot/app -czf "/opt/corebot/backups/corebot-$stamp.tar.gz" \
+  .env data/corebot.db data/control_plane.db data/sessions
+```
+
+### 12.4. Проверка после запуска
+
+```bash
+systemctl is-active --quiet corebot.service
+systemctl is-active --quiet corebot-cp.service
+curl --fail http://127.0.0.1:8081/health/live
+curl --fail http://127.0.0.1:8081/health/ready
+journalctl -u corebot.service -u corebot-cp.service -n 100 --no-pager
+```
+
+Порт `8081` не добавляйте в UFW. Для доступа используйте SSH-туннель либо nginx с HTTPS.

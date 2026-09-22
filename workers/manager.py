@@ -40,6 +40,7 @@ from database.repositories import (
 from database.crm_repositories import ClientMailSessionRepository
 from database.repository import db
 from database.session import session_scope
+from utils.background_tasks import background_tasks
 from utils.logger import log
 from utils.links import normalize_public_link, plain_text_to_telegram_link_message
 from utils.telemetry import telemetry_emitter
@@ -1762,7 +1763,10 @@ class WorkerManager:
             self._mailing_utc_offset = None
             if self._mailing_run_started:
                 try:
-                    asyncio.create_task(self._restore_workers_after_mailing())
+                    background_tasks.create(
+                        self._restore_workers_after_mailing(),
+                        name=f"mailing-{mailing_id}-restore-workers",
+                    )
                 except Exception as e:
                     log.warning(f"Не удалось запустить восстановление пула: {e}")
                     self._mailing_busy = False

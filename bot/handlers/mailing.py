@@ -49,6 +49,7 @@ from database.repositories import (
     MailingTestRecipientRepository,
 )
 from services.neurochat.stats_service import count_actions_by_mailing
+from utils.background_tasks import background_tasks
 from utils.logger import log
 
 router = Router()
@@ -2099,7 +2100,10 @@ async def _execute_mailing_start(callback: CallbackQuery, mailing: Mailing) -> b
     await worker_manager.load_accounts(group_id=gid)
     await worker_manager.connect_all()
 
-    asyncio.create_task(worker_manager.start_mailing(mailing.id))
+    background_tasks.create(
+        worker_manager.start_mailing(mailing.id),
+        name=f"mailing-{mailing.id}",
+    )
     await _render_mailing_screen(callback, mailing.id)
     return True
 

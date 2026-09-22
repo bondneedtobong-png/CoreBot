@@ -159,3 +159,47 @@ table.cb-table tbody tr:hover { background-color: rgba(30,41,59,0.5); }
 
 /* code chip */
 code { background: rgba(15,23,42,0.6); border: 1px solid rgba(148,163,184,0.2); padding: 0 4px; border-radius: 4px; font-size: 0.8em; }
+
+/* ===== Command Palette (Ctrl+K) ===== */
+#cpBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  background: rgba(2, 6, 23, 0.72);
+  padding-top: 14vh;
+}
+#cpBackdrop.open { display: flex; }
+#cpDialog {
+  width: min(640px, calc(100vw - 32px));
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  box-shadow: 0 24px 48px rgba(0,0,0,.5);
+  overflow: hidden;
+}
+#cpInputWrap { display: flex; align-items: center; gap: .5rem; padding: .75rem 1rem; border-bottom: 1px solid #1e293b; }
+#cpInput { flex: 1; background: transparent; border: none; outline: none; color: #e2e8f0; font-size: 1rem; }
+#cpHint { font-size: .7rem; color: #64748b; white-space: nowrap; }
+#cpResults { max-height: 360px; overflow-y: auto; padding: .5rem; }
+.cp-item { display: flex; align-items: center; gap: .75rem; padding: .55rem .75rem; border-radius: .5rem; cursor: pointer; color: #cbd5e1; }
+.cp-item:hover, .cp-item.active { background: #1e293b; color: #fff; }
+.cp-item .cp-ico { width: 1.25rem; text-align: center; color: #60a5fa; }
+.cp-item .cp-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-item .cp-section { font-size: .65rem; text-transform: uppercase; letter-spacing: .05em; color: #64748b; }
+.cp-empty { padding: 1.5rem; text-align: center; color: #64748b; font-size: .875rem; }
+
+/* ===== TData import card ===== */
+#tdataDropZone {
+  border: 2px dashed #334155;
+  border-radius: .75rem;
+  padding: 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+#tdataDropZone:hover, #tdataDropZone.dragover { border-color: #3b82f6; background: rgba(59,130,246,.06); }
+#tdataDropZone .tdata-ico { font-size: 2rem; margin-bottom: .5rem; color: #60a5fa; }
+.tdata-file { display: flex; align-items: center; gap: .5rem; color: #cbd5e1; font-size: .875rem; }
