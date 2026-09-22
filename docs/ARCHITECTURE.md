@@ -197,3 +197,9 @@ SPA в `web-panel/` (vanilla JS) общается с этим API + EventSource 
 - Подключение веб-панели к боту: [WEBPANEL_DEPLOY.md](WEBPANEL_DEPLOY.md)
 - Бэклог и долги: [BACKLOG.md](BACKLOG.md)
 - Шпаргалка команд: [../HELP.md](../HELP.md)
+- Эксплуатационные контракты:
+  - [INSTANCE_CONTRACT.md](operations/INSTANCE_CONTRACT.md) — один пользователь, один изолированный инстанс
+  - [SLO.md](operations/SLO.md) — доступность, readiness, RPO/RTO, алерты
+  - [RELEASE_CONTRACT.md](operations/RELEASE_CONTRACT.md) — версии, обновления, бэкапы, откат
+  - [CONFIG_CONTRACT.md](operations/CONFIG_CONTRACT.md) — переменные `.env`
+  - [ADR 0001: оркестратор парка VPS](operations/adr/0001-fleet-management.md)
