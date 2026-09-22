@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from utils.time import utcnow_naive
 from pathlib import Path
 from typing import Optional
 
@@ -59,7 +60,7 @@ def build_debug_excerpt(callback_data: str) -> tuple[str, str]:
     if not delta or not LOG_FILE.exists():
         return "", "Лог-файл не найден или окно неизвестно."
     raw = read_log_tail_bytes(LOG_FILE)
-    since = datetime.utcnow() - delta
+    since = utcnow_naive() - delta
     filtered = filter_log_by_time(raw, since)
     if len(filtered) > 350_000:
         filtered = filtered[-350_000:]

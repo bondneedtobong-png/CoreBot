@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from utils.time import utcnow_aware
 from typing import Any, Optional
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return utcnow_aware()
 
 
 def is_active_7d(last_post_at: Optional[datetime]) -> bool:

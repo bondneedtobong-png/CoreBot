@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -141,4 +142,4 @@ def window_since(code: str) -> Optional[datetime]:
     if code == "db_chats_all":
         return None
     d = deltas.get(code)
-    return (datetime.utcnow() - d) if d else None
+    return (utcnow_naive() - d) if d else None

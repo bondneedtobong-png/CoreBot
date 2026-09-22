@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 from pathlib import Path
 from typing import Optional
 
@@ -47,7 +48,7 @@ class RotatingClients:
 
     async def next_client(self) -> tuple[int, TelegramClient]:
         attempts = len(self._snaps)
-        now = datetime.utcnow()
+        now = utcnow_naive()
         last_err: Optional[Exception] = None
         for _ in range(attempts):
             snap = self._snaps[self._i % len(self._snaps)]
@@ -74,7 +75,7 @@ class RotatingClients:
                 return aid, client
             except Exception as e:
                 last_err = e
-                self._cooldown_until[aid] = datetime.utcnow() + timedelta(seconds=90)
+                self._cooldown_until[aid] = utcnow_naive() + timedelta(seconds=90)
                 log.warning(f"parser account {aid} connect failed, cooldown 90s: {e}")
                 try:
                     if client:

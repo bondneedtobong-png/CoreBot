@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from utils.time import utcnow_naive
 from typing import Any, Optional
 
 from sqlalchemy import select, update
@@ -230,8 +231,8 @@ class ClientMailSessionRepository:
             update(ClientMailSession)
             .where(ClientMailSession.id == mail_session_id)
             .values(
-                first_outbound_at=at or datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                first_outbound_at=at or utcnow_naive(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -246,8 +247,8 @@ class ClientMailSessionRepository:
             update(ClientMailSession)
             .where(ClientMailSession.id == mail_session_id)
             .values(
-                success_end_at=at or datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                success_end_at=at or utcnow_naive(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()

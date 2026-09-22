@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 import hashlib
 
 import jwt
@@ -24,13 +25,13 @@ def verify_password(raw: str, password_hash: str) -> bool:
 
 
 def create_access_token(user_id: int, tenant_id: int, role: str) -> str:
-    exp = datetime.utcnow() + timedelta(minutes=CP_ACCESS_TTL_MIN)
+    exp = utcnow_naive() + timedelta(minutes=CP_ACCESS_TTL_MIN)
     payload = {"sub": str(user_id), "tenant_id": tenant_id, "role": role, "type": "access", "exp": exp}
     return jwt.encode(payload, CP_JWT_SECRET, algorithm=CP_JWT_ALG)
 
 
 def create_refresh_token(user_id: int, tenant_id: int, role: str) -> str:
-    exp = datetime.utcnow() + timedelta(minutes=CP_REFRESH_TTL_MIN)
+    exp = utcnow_naive() + timedelta(minutes=CP_REFRESH_TTL_MIN)
     payload = {"sub": str(user_id), "tenant_id": tenant_id, "role": role, "type": "refresh", "exp": exp}
     return jwt.encode(payload, CP_JWT_SECRET, algorithm=CP_JWT_ALG)
 

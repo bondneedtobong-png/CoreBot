@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 from pathlib import Path
 import shutil
 
@@ -9,7 +10,7 @@ from control_plane.models import IngestEvent, MetricPoint, AuditLog
 
 
 def cleanup_retention(db: Session) -> dict:
-    cutoff = datetime.utcnow() - timedelta(days=CP_RETENTION_DAYS)
+    cutoff = utcnow_naive() - timedelta(days=CP_RETENTION_DAYS)
     del_events = db.query(IngestEvent).filter(IngestEvent.created_at < cutoff).delete(synchronize_session=False)
     del_metrics = db.query(MetricPoint).filter(MetricPoint.created_at < cutoff).delete(synchronize_session=False)
     db.commit()
@@ -25,6 +26,6 @@ def make_backup() -> str:
         return ""
     dst_dir = Path("data/control_plane_backups")
     dst_dir.mkdir(parents=True, exist_ok=True)
-    dst = dst_dir / f"control_plane_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.db"
+    dst = dst_dir / f"control_plane_{utcnow_naive().strftime('%Y%m%d_%H%M%S')}.db"
     shutil.copy2(src, dst)
     return str(dst)

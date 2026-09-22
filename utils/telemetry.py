@@ -9,6 +9,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from utils.time import utcnow_aware
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +88,7 @@ class TelemetryEmitter:
                 "message": _redact_text(message),
                 "payload": _redact_payload(payload),
                 "schema_version": self.schema_version,
-                "ts": datetime.utcnow().isoformat(),
+                "ts": utcnow_aware().isoformat(),
             },
         }
         await self._enqueue(item)

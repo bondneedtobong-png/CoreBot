@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -166,7 +167,7 @@ def create_account(
         # чтобы запись была валидной в БД; подключение воркера произойдёт только
         # когда в data/sessions появится реальная .session с тем же именем.
         cleaned_phone = "".join(ch for ch in phone if ch.isdigit()) or "acc"
-        session_name = f"web_{cleaned_phone}_{int(datetime.utcnow().timestamp())}"
+        session_name = f"web_{cleaned_phone}_{int(utcnow_naive().timestamp())}"
     existing_session = db.execute(
         select(Account.id).where(Account.session_name == session_name)
     ).first()
@@ -230,7 +231,7 @@ def set_account_mode(
     db.execute(
         update(Account)
         .where(Account.id == account_id)
-        .values(ai_mode=new_mode, updated_at=datetime.utcnow())
+        .values(ai_mode=new_mode, updated_at=utcnow_naive())
     )
     db.commit()
     db.refresh(account)
@@ -330,7 +331,7 @@ def patch_account(
             if not db.get(Proxy, int(payload.proxy_id)):
                 raise HTTPException(status_code=400, detail="proxy not found")
             a.proxy_id = int(payload.proxy_id)
-    a.updated_at = datetime.utcnow()
+    a.updated_at = utcnow_naive()
     db.commit()
     db.refresh(a)
 
@@ -414,7 +415,7 @@ def _queue_item_to_out(db: Session, row: OutboundQueue) -> QueueListItem:
         error=row.error,
         attempts=int(getattr(row, "attempts", 0) or 0),
         requested_by=row.requested_by,
-        created_at=row.created_at or datetime.utcnow(),
+        created_at=row.created_at or utcnow_naive(),
         next_attempt_at=row.next_attempt_at,
         sent_at=row.sent_at,
     )
@@ -648,7 +649,7 @@ def list_messages(
                     id=-int(q.id),  # отрицательный id — чтобы не конфликтовал с neuro
                     role="assistant",
                     content=q.text or "",
-                    created_at=q.created_at or datetime.utcnow(),
+                    created_at=q.created_at or utcnow_naive(),
                     source="queue",
                     queue_status=q.status,
                     queue_error=q.error,
@@ -822,7 +823,7 @@ def cleanup_dialogs(
         msg_filters.append(NeuroChatMessage.peer_user_id == int(payload.peer_user_id))
 
     if payload.older_than_days is not None:
-        threshold = datetime.utcnow() - timedelta(days=int(payload.older_than_days))
+        threshold = utcnow_naive() - timedelta(days=int(payload.older_than_days))
         msg_filters.append(NeuroChatMessage.created_at < threshold)
         interaction_filters.append(ClientInteraction.created_at < threshold)
 

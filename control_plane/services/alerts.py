@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 
 import aiohttp
 from sqlalchemy.orm import Session
@@ -22,7 +23,7 @@ def upsert_alert(
     details: str,
     fingerprint: str,
 ) -> Alert:
-    now = datetime.utcnow()
+    now = utcnow_naive()
     existing = (
         db.query(Alert)
         .filter(Alert.tenant_id == tenant_id, Alert.fingerprint == fingerprint)

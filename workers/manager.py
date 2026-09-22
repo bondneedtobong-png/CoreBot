@@ -9,6 +9,7 @@ import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from utils.time import utcnow_naive
 from typing import Optional, Dict, List, Callable, Any, Union
 from pathlib import Path
 from dotenv import load_dotenv
@@ -727,7 +728,7 @@ class Worker:
             
             # Обновляем статус в БД
             async with session_scope() as session:
-                    until = datetime.utcnow() + timedelta(seconds=wait_time)
+                    until = utcnow_naive() + timedelta(seconds=wait_time)
                     await AccountRepository.set_flood_wait(session, self.account.id, until)
             
             # Отключаем аккаунт временно
@@ -1211,7 +1212,7 @@ class WorkerManager:
         seq_idx = 0
 
         for account in accounts:
-            if self._stop_event.is_set() or (end_at and datetime.utcnow() >= end_at):
+            if self._stop_event.is_set() or (end_at and utcnow_naive() >= end_at):
                 break
             worker = self.workers.get(account.id)
             if not worker or not worker.is_connected:
@@ -1220,7 +1221,7 @@ class WorkerManager:
 
             wrote_any = False
             for recipient in recipients:
-                if self._stop_event.is_set() or (end_at and datetime.utcnow() >= end_at):
+                if self._stop_event.is_set() or (end_at and utcnow_naive() >= end_at):
                     break
 
                 if variant_mode == "sequential":
@@ -1434,7 +1435,7 @@ class WorkerManager:
             ]
             await self._notify_owner_html("\n".join(_start_lines))
 
-            run_started_at = datetime.utcnow()
+            run_started_at = utcnow_naive()
             end_at = (
                 run_started_at + timedelta(hours=auto_stop_hours)
                 if auto_stop_hours and auto_stop_hours > 0
@@ -1473,7 +1474,7 @@ class WorkerManager:
                 if self._stop_event.is_set():
                     log.info("Рассылка остановлена пользователем")
                     break
-                if end_at and datetime.utcnow() >= end_at:
+                if end_at and utcnow_naive() >= end_at:
                     log.info(
                         f"Рассылка {mailing_id}: достигнут автостоп {auto_stop_hours:g} ч"
                     )
@@ -1495,7 +1496,7 @@ class WorkerManager:
                 for idx, client in enumerate(clients, start=1):
                     if self._stop_event.is_set():
                         break
-                    if end_at and datetime.utcnow() >= end_at:
+                    if end_at and utcnow_naive() >= end_at:
                         break
                     if cap_reached:
                         break

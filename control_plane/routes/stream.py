@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
+from utils.time import utcnow_aware
 from typing import AsyncGenerator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -82,7 +83,7 @@ async def stream_messages(
 
         yield _format_event(
             "hello",
-            {"ts": datetime.utcnow().isoformat(), "cursor": last_id},
+            {"ts": utcnow_aware().isoformat(), "cursor": last_id},
         )
 
         idle_ticks = 0
@@ -126,7 +127,7 @@ async def stream_messages(
                 idle_ticks += 1
                 if idle_ticks % 12 == 0:
                     # лёгкий keep-alive раз в ~18 сек, чтобы прокси не закрыли соединение
-                    yield _format_event("ping", {"ts": datetime.utcnow().isoformat()})
+                    yield _format_event("ping", {"ts": utcnow_aware().isoformat()})
 
             try:
                 await asyncio.sleep(CP_BUSINESS_STREAM_INTERVAL)

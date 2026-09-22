@@ -3,6 +3,7 @@
 """
 import json
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 from typing import Any, Dict, Optional, List
 
 from bot.config import (
@@ -132,7 +133,7 @@ class ProxyRepository:
     ) -> bool:
         """Обновление статуса прокси."""
         if not last_checked:
-            last_checked = datetime.utcnow()
+            last_checked = utcnow_naive()
         await session.execute(
             update(Proxy)
             .where(Proxy.id == proxy_id)
@@ -494,7 +495,7 @@ class AccountRepository:
         Returns:
             list[Account]: Доступные аккаунты
         """
-        now = datetime.utcnow()
+        now = utcnow_naive()
 
         query = (
             select(Account)
@@ -544,7 +545,7 @@ class AccountRepository:
         await session.execute(
             update(Account)
             .where(Account.id == account_id)
-            .values(status=status, updated_at=datetime.utcnow())
+            .values(status=status, updated_at=utcnow_naive())
         )
         await session.commit()
         return True
@@ -559,7 +560,7 @@ class AccountRepository:
         await session.execute(
             update(Account)
             .where(Account.id == account_id)
-            .values(proxy_id=proxy_id, updated_at=datetime.utcnow())
+            .values(proxy_id=proxy_id, updated_at=utcnow_naive())
         )
         await session.commit()
         return True
@@ -573,7 +574,7 @@ class AccountRepository:
         profile: Optional[str] = None,
         pause_reason: Optional[str] = None,
     ) -> bool:
-        data: dict = {"updated_at": datetime.utcnow()}
+        data: dict = {"updated_at": utcnow_naive()}
         if enabled is not None:
             data["warmup_enabled"] = enabled
             if enabled:
@@ -601,7 +602,7 @@ class AccountRepository:
             return 0
         data: dict = {
             "warmup_enabled": enabled,
-            "updated_at": datetime.utcnow(),
+            "updated_at": utcnow_naive(),
         }
         if profile is not None:
             data["warmup_profile"] = profile
@@ -629,7 +630,7 @@ class AccountRepository:
 
     @staticmethod
     async def list_warmup_candidates(session: AsyncSession, limit: int = 50) -> List[Account]:
-        now = datetime.utcnow()
+        now = utcnow_naive()
         result = await session.execute(
             select(Account)
             .options(selectinload(Account.proxy))
@@ -655,9 +656,9 @@ class AccountRepository:
             .where(Account.id == account_id)
             .values(
                 warmup_actions_today=Account.warmup_actions_today + 1,
-                warmup_last_action_at=datetime.utcnow(),
+                warmup_last_action_at=utcnow_naive(),
                 warmup_next_run_at=next_run_at,
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -676,7 +677,7 @@ class AccountRepository:
             .values(
                 warmup_paused_until=until,
                 warmup_pause_reason=reason,
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -684,7 +685,7 @@ class AccountRepository:
 
     @staticmethod
     async def reset_warmup_daily(session: AsyncSession) -> int:
-        cutoff = datetime.utcnow() - timedelta(days=1)
+        cutoff = utcnow_naive() - timedelta(days=1)
         result = await session.execute(
             update(Account)
             .where((Account.last_reset == None) | (Account.last_reset < cutoff))
@@ -747,7 +748,7 @@ class AccountRepository:
                 messages_sent=Account.messages_sent + sent,
                 messages_failed=Account.messages_failed + failed,
                 messages_today=Account.messages_today + sent,
-                last_activity=datetime.utcnow(),
+                last_activity=utcnow_naive(),
             )
         )
         await session.commit()
@@ -766,7 +767,7 @@ class AccountRepository:
             .values(
                 status=AccountStatus.FLOOD_WAIT,
                 flood_wait_until=until,
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -784,7 +785,7 @@ class AccountRepository:
             .values(
                 status=AccountStatus.ACTIVE,
                 flood_wait_until=None,
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -802,8 +803,8 @@ class AccountRepository:
             .where(Account.id == account_id)
             .values(
                 is_spam_blocked=is_blocked,
-                spam_check_date=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                spam_check_date=utcnow_naive(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -820,7 +821,7 @@ class AccountRepository:
             .where(Account.id == account_id)
             .values(
                 messages_today=0,
-                last_reset=datetime.utcnow(),
+                last_reset=utcnow_naive(),
             )
         )
         await session.commit()
@@ -832,7 +833,7 @@ class AccountRepository:
         account: Account,
     ) -> bool:
         """Проверка и сброс дневного лимита если прошли сутки."""
-        now = datetime.utcnow()
+        now = utcnow_naive()
         if account.last_reset:
             if now - account.last_reset > timedelta(days=1):
                 await AccountRepository.reset_daily_stats(session, account.id)
@@ -848,7 +849,7 @@ class AccountRepository:
         bio: Optional[str] = None,
     ) -> bool:
         """Обновление профиля аккаунта (имя, фамилия, bio)."""
-        update_data = {"updated_at": datetime.utcnow()}
+        update_data = {"updated_at": utcnow_naive()}
         if first_name is not None:
             update_data["first_name"] = first_name
         if last_name is not None:
@@ -874,7 +875,7 @@ class AccountRepository:
         await session.execute(
             update(Account)
             .where(Account.id == account_id)
-            .values(username=username, updated_at=datetime.utcnow())
+            .values(username=username, updated_at=utcnow_naive())
         )
         await session.commit()
         return True
@@ -890,7 +891,7 @@ class AccountRepository:
         await session.execute(
             update(Account)
             .where(Account.id == account_id)
-            .values(list_label=val, updated_at=datetime.utcnow())
+            .values(list_label=val, updated_at=utcnow_naive())
         )
         await session.commit()
         return True
@@ -906,7 +907,7 @@ class AccountRepository:
         await session.execute(
             update(Account)
             .where(Account.id == account_id)
-            .values(membership=membership, updated_at=datetime.utcnow())
+            .values(membership=membership, updated_at=utcnow_naive())
         )
         await session.commit()
         return True
@@ -928,7 +929,7 @@ class AccountRepository:
         await session.execute(
             update(Account)
             .where(Account.id == account_id)
-            .values(ai_mode=normalized, updated_at=datetime.utcnow())
+            .values(ai_mode=normalized, updated_at=utcnow_naive())
         )
         await session.commit()
         return True
@@ -946,7 +947,7 @@ class AccountRepository:
         await session.execute(
             update(Account)
             .where(Account.id == account_id)
-            .values(avatar_path=avatar_path, updated_at=datetime.utcnow())
+            .values(avatar_path=avatar_path, updated_at=utcnow_naive())
         )
         await session.commit()
         return True
@@ -1181,7 +1182,7 @@ class WarmupProfileRepository:
         row = await WarmupProfileRepository.get_by_name(session, name)
         if not row:
             return False
-        data: dict = {"updated_at": datetime.utcnow()}
+        data: dict = {"updated_at": utcnow_naive()}
         if base_delay_sec is not None:
             data["base_delay_sec"] = float(base_delay_sec)
         if jitter_sec is not None:
@@ -1258,7 +1259,7 @@ class WarmupProfileRepository:
                 daily_action_limit=src.daily_action_limit,
                 target_chats_text=src.target_chats_text,
                 enabled=src.enabled,
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -1297,7 +1298,7 @@ class WarmupLogRepository:
         )
         logs_today = await session.execute(
             select(func.count(WarmupLog.id)).where(
-                WarmupLog.created_at >= datetime.utcnow() - timedelta(days=1)
+                WarmupLog.created_at >= utcnow_naive() - timedelta(days=1)
             )
         )
         return {
@@ -1589,7 +1590,7 @@ class ClientRepository:
         """Обновление статуса клиента."""
         update_data = {"status": status}
         if status == ClientStatus.CONTACTED:
-            update_data["last_contacted_at"] = datetime.utcnow()
+            update_data["last_contacted_at"] = utcnow_naive()
         
         await session.execute(
             update(Client)
@@ -1702,7 +1703,7 @@ class MailingAccountStateRepository:
         wave_limit: int,
         cooldown_hours: float,
     ) -> None:
-        now = datetime.utcnow()
+        now = utcnow_naive()
         r = await session.execute(
             select(MailingAccountState).where(
                 MailingAccountState.mailing_id == mailing_id,
@@ -1790,12 +1791,12 @@ class MailingRepository:
         status: MailingStatus,
     ) -> bool:
         """Обновление статуса рассылки."""
-        update_data = {"status": status, "updated_at": datetime.utcnow()}
+        update_data = {"status": status, "updated_at": utcnow_naive()}
         
         if status == MailingStatus.RUNNING:
-            update_data["started_at"] = datetime.utcnow()
+            update_data["started_at"] = utcnow_naive()
         elif status in (MailingStatus.COMPLETED, MailingStatus.CANCELLED):
-            update_data["completed_at"] = datetime.utcnow()
+            update_data["completed_at"] = utcnow_naive()
         
         await session.execute(
             update(Mailing)
@@ -1833,7 +1834,7 @@ class MailingRepository:
             .values(
                 messages_sent=0,
                 messages_failed=0,
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.execute(
@@ -1857,7 +1858,7 @@ class MailingRepository:
             and neuro_sampling_json is None
         ):
             return False
-        data: dict = {"updated_at": datetime.utcnow()}
+        data: dict = {"updated_at": utcnow_naive()}
         if neurochat_enabled is not None:
             data["neurochat_enabled"] = neurochat_enabled
         if neuro_model is not None:
@@ -2164,7 +2165,7 @@ class NeuroStopRepository:
             await session.execute(
                 update(NeuroStopList)
                 .where(NeuroStopList.id == row.id)
-                .values(mailing_id=mailing_id, created_at=datetime.utcnow())
+                .values(mailing_id=mailing_id, created_at=utcnow_naive())
             )
         else:
             session.add(
@@ -2257,7 +2258,7 @@ class OutboundQueueRepository:
         session: AsyncSession,
         limit: int = 20,
     ) -> list[OutboundQueue]:
-        now = datetime.utcnow()
+        now = utcnow_naive()
         result = await session.execute(
             select(OutboundQueue)
             .where(
@@ -2284,7 +2285,7 @@ class OutboundQueueRepository:
             .values(
                 status="sent",
                 telegram_message_id=int(telegram_message_id) if telegram_message_id else None,
-                sent_at=datetime.utcnow(),
+                sent_at=utcnow_naive(),
                 error=None,
                 next_attempt_at=None,
             )
@@ -2303,7 +2304,7 @@ class OutboundQueueRepository:
             .values(
                 status="failed",
                 error=(error or "")[:1000],
-                sent_at=datetime.utcnow(),
+                sent_at=utcnow_naive(),
                 next_attempt_at=None,
             )
         )
@@ -2321,7 +2322,7 @@ class OutboundQueueRepository:
         Не падаем сразу: помечаем как pending с next_attempt_at = now + delay,
         чтобы fetch_pending_batch не выбирал её до истечения паузы.
         """
-        next_at = datetime.utcnow() + timedelta(seconds=max(0.0, float(delay_sec)))
+        next_at = utcnow_naive() + timedelta(seconds=max(0.0, float(delay_sec)))
         await session.execute(
             update(OutboundQueue)
             .where(OutboundQueue.id == int(queue_id))

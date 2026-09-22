@@ -8,6 +8,7 @@ import io
 import json
 import re
 from datetime import datetime
+from utils.time import utcnow_naive
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
@@ -743,7 +744,7 @@ async def cb_mailing_aud_mode_set(callback: CallbackQuery, state: FSMContext):
         await session.execute(
             update(Mailing)
             .where(Mailing.id == mailing_id)
-            .values(audience_mode=mode, updated_at=datetime.utcnow())
+            .values(audience_mode=mode, updated_at=utcnow_naive())
         )
         await session.commit()
     await callback.answer(f"Режим: {mode}")
@@ -836,7 +837,7 @@ async def cb_mailing_cap_save(message: Message, state: FSMContext):
         await session.execute(
             update(Mailing)
             .where(Mailing.id == mailing_id)
-            .values(max_recipients=val, updated_at=datetime.utcnow())
+            .values(max_recipients=val, updated_at=utcnow_naive())
         )
         await session.commit()
     await message.answer(
@@ -867,7 +868,7 @@ async def cb_mailing_cd_save(message: Message, state: FSMContext):
         await session.execute(
             update(Mailing)
             .where(Mailing.id == mailing_id)
-            .values(mailing_cooldown_hours=hours, updated_at=datetime.utcnow())
+            .values(mailing_cooldown_hours=hours, updated_at=utcnow_naive())
         )
         await session.commit()
     await message.answer(
@@ -973,7 +974,7 @@ async def cb_mailing_aud_toggle(callback: CallbackQuery, state: FSMContext):
         await session.execute(
             update(Mailing).where(Mailing.id == mailing_id).values(
                 audience_filter_json=json.dumps(aud, ensure_ascii=False),
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -992,7 +993,7 @@ async def cb_mailing_aud_reset(callback: CallbackQuery, state: FSMContext):
         await session.execute(
             update(Mailing).where(Mailing.id == mailing_id).values(
                 audience_filter_json=None,
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -1060,7 +1061,7 @@ async def cb_mailing_aud_inc_save(message: Message, state: FSMContext):
         await session.execute(
             update(Mailing).where(Mailing.id == mailing_id).values(
                 audience_filter_json=json.dumps(aud, ensure_ascii=False),
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()
@@ -1093,7 +1094,7 @@ async def cb_mailing_aud_exc_save(message: Message, state: FSMContext):
         await session.execute(
             update(Mailing).where(Mailing.id == mailing_id).values(
                 audience_filter_json=json.dumps(aud, ensure_ascii=False),
-                updated_at=datetime.utcnow(),
+                updated_at=utcnow_naive(),
             )
         )
         await session.commit()

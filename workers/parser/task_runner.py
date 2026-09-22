@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime, timezone
+from utils.time import utcnow_naive
 from typing import Any, Optional
 
 from sqlalchemy import select, update
@@ -79,7 +80,7 @@ async def process_task(task_id: int) -> None:
                     snaps.append(AccountSnap(id=a.id, session_name=a.session_name, proxy=a.proxy))
             if not snaps:
                 task.status = "failed"
-                task.finished_at = datetime.utcnow()
+                task.finished_at = utcnow_naive()
                 task.last_error = "no valid accounts / sessions"
                 await session.commit()
                 await _append_log(
@@ -123,7 +124,7 @@ async def process_task(task_id: int) -> None:
                 await logfn(None, "error", "bad_kind", f"Unknown kind {task.kind}")
                 task.status = "failed"
                 task.last_error = "unknown kind"
-                task.finished_at = datetime.utcnow()
+                task.finished_at = utcnow_naive()
                 await session.commit()
                 return
 
@@ -133,7 +134,7 @@ async def process_task(task_id: int) -> None:
             else:
                 task.status = "completed"
                 task.progress_percent = 100
-                task.finished_at = datetime.utcnow()
+                task.finished_at = utcnow_naive()
                 task.current_stage = "done"
                 await logfn(None, "info", "completed", "OK")
             await session.commit()
@@ -145,7 +146,7 @@ async def process_task(task_id: int) -> None:
             if task and task.status not in ("completed", "cancelled"):
                 task.status = "failed"
                 task.last_error = str(e)[:2000]
-                task.finished_at = datetime.utcnow()
+                task.finished_at = utcnow_naive()
                 await session.commit()
             await _append_log(
                 session,

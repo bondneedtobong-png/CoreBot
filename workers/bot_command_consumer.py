@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
+from utils.time import utcnow_naive
 from typing import Optional
 
 from sqlalchemy import select, update
@@ -149,7 +150,7 @@ class BotCommandConsumer:
                 .values(
                     status="done",
                     error=detail or None,
-                    processed_at=datetime.utcnow(),
+                    processed_at=utcnow_naive(),
                 )
             )
             await session.commit()
@@ -163,7 +164,7 @@ class BotCommandConsumer:
                 .values(
                     status="failed",
                     error=err,
-                    processed_at=datetime.utcnow(),
+                    processed_at=utcnow_naive(),
                 )
             )
             await session.commit()

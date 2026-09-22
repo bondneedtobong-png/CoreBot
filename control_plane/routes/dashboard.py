@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 from collections import deque
 from pathlib import Path
 import re
@@ -41,7 +42,7 @@ def _tenant_scope_id(user):
 @router.get("/summary", response_model=DashboardSummaryOut)
 def summary(user=Depends(get_current_user), db: Session = Depends(get_db)):
     tenant_id = _tenant_scope_id(user)
-    since = datetime.utcnow() - timedelta(hours=24)
+    since = utcnow_naive() - timedelta(hours=24)
 
     q_agents = db.query(func.count(Agent.id)).filter(Agent.is_online == True)
     q_events = db.query(func.count(IngestEvent.id)).filter(IngestEvent.created_at >= since)
@@ -178,7 +179,7 @@ def openrouter_logs(
         try:
             created_at = datetime.strptime(m.group("ts"), "%Y-%m-%d %H:%M:%S")
         except Exception:
-            created_at = datetime.utcnow()
+            created_at = utcnow_naive()
         items.append(
             OpenRouterLogItemOut(
                 id=seq,

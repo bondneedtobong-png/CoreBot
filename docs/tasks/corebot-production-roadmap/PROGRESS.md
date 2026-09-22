@@ -24,5 +24,38 @@
 - Замечания/риски для следующих задач: SLO-цифры — допущения, валидировать
   метриками первых недель (задачи 08/11); задача 07 обязана покрыть
   Vault-политику и инвентарь «хост=пользователь»; миграции forward-only,
-  откат = restore бэкапа; `OPENROUTER_KEY_ENCRYPTION_KEY` обязателен при
+  откат = restore бэкапа;   `OPENROUTER_KEY_ENCRYPTION_KEY` обязателен при
   ключе в SQLite — не ослаблять.
+
+## 02 — Единая UTC-модель времени ✅ принята 2026-09-22
+
+- Commit: (см. git log, `refactor: task 02 unified UTC time model`).
+- База исполнения: `e20e2e3` (задача 01).
+- Изменённые файлы: нов. `utils/time.py` (`utcnow_naive`/`utcnow_aware` + docstring-правило
+  naive UTC для ORM до отдельной миграции схемы), нов. `tests/test_utc_time_model.py`
+  (9 тестов); замены `datetime.utcnow` → helper (~150 точек) в 28 файлах:
+  `bot/handlers/mailing.py`, `bot/handlers/proxy.py`, `control_plane/auth.py`,
+  `control_plane/business/{archive,dashboard,mailings,parsing,proxies}.py`,
+  `control_plane/models.py`, `control_plane/routes/{business,dashboard,ingest,stream}.py`,
+  `control_plane/services/alerts.py`, `control_plane/tasks.py`,
+  `database/{models,crm_repositories,repositories}.py`, `scripts/cleanup_dialogs.py`,
+  `services/database/client_export.py`, `utils/{app_logs,telemetry}.py`,
+  `workers/{bot_command_consumer,manager,warmup}.py`,
+  `workers/parser/{account_pool,filters,task_runner}.py`.
+  Наружу (SSE hello/ping, telemetry `ts`) — aware `+00:00`; значения из БД при
+  `.isoformat()` остались naive; `MAILING_BASE_UTC_OFFSET`, типы колонок,
+  исторические данные не тронуты.
+- Проверки (оркестратор, независимо от исполнителя): поиск `datetime.utcnow`
+  по `bot control_plane database services workers utils main.py` — 0 в коде
+  (только docstring-упоминания без скобок в `utils/time.py`); evaluated-at-import
+  defaults (`default=utcnow_naive()`) — 0; `python -m compileall -q ...` — exit 0;
+  `tests/test_utc_time_model.py` — 9/9; полный `pytest -q` — 62 passed, 2 failed;
+  оба падения — `tests/test_tdata_web_import.py` (`python-multipart` отсутствует),
+  доказано предсуществующими прогоном на чистом `e20e2e3` через `git stash`
+  (там же 2 failed); `data/corebot.db` открывается read-only, `integrity_check=ok`,
+  `accounts=5`, без миграции.
+- Отклонение от строгого DoD: `pytest -q` не полностью зелёный по причине вне скоупа
+  задачи (нет `python-multipart` в окружении) — передано задаче 10 (CI/requirements).
+- Риски следующим задачам: формат внешних `ts` naive → `+00:00` — проверить строгих
+  потребителей в 03/08; возможны isort/ruff-замечания по порядку импортов (задача 10);
+  остаточные `datetime.now(timezone.utc)` вне скоупа — аудит naive/aware в задаче 05.

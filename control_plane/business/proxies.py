@@ -19,6 +19,7 @@ from __future__ import annotations
 import socket
 import time
 from datetime import datetime
+from utils.time import utcnow_naive
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select, update
@@ -239,7 +240,7 @@ def test_proxy(
         ok = False
         detail = f"{type(e).__name__}: {e}"
     elapsed = int((time.perf_counter() - started) * 1000)
-    p.last_checked = datetime.utcnow()
+    p.last_checked = utcnow_naive()
     p.is_working = bool(ok)
     db.commit()
     return ProxyTestResult(

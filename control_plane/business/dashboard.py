@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -41,7 +42,7 @@ router = APIRouter(prefix="/business/dashboard", tags=["business-dashboard"])
 
 
 def _utc_window(hours: int) -> datetime:
-    return datetime.utcnow() - timedelta(hours=int(hours))
+    return utcnow_naive() - timedelta(hours=int(hours))
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -49,7 +50,7 @@ def dashboard_summary(
     db: Session = Depends(get_bot_db),
     _user: User = Depends(get_current_user),
 ):
-    now = datetime.utcnow()
+    now = utcnow_naive()
     since_24h = now - timedelta(hours=24)
 
     accounts_total = int(db.execute(select(func.count(Account.id))).scalar_one() or 0)
@@ -260,7 +261,7 @@ def dashboard_timeseries(
     # дополним пустые часы (чтобы фронт мог рисовать ровный график)
     fill: dict[str, int] = {}
     cursor = since.replace(minute=0, second=0, microsecond=0)
-    end = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    end = utcnow_naive().replace(minute=0, second=0, microsecond=0)
     while cursor <= end:
         fill[cursor.strftime("%Y-%m-%d %H:00")] = 0
         cursor += timedelta(hours=1)

@@ -30,6 +30,7 @@ from database.session import session_scope
 from database.models import Proxy, ProxyType
 from database.repositories import ProxyRepository, AccountRepository, ProxyGroupRepository
 from utils.logger import log
+from utils.time import utcnow_naive
 
 router = Router()
 
@@ -829,7 +830,7 @@ async def cb_proxy_check(callback: CallbackQuery):
             await ProxyRepository.update_status(
                 session, proxy_id,
                 is_working=is_working,
-                last_checked=datetime.utcnow(),
+                last_checked=utcnow_naive(),
             )
             proxy = await ProxyRepository.get_by_id(session, proxy_id)
 

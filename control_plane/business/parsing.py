@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from utils.time import utcnow_aware, utcnow_naive
 import asyncio
 import json
 from typing import Optional, AsyncGenerator
@@ -173,7 +174,7 @@ def cancel_task(
     if t.status in ("completed", "failed", "cancelled"):
         return _task_to_out(t)
     t.status = "cancelled"
-    t.finished_at = datetime.utcnow()
+    t.finished_at = utcnow_naive()
     t.current_stage = "cancelled"
     t.last_error = None
     db.add(t)
@@ -426,7 +427,7 @@ async def parsing_stream(
     async def gen() -> AsyncGenerator[bytes, None]:
         last_log_id = 0
         last_tasks_sig = ""
-        yield _sse_event("hello", {"ts": datetime.utcnow().isoformat()})
+        yield _sse_event("hello", {"ts": utcnow_aware().isoformat()})
         while True:
             if await request.is_disconnected():
                 break

@@ -1,4 +1,5 @@
 from datetime import datetime
+from utils.time import utcnow_naive
 
 from sqlalchemy import (
     Column,
@@ -21,7 +22,7 @@ class Tenant(Base):
     __tablename__ = "cp_tenants"
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(120), unique=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
 
 class User(Base):
@@ -32,7 +33,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(String(40), default="tenant_viewer")
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     tenant = relationship("Tenant")
 
@@ -46,7 +47,7 @@ class Agent(Base):
     version = Column(String(64), nullable=True)
     last_seen_at = Column(DateTime, nullable=True)
     is_online = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     tenant = relationship("Tenant")
 
@@ -59,7 +60,7 @@ class AgentToken(Base):
     agent_id = Column(Integer, ForeignKey("cp_agents.id"), nullable=False)
     token_hash = Column(String(255), nullable=False, unique=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
     rotated_at = Column(DateTime, nullable=True)
 
     agent = relationship("Agent")
@@ -76,7 +77,7 @@ class IngestEvent(Base):
     message = Column(Text, nullable=False)
     payload_json = Column(Text, nullable=True)
     schema_version = Column(String(32), default="1")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     __table_args__ = (
         Index("ix_cp_ingest_tenant_created", "tenant_id", "created_at"),
@@ -92,7 +93,7 @@ class MetricPoint(Base):
     name = Column(String(80), nullable=False)
     value = Column(Float, nullable=False)
     tags_json = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     __table_args__ = (Index("ix_cp_metric_tenant_name_created", "tenant_id", "name", "created_at"),)
 
@@ -109,8 +110,8 @@ class Alert(Base):
     details = Column(Text, nullable=True)
     status = Column(String(20), default="open")
     count = Column(Integer, default=1)
-    last_triggered_at = Column(DateTime, default=datetime.utcnow)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    last_triggered_at = Column(DateTime, default=utcnow_naive)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     __table_args__ = (Index("ix_cp_alert_tenant_fingerprint", "tenant_id", "fingerprint"),)
 
@@ -124,4 +125,4 @@ class AuditLog(Base):
     target_type = Column(String(80), nullable=True)
     target_id = Column(String(80), nullable=True)
     details = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)

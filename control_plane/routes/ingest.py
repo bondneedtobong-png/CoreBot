@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime
+from utils.time import utcnow_naive
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -25,7 +26,7 @@ async def ingest_batch(
     if not x_agent_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing agent token")
     agent = resolve_agent_by_token(x_agent_token, db)
-    agent.last_seen_at = datetime.utcnow()
+    agent.last_seen_at = utcnow_naive()
     agent.is_online = True
     if payload.version:
         agent.version = payload.version

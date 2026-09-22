@@ -2,6 +2,7 @@
 SQLAlchemy модели базы данных.
 """
 from datetime import datetime
+from utils.time import utcnow_naive
 from sqlalchemy import (
     Column,
     Integer,
@@ -103,7 +104,7 @@ class Proxy(Base):
     is_working = Column(Boolean, default=True)  # Результат последней проверки
     
     # Метаданные
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
     
     # Связи
     accounts = relationship("Account", back_populates="proxy")
@@ -161,7 +162,7 @@ class Account(Base):
     # Статистика
     messages_sent = Column(Integer, default=0)
     messages_failed = Column(Integer, default=0)
-    last_activity = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_activity = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
     # FloodWait информация
     flood_wait_until = Column(DateTime, nullable=True)  # До какого времени блок
@@ -169,7 +170,7 @@ class Account(Base):
     # Лимиты
     daily_limit = Column(Integer, default=20)  # Лимит сообщений в день
     messages_today = Column(Integer, default=0)  # Отправлено сегодня
-    last_reset = Column(DateTime, default=datetime.utcnow)  # Сброс счётчика
+    last_reset = Column(DateTime, default=utcnow_naive)  # Сброс счётчика
 
     # Спам-блок
     spam_check_date = Column(DateTime, nullable=True)
@@ -185,8 +186,8 @@ class Account(Base):
     warmup_pause_reason = Column(String(255), nullable=True)
 
     # Метаданные
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
+    updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
     # Связи
     mailing_logs = relationship("MailingLog", back_populates="account")
@@ -232,7 +233,7 @@ class ProxyGroup(Base):
     name = Column(String(100), unique=True, nullable=False)
     # Курсор round-robin по свободным прокси внутри группы.
     rr_cursor = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     proxies = relationship("Proxy", back_populates="group")
 
@@ -250,7 +251,7 @@ class Group(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), unique=True, nullable=False)  # Название группы (Колумбия, USA и т.д.)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     # Связи
     accounts = relationship("Account", secondary=account_groups, back_populates="groups")
@@ -275,7 +276,7 @@ class Client(Base):
     status = Column(Enum(ClientStatus), default=ClientStatus.NEW)
     
     # Метаданные
-    added_at = Column(DateTime, default=datetime.utcnow)
+    added_at = Column(DateTime, default=utcnow_naive)
     last_contacted_at = Column(DateTime, nullable=True)
     
     # Связи
@@ -339,7 +340,7 @@ class ClientTag(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
     tag = Column(String(128), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     client = relationship("Client", back_populates="tags")
 
@@ -367,7 +368,7 @@ class ClientInteraction(Base):
     body = Column(Text, nullable=True)
     payload_json = Column(Text, nullable=True)
     telegram_message_id = Column(BigInteger, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     client = relationship("Client", back_populates="interactions")
     account = relationship("Account", back_populates="client_interactions")
@@ -397,7 +398,7 @@ class ClientAliveWindow(Base):
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
     window_key = Column(Integer, nullable=False)  # int(utc_timestamp // 3600)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
 
 class ClientMailSession(Base):
@@ -423,8 +424,8 @@ class ClientMailSession(Base):
     mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
     first_outbound_at = Column(DateTime, nullable=True)
     success_end_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
+    updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
     client = relationship("Client", back_populates="mail_sessions")
     account = relationship("Account", back_populates="client_mail_sessions")
@@ -452,7 +453,7 @@ class ClientAcceptTranscript(Base):
         unique=True,
     )
     messages_json = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     mail_session = relationship("ClientMailSession", back_populates="accept_transcript")
 
@@ -494,8 +495,8 @@ class Mailing(Base):
     # Метаданные
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
+    updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
     # Аудитория и контент (расширения)
     target_group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
@@ -543,7 +544,7 @@ class MailingTestRecipient(Base):
     mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
     username = Column(String(255), nullable=False)
     client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
 
 class MailingLocalClassCounter(Base):
@@ -597,7 +598,7 @@ class MailingLog(Base):
     message_id = Column(Integer, nullable=True)  # ID отправленного сообщения
     
     # Метаданные
-    sent_at = Column(DateTime, default=datetime.utcnow)
+    sent_at = Column(DateTime, default=utcnow_naive)
     
     # Связи
     mailing = relationship("Mailing", back_populates="logs")
@@ -623,7 +624,7 @@ class NeuroChatMessage(Base):
     peer_user_id = Column(BigInteger, nullable=False)
     role = Column(String(20), nullable=False)  # user | assistant
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     account = relationship("Account", back_populates="neuro_chat_messages")
 
@@ -642,7 +643,7 @@ class NeuroActionLog(Base):
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
     action = Column(String(50), nullable=False)  # SEND_LINK | STOP
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     def __repr__(self):
         return f"<NeuroAction {self.action} mailing={self.mailing_id} client={self.client_id}>"
@@ -680,7 +681,7 @@ class NeuroStopList(Base):
     mailing_id = Column(Integer, ForeignKey("mailings.id"), nullable=False)
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     def __repr__(self):
         return f"<NeuroStop mailing={self.mailing_id} account={self.account_id} client={self.client_id}>"
@@ -700,8 +701,8 @@ class WarmupProfile(Base):
     # Сообщества/чаты для активности (строка: по одному username/ссылке на строку).
     target_chats_text = Column(Text, nullable=True, default="")
     enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
+    updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
     def __repr__(self):
         return f"<WarmupProfile {self.name}>"
@@ -721,7 +722,7 @@ class WarmupLog(Base):
     action = Column(String(64), nullable=False)
     status = Column(String(20), nullable=False, default="ok")  # ok | skip | fail
     details = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
 
     def __repr__(self):
         return f"<WarmupLog acc={self.account_id} {self.action} {self.status}>"
@@ -752,7 +753,7 @@ class OutboundQueue(Base):
     requested_by = Column(String(120), nullable=True)
     attempts = Column(Integer, nullable=False, default=0)
     next_attempt_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow_naive)
     sent_at = Column(DateTime, nullable=True)
 
     def __repr__(self):
@@ -784,7 +785,7 @@ class NeuroChatMessageArchive(Base):
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, nullable=False)
-    archived_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    archived_at = Column(DateTime, default=utcnow_naive, nullable=False)
 
     def __repr__(self):
         return f"<NeuroChatMessageArchive original_id={self.original_id}>"
@@ -816,7 +817,7 @@ class ClientInteractionArchive(Base):
     payload_json = Column(Text, nullable=True)
     telegram_message_id = Column(BigInteger, nullable=True)
     created_at = Column(DateTime, nullable=False)
-    archived_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    archived_at = Column(DateTime, default=utcnow_naive, nullable=False)
 
     def __repr__(self):
         return f"<ClientInteractionArchive original_id={self.original_id}>"
@@ -850,7 +851,7 @@ class BotCommand(Base):
     status = Column(String(20), nullable=False, default="pending")  # pending|done|failed|cancelled
     error = Column(Text, nullable=True)
     requested_by = Column(String(120), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)
     processed_at = Column(DateTime, nullable=True)
 
     def __repr__(self):
@@ -894,7 +895,7 @@ class ParsingTask(Base):
     depth = Column(Integer, nullable=False, default=1)
     mode = Column(String(32), nullable=False, default="max_coverage")
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
     requested_by = Column(String(120), nullable=True)
@@ -919,7 +920,7 @@ class ParsingTaskLog(Base):
     event = Column(String(64), nullable=False)
     message = Column(Text, nullable=True)
     payload_json = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)
 
     task = relationship("ParsingTask", backref="logs", foreign_keys=[task_id])
 
@@ -943,7 +944,7 @@ class ParsedChannel(Base):
     last_post_at = Column(DateTime, nullable=True)
     is_active_7d = Column(Boolean, nullable=True)
     source_task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="SET NULL"), nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
     def __repr__(self):
         return f"<ParsedChannel {self.telegram_id} @{self.username}>"
@@ -965,7 +966,7 @@ class ParsedGroup(Base):
     lang = Column(String(16), nullable=True)
     is_active_7d = Column(Boolean, nullable=True)
     source_task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="SET NULL"), nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
     def __repr__(self):
         return f"<ParsedGroup {self.telegram_id}>"
@@ -988,7 +989,7 @@ class ParsedUser(Base):
     is_deleted = Column(Boolean, nullable=False, default=False)
     is_suspicious = Column(Boolean, nullable=False, default=False)
     source_task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="SET NULL"), nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
 
     def __repr__(self):
         return f"<ParsedUser {self.telegram_id}>"
@@ -1016,6 +1017,6 @@ class ParsedUserSource(Base):
     source_entity_kind = Column(String(16), nullable=False)  # channel | group
     source_kind = Column(String(32), nullable=False)  # member | active | commenter
     source_task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)
 
     user = relationship("ParsedUser", backref="sources", foreign_keys=[parsed_user_id])

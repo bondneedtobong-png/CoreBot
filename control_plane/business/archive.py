@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -57,7 +58,7 @@ def _build_filters(payload: CleanupRequestV2, db: Session):
         )
 
     if payload.older_than_days is not None:
-        threshold = datetime.utcnow() - timedelta(days=int(payload.older_than_days))
+        threshold = utcnow_naive() - timedelta(days=int(payload.older_than_days))
         msg_filters.append(NeuroChatMessage.created_at < threshold)
         interaction_filters.append(ClientInteraction.created_at < threshold)
 
@@ -154,7 +155,7 @@ def cleanup_v2(
 
     archive_mode = payload.mode == "archive"
     batch_size = max(1, int(payload.batch_size))
-    archived_at = datetime.utcnow()
+    archived_at = utcnow_naive()
 
     # ----- messages -----
     deleted_messages = 0

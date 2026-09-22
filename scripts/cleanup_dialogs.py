@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 
 from sqlalchemy import and_, create_engine, delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -90,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             msg_filters.append(NeuroChatMessage.peer_user_id == int(args.peer))
 
         if args.older_days is not None:
-            threshold = datetime.utcnow() - timedelta(days=int(args.older_days))
+            threshold = utcnow_naive() - timedelta(days=int(args.older_days))
             msg_filters.append(NeuroChatMessage.created_at < threshold)
             inter_filters.append(ClientInteraction.created_at < threshold)
 

@@ -7,6 +7,7 @@ import asyncio
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from utils.time import utcnow_naive
 from pathlib import Path
 from typing import Optional
 
@@ -69,7 +70,7 @@ def choose_warmup_action(now: Optional[datetime] = None) -> str:
     """
     Умеренный профиль действий (без агрессивного поведения).
     """
-    _ = now or datetime.utcnow()
+    _ = now or utcnow_naive()
     actions = (
         "read_dialogs",
         "read_channels",
@@ -224,7 +225,7 @@ class WarmupRunner:
                     await AccountRepository.set_warmup_pause(
                         session,
                         account.id,
-                        until=datetime.utcnow(),
+                        until=utcnow_naive(),
                         reason="daily_limit_reached",
                     )
                     await WarmupLogRepository.create(
@@ -249,7 +250,7 @@ class WarmupRunner:
                     else:
                         status, details = await self._do_action(worker, action, targets)
                 except errors.FloodWaitError as e:
-                    pause_until = datetime.utcnow() + timedelta(seconds=int(e.seconds or 60))
+                    pause_until = utcnow_naive() + timedelta(seconds=int(e.seconds or 60))
                     await AccountRepository.set_warmup_pause(
                         session,
                         account.id,
@@ -268,7 +269,7 @@ class WarmupRunner:
                     status = "error"
                     details = f"err={str(e)[:180]}"
 
-                next_run = datetime.utcnow() + timedelta(seconds=delay)
+                next_run = utcnow_naive() + timedelta(seconds=delay)
                 await AccountRepository.mark_warmup_action(
                     session,
                     account_id=account.id,

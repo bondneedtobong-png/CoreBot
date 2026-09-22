@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from utils.time import utcnow_naive
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -302,7 +303,7 @@ def patch_mailing(
 
     if hasattr(m, "updated_at"):
         try:
-            m.updated_at = datetime.utcnow()
+            m.updated_at = utcnow_naive()
         except Exception:
             pass
 
