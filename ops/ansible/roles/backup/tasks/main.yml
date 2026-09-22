@@ -9,7 +9,9 @@
     state: directory
     owner: "{{ corebot_user }}"
     group: "{{ corebot_group | default(corebot_user) }}"
-    mode: "0755"
+    # Task 09 at-rest default: protected directory 0700 (archives inside are
+    # 0600; backup_corebot.sh enforces both on every run).
+    mode: "0700"
   become: true
   tags: [backup]
 

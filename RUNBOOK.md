@@ -377,20 +377,43 @@ systemctl status corebot.service
 
 ---
 
-## 11) Бэкапы (минимальный рабочий стандарт)
+## 11) Бэкапы (стандарт задачи 09)
 
-Бэкапьте:
+Бэкап делает `skills/corebot-vps-deploy/scripts/backup_corebot.sh`
+(он же вызывается обновлением и Ansible-ролью `backup`):
 
-- `/opt/corebot/app/data/`
-- `/opt/corebot/app/.env` (в защищённое место)
+- состав: `.env`, `data/corebot.db`, `data/control_plane.db`,
+  `data/sessions/` (плюс `logs/` по возможности);
+- SQLite снимается consistent-снапшотом (`.backup` API/CLI), бот
+  не останавливается;
+- архив `/opt/corebot/backups/corebot-<YYYYMMDDTHHMMSSZ>.tar.gz` (права
+  `600`, каталог `700`), внутри `backup_manifest.json` (инстанс, релиз,
+  UTC-метка, `user_version` + `tables_hash` БД, sha256 файлов), рядом
+  `<архив>.sha256` и cron-метка `.last_backup_ok`;
+- retention: хранить 7 штук / 30 дней, последний успешный бэкап
+  не удаляется никогда; перед стартом проверяется место
+  (`data x2 + 256 МБ`), параллельные запуски сериализуются (`flock`);
+- расписание: `systemd/corebot-backup.{service,timer}` из скилла
+  (ежедневно 03:17 + случайная задержка до 15 мин) — скопировать в
+  `/etc/systemd/system`, `systemctl enable --now corebot-backup.timer`;
+  неуспех — `OnFailure`-алерт, просрочка > 26 ч — варнинг watchdog
+  (видно в `python -m tools.instance_status`);
+- шифрование: дефолт — защищённый каталог `700` + файлы `600`;
+  `--encrypt` (пароль из файла `600` вне репо) дописывает `<архив>.enc`
+  для выноса с хоста.
 
-Пример ручного бэкапа:
+Восстановление — только в пустой каталог (проверки manifest/checksum до
+распаковки, перезапись живого инстанса запрещена всегда):
 
 ```bash
-tar -czvf /opt/corebot/corebot-data-$(date +%F).tar.gz -C /opt/corebot/app data
+sudo -u corebot bash /opt/corebot/app/skills/corebot-vps-deploy/scripts/restore_corebot.sh \
+  --archive /opt/corebot/backups/<corebot-YYYYMMDDTHHMMSSZ.tar.gz> --target /tmp/restore-drill
 ```
 
-Рекомендуется cron раз в сутки.
+Полный restore drill (замер времени, сравнение с RTO):
+`docs/operations/BACKUP_RESTORE_DRILL.md` — повторять не реже раза в
+90 дней. Ручной бэкап одной командой: `sudo -u corebot bash
+/opt/corebot/app/skills/corebot-vps-deploy/scripts/backup_corebot.sh`.
 
 ### 11.1 Восстановление данных при переносе на новый VPS (локальный ПК -> VPS)
 
@@ -568,6 +591,11 @@ journalctl -u corebot.service -u corebot-cp.service -n 100 --no-pager
 ---
 
 ## 17) Восстановление после неудачного обновления (авто-rollback и ручной откат)
+
+Для восстановления в пустой каталог (перенос, drill) используйте
+`skills/corebot-vps-deploy/scripts/restore_corebot.sh` — он всегда
+отказывается перезаписывать живой инстанс. Откат на месте (в живой
+`/opt/corebot/app`) выполняется вручную, как ниже.
 
 Обновление `scripts/update_corebot.sh --sha <sha>` при провале readiness/version-гейта
 откатывается само: возвращает предыдущий код, восстанавливает `.env`/`data/` из

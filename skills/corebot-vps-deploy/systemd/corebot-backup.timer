@@ -1,0 +1,11 @@
+[Unit]
+Description=CoreBot daily backup timer (RPO <= 24h, SLO section 4)
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=corebot-backup.service
+
+[Install]
+WantedBy=timers.target

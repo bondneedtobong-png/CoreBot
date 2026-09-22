@@ -23,7 +23,6 @@ Obtain the SSH host/user, source method (Git checkout or uploaded directory), an
 8. After any install or update, report deployed SHA/version via `scripts/release_status.sh` and live `GET /version`. Never report success if `/health/ready` is not HTTP 200.
 
 ## Safety contract
-
 - The installer refuses a non-empty target directory.
 - Never overwrite an existing `.env`, `data/`, `logs/`, or `data/sessions/`.
 - Reject empty Telegram credentials and unsafe values such as `change-me` or `admin123`.
@@ -35,12 +34,45 @@ Obtain the SSH host/user, source method (Git checkout or uploaded directory), an
 - Restart order is always `corebot-cp.service` then `corebot.service`; the "new bot + old Control Plane" state is forbidden (checked via `/version` before success).
 - Rollback is automatic on readiness/version failure: previous code plus `.env`/`data/` from the pre-update backup, services restarted in the same order, health re-checked.
 
+## Backups and restore (task 09)
+
+- Backup via `scripts/backup_corebot.sh` (online: SQLite through the
+  `.backup` API or `backup_lib.py`, never a blind live `.db`/`-wal` copy).
+  Archive `corebot-<UTC>.tar.gz` (mode `600`) in `/opt/corebot/backups/`
+  (mode `700`) holds `backup_manifest.json` (instance id/name, release
+  version/SHA, UTC timestamp, DB `user_version` + `tables_hash`, per-file
+  sha256/size) plus a sibling `<archive>.sha256` sidecar and a
+  `.last_backup_ok` cron marker (watchdog/`instance_status` derive
+  `backup_age_h` from archive mtime; alert when `> 26h`).
+- Retention: keep 7 / 30 days; the newest successful backup is never
+  deleted. Preflight refuses the run when free space is below
+  `data x2 + 256MB`. Concurrent runs serialize via `flock` (duplicate
+  exits 0 with no path — callers treat empty output as "no fresh backup").
+- At-rest default is the protected `700`/`600` layout; `--encrypt`
+  additionally writes `<archive>.enc` (openssl aes-256-cbc/pbkdf2,
+  passphrase from a `600` file) for off-host copies.
+- Daily schedule: `systemd/corebot-backup.service` + `corebot-backup.timer`
+  (`03:17`, `RandomizedDelaySec=15min`, `Persistent=true`,
+  `OnFailure=corebot-backup-alert.service`); install by copying the units
+  to `/etc/systemd/system` and `systemctl enable --now` (idempotent).
+- Restore only into an EMPTY directory with
+  `scripts/restore_corebot.sh --archive <path> --target <empty-dir>`
+  (sidecar + manifest verified first; live-instance overwrite is always
+  refused, `--allow-nonempty` covers stray non-live files only); after
+  restore both DBs must pass `integrity_check`.
+- Full drill (timed, within RTO): `docs/operations/BACKUP_RESTORE_DRILL.md`
+  (repeat at least every 90 days); automated coverage in
+  `tests/test_backup_restore.py`.
+
 ## Commands
 
 ```bash
 sudo bash scripts/install_corebot.sh --source-dir /tmp/CoreBot --env-file /root/corebot.env
 sudo bash scripts/verify_corebot.sh
 sudo bash scripts/backup_corebot.sh
+sudo bash scripts/backup_corebot.sh --encrypt  # needs BACKUP_PASSPHRASE_FILE (0600, off-repo)
+sudo bash scripts/restore_corebot.sh --archive /opt/corebot/backups/<corebot-UTC.tar.gz> --target /tmp/restore-drill
+python3 /opt/corebot/app/scripts/backup_lib.py integrity-check --db /tmp/restore-drill/data/corebot.db
 cd /opt/corebot/app && sudo bash scripts/update_corebot.sh --dry-run --sha <sha>
 cd /opt/corebot/app && sudo bash scripts/update_corebot.sh --sha <sha>
 bash scripts/release_status.sh

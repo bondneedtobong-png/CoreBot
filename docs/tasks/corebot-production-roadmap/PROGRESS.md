@@ -221,3 +221,31 @@
   drill 09 проверяет cron-метку отдельно; cooldown state процесс-локальный
   (рестарт CP = 1 возможный повтор); heartbeat ~4 записи/мин в WAL —
   пренебрежимо для нагрузки 11.
+
+## 09 — Автоматические бэкапы и проверенный restore ✅ принята 2026-09-22
+
+- Commit: (см. git log, `feat: task 09 backup manifest, retention, restore drill`).
+- База исполнения: `a77dc86` (задача 08).
+- Создано: `scripts/backup_lib.py` (manifest `corebot-backup/1`: build/verify,
+  sidecar .sha256, retention-план, sqlite backup API, db identity,
+  integrity_check, сводка без секретов), `skills/.../scripts/restore_corebot.sh`
+  (exit 2/3/4/5/6/7; отказ на непустой/live-каталог; права 600/755/644;
+  manifest+sha verify до restore; integrity после), `skills/.../systemd/`
+  (backup.service oneshot + OnFailure, backup.timer ежедневно 03:17 +
+  RandomizedDelay 15мин + Persistent, backup-alert.service),
+  `tests/test_backup_restore.py` (23), `docs/operations/BACKUP_RESTORE_DRILL.md`
+  (drill 2026-09-22, следующий ≤2026-12-21).
+- Изменено: `backup_corebot.sh` (manifest+retention keep7/30d+preflight data×2+256МБ
+  + `.last_backup_ok` + `--encrypt` + flock; stdout-контракт сохранён),
+  skill SKILL.md, `RUNBOOK.md` (§11, §17), ansible backup-роль (каталог 0700),
+  `.gitignore` (`*.tar.gz*`, `.last_backup_ok`).
+- Проверки (оркестратор): `bash -n` backup/restore — OK; `test_backup_restore` —
+  23/23 (вкл. backup-под-нагрузкой); полный `pytest -q` — 208 passed + те же 2
+  предсуществующих tdata/multipart; drill-док содержит измеренный RTO ~24с
+  (бюджеты ≤60мин/≤4ч) и integrity ok/ok; `git diff --check` чист; архивы
+  не коммитятся; контракты, `.env`, `data/*` не тронуты.
+- Решение по шифрованию: дефолт — каталог 700 + файлы 600; опциональный
+  `--encrypt` (openssl aes-256-cbc/pbkdf2, пароль из файла 600 вне репо).
+- Риски следующим задачам: watchdog читает backup_age по mtime архивов, не по
+  маркеру (согласовано, не менялось); timer-юниты проверены статически — на VPS
+  ручной enable + drill; flock-занятость → пустой stdout (update это отвергает).

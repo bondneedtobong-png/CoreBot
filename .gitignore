@@ -45,3 +45,7 @@ ops/ansible/group_vars/**/vault.yml
 .vault-password-file
 vault-password-file
 /tmp/corebot-fleet-reports/
+
+# Backup archives (task 09, generated in /opt/corebot/backups, never committed)
+*.tar.gz*
+.last_backup_ok

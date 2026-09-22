@@ -1,0 +1,17 @@
+[Unit]
+Description=CoreBot backup failure alert (triggered by OnFailure)
+After=network.target
+
+[Service]
+Type=oneshot
+User=corebot
+Group=corebot
+# Immediate signal: journal + syslog. Staleness coverage is independent of
+# this unit: the in-CP watchdog raises a `storage:backup-stale` warning when
+# backup_age_h > 26h (SLO #6), and `tools/instance_status` shows the same
+# age — so even a silently-dead timer is caught within a day.
+ExecStart=/bin/bash -c 'echo "corebot-backup.service FAILED — check journalctl -u corebot-backup.service and /opt/corebot/backups" | /usr/bin/logger -t corebot-backup -p user.warning'
+SyslogIdentifier=corebot-backup-alert
+
+[Install]
+WantedBy=multi-user.target

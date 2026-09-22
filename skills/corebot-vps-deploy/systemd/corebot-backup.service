@@ -1,0 +1,19 @@
+[Unit]
+Description=CoreBot daily data backup (manifest + retention)
+After=network.target
+OnFailure=corebot-backup-alert.service
+
+[Service]
+Type=oneshot
+User=corebot
+Group=corebot
+WorkingDirectory=/opt/corebot/app
+ExecStart=/opt/corebot/app/skills/corebot-vps-deploy/scripts/backup_corebot.sh
+SyslogIdentifier=corebot-backup
+# Non-parallelism: systemd never runs two instances of this oneshot unit
+# concurrently, and the script itself takes `flock -n` on
+# /opt/corebot/backups/.backup.lock — a duplicate run exits 0 ("already
+# running") instead of producing a second archive.
+
+[Install]
+WantedBy=multi-user.target
