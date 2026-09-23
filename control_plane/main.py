@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from starlette.types import Scope
 
 from control_plane.auth import hash_password
 from control_plane.config import CP_BOOTSTRAP_ADMIN_USERNAME, CP_BOOTSTRAP_ADMIN_PASSWORD
@@ -113,8 +114,24 @@ app.include_router(biz_tdata_router)
 app.include_router(biz_tdata_check_router)
 
 web_dir = Path(__file__).parent.parent / "web-panel"
+
+
+class NoStoreStaticFiles(StaticFiles):
+    """Serve the local web panel without HTTP caching.
+
+    The panel is a local admin UI edited in place; heuristic browser caching
+    of index.html/main.js caused stale (pre-fix) bundles to render after
+    updates. ``no-store`` forces revalidation on every load.
+    """
+
+    async def get_response(self, path: str, scope: Scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 if web_dir.exists():
-    app.mount("/panel", StaticFiles(directory=str(web_dir), html=True), name="panel")
+    app.mount("/panel", NoStoreStaticFiles(directory=str(web_dir), html=True), name="panel")
 
 
 def bootstrap_defaults() -> None:

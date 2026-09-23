@@ -366,3 +366,32 @@
 - Follow-up (от исполнителя): SPA-экран проверки (web-panel/main.js с двойной
   кодировкой кириллицы — отдельный проход с браузерными тестами); фоновый job
   при лимитах >50 папок; SpamBot-probe по умолчанию опционально.
+
+## 13 — Web-панель UX/UI ✅ принята 2026-09-23
+
+- Commit: (см. git log, `feat: task 13 web-panel UX/UI + mojibake fix, no-store static`).
+- База исполнения: `dbd6bed` (задача 12). Вне очереди 01–11, по решению владельца.
+- Причина: кириллица в `web-panel/` была в двойной кодировке
+  (UTF-8→Windows-1251→UTF-8 + BOM); плюс браузер показывал старый бандл из
+  кэша (ассеты без версий, статика без `Cache-Control`).
+- Изменено: `web-panel/index.html` (UTF-8 без BOM, `lang="ru"`, meta charset,
+  версия ассетов `?v=20260923-ux-v1`, навигация/TData/drawer/skip-link),
+  `web-panel/main.js` (перекодированы 563 строки: навигация, экран
+  `tdata-check` на реальный API `/business/tdata/check`, таблицы/формы/логи,
+  `#mailingCreateForm`→`#mailCreateForm`), `web-panel/styles.css` (токены
+  `:root`, кнопки/бейджи/таблицы, responsive drawer, `prefers-reduced-motion`),
+  `control_plane/main.py` (`NoStoreStaticFiles`: `/panel` с
+  `Cache-Control: no-store`, иначе правки не видны без ручной чистки кэша).
+- Создано: `tests/test_web_panel_ux.py` (10 тестов: mojibake-guard,
+  BOM/meta, MIME+charset, версии ассетов, no-store, проводка TData/навигации).
+- Проверки (оркестратор): скан `Р[џа-я]|вЂ|…` по `web-panel/` — 0;
+  декодированный текст: U+FFFD 0, C1 0; `tests/test_web_panel_ux.py` 10/10;
+  живой сервер `127.0.0.1:8081`: `/panel/`, `main.js`, `styles.css` — 200,
+  `charset=utf-8`, `Cache-Control: no-store`, байты == диску, маркеры 0;
+  `ruff check` clean; `git diff --check` чист.
+- Отклонение от DoD: браузерная приёмка (6 экранов со скриншотами) не
+  выполнена оркестратором (нет playwright); вместо этого — побайтовая
+  сверка served-контента с диском + требование Ctrl+F5 у владельца для сброса
+  старого кэша. Предсуществующий фейл
+  `tests/test_observability.py::test_cli_human_readable_empty_dir_is_down`
+  (`assert 0 == 2`, воспроизводится на чистом `dbd6bed`) — не в скоупе.

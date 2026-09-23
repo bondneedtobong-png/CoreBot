@@ -203,3 +203,202 @@ code { background: rgba(15,23,42,0.6); border: 1px solid rgba(148,163,184,0.2); 
 #tdataDropZone:hover, #tdataDropZone.dragover { border-color: #3b82f6; background: rgba(59,130,246,.06); }
 #tdataDropZone .tdata-ico { font-size: 2rem; margin-bottom: .5rem; color: #60a5fa; }
 .tdata-file { display: flex; align-items: center; gap: .5rem; color: #cbd5e1; font-size: .875rem; }
+
+/* ================= Task 13 — design tokens & primitives =================
+   Единая визуальная система поверх Tailwind-утилит. Переменные — источник
+   истины для поверхностей/текста/границ/статусов; примитивы .btn/.field
+   используются в shell и новых экранах, старый markup не ломается. */
+
+:root {
+  --cb-bg: #0b1220;
+  --cb-surface: #0f172a;
+  --cb-surface-2: #111a2e;
+  --cb-surface-3: #1e293b;
+  --cb-text: #e2e8f0;
+  --cb-text-dim: #cbd5e1;
+  --cb-text-muted: #94a3b8;
+  --cb-text-faint: #64748b;
+  --cb-border: #1e293b;
+  --cb-border-strong: #334155;
+  --cb-accent: #3b82f6;
+  --cb-accent-strong: #2563eb;
+  --cb-ok: #4ade80;
+  --cb-warn: #fbbf24;
+  --cb-danger: #fb7185;
+  --cb-info: #60a5fa;
+  --cb-radius-sm: .375rem;
+  --cb-radius-md: .5rem;
+  --cb-radius-lg: .875rem;
+  --cb-space-1: .25rem;
+  --cb-space-2: .5rem;
+  --cb-space-3: .75rem;
+  --cb-space-4: 1rem;
+  --cb-space-6: 1.5rem;
+}
+
+/* Skip-link: виден только при фокусе с клавиатуры */
+.skip-link {
+  position: fixed;
+  top: -100px;
+  left: 12px;
+  z-index: 10000;
+  background: var(--cb-accent-strong);
+  color: #fff;
+  padding: .5rem 1rem;
+  border-radius: var(--cb-radius-md);
+  font-size: .875rem;
+  transition: top 120ms ease;
+}
+.skip-link:focus-visible { top: 12px; }
+
+/* Видимый клавиатурный фокус везде */
+:focus-visible {
+  outline: 2px solid var(--cb-accent);
+  outline-offset: 2px;
+  border-radius: var(--cb-radius-sm);
+}
+#cpInput:focus { outline: none; }
+
+/* Кнопки-примитивы: primary / secondary / destructive / ghost.
+   Состояния hover / focus-visible / disabled / loading — всегда. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .375rem;
+  padding: .5rem 1rem;
+  border-radius: var(--cb-radius-md);
+  font-size: .875rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+  white-space: nowrap;
+}
+.btn-primary { background: var(--cb-accent-strong); border-color: var(--cb-accent-strong); color: #fff; }
+.btn-primary:hover { background: var(--cb-accent); border-color: var(--cb-accent); }
+.btn-secondary { background: var(--cb-surface-3); border-color: var(--cb-border-strong); color: var(--cb-text); }
+.btn-secondary:hover { background: #273449; }
+.btn-danger { background: #b91c1c; border-color: #b91c1c; color: #fff; }
+.btn-danger:hover { background: #dc2626; }
+.btn-ghost { background: transparent; border-color: var(--cb-border-strong); color: var(--cb-text-dim); }
+.btn-ghost:hover { background: var(--cb-surface-3); color: #fff; }
+.btn:disabled, .btn[aria-disabled="true"] {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.btn[data-loading="1"] { opacity: .7; cursor: wait; }
+
+/* Поля и подпись ошибки под полем (не только цвет: текст + иконка) */
+.field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: .375rem;
+  color: var(--cb-danger);
+  font-size: .75rem;
+  margin-top: .25rem;
+}
+.field-error::before { content: "⚠"; flex-shrink: 0; }
+input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] {
+  border-color: #f43f5e !important;
+}
+
+/* Группы навигации */
+.nav-group-label {
+  padding: .75rem .75rem .25rem;
+  font-size: .65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--cb-text-faint);
+}
+.nav-group-label:first-child { padding-top: .25rem; }
+
+/* Кнопка-бургер (только узкий экран) и фон drawer */
+.nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--cb-radius-md);
+  border: 1px solid var(--cb-border-strong);
+  background: var(--cb-surface-2);
+  color: var(--cb-text);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.nav-toggle:hover { background: var(--cb-surface-3); }
+#navBackdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(2, 6, 23, .6);
+}
+
+/* Таблицы: горизонтальный скролл-контейнер + sticky header */
+.table-scroll { overflow-x: auto; max-width: 100%; }
+/* Карточки-таблицы (p-0 + overflow-hidden): таблицы не ломают layout,
+   на узком экране появляется внутренний горизонтальный скролл. */
+.card.p-0.overflow-hidden { overflow-x: auto; overflow-y: hidden; }
+table.cb-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--cb-surface);
+}
+table.cb-table td { overflow-wrap: anywhere; }
+
+/* Логи: моноширинный текст + управляемый перенос */
+.logs-mono td.msg-cell,
+.logs-mono .msg-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.logs-nowrap td.msg-cell,
+.logs-nowrap .msg-cell { white-space: pre; }
+
+/* TData precheck: статусы наследуют pills; прогресс честный */
+.check-progress {
+  height: 8px;
+  border-radius: 9999px;
+  background: rgba(148, 163, 184, .15);
+  overflow: hidden;
+}
+.check-progress > div {
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, #3b82f6, #22d3ee);
+  transition: width 300ms ease;
+}
+
+/* Адаптив: sidebar превращается в drawer */
+@media (max-width: 900px) {
+  .nav-toggle { display: inline-flex; }
+  #appShell aside {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 50;
+    width: min(78vw, 300px);
+    transform: translateX(-105%);
+    transition: transform 180ms ease;
+  }
+  body.nav-open #appShell aside { transform: translateX(0); }
+  body.nav-open #navBackdrop { display: block; }
+}
+
+/* Уважение к prefers-reduced-motion: состояние без обязательной анимации */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  .live-dot { animation: none; }
+  #toast.show { animation: none; }
+}
