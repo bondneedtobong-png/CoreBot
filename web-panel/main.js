@@ -141,6 +141,10 @@ async function api(path, { method = "GET", body, raw = false } = {}) {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    // Панель — локальный админ-UI: никакого HTTP-кэша API. Иначе после
+    // POST-мутаций (тест прокси и т.п.) GET-список может вернуться старым
+    // и таблица покажет несвежие СТАТУС/ПРОВЕРКА.
+    cache: "no-store",
   });
 
   if (r.status === 401) {
@@ -3767,6 +3771,15 @@ function paintProxiesTable() {
         try {
           const r = await api(`/business/proxies/${pid}/test`, { method: "POST" });
           toast(`#${pid} ${r.ok ? '✓' : '✗'} ${r.elapsed_ms}ms — ${r.detail || ''}`, r.ok ? "success" : "warning");
+          // Мгновенно отражаем результат в строке, не дожидаясь refetch:
+          // сервер и так сохраняет last_checked/is_working, а так колонка
+          // ПРОВЕРКА обновится даже если GET где-то закэширован.
+          const item = ((state.proxies && state.proxies.list) || []).find(x => x.id === pid);
+          if (item) {
+            item.is_working = !!r.ok;
+            item.last_checked = new Date().toISOString();
+            paintProxiesTable();
+          }
           await loadProxiesTable();
         } catch (e) {
           toast(e.message, "error");

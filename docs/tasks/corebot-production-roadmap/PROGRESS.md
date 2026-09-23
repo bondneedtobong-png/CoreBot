@@ -395,3 +395,27 @@
   старого кэша. Предсуществующий фейл
   `tests/test_observability.py::test_cli_human_readable_empty_dir_is_down`
   (`assert 0 == 2`, воспроизводится на чистом `dbd6bed`) — не в скоупе.
+
+## 13.1 — Честная проверка прокси ✅ принята 2026-09-23
+
+- Жалоба владельца: кнопка «Тест» говорила OK мёртвым прокси, а колонка
+  ПРОВЕРКА не обновлялась («4 ч назад» после свежего теста).
+- Причины: (1) тест делал только TCP-connect — живой порт с мёртвым
+  логином давал «tcp connect ok»; (2) GET-списки ходили без `cache`,
+  таблица могла рисоваться из кэша.
+- Изменено: `control_plane/business/proxies.py` — `check_proxy_endpoint`:
+  SOCKS5 greeting + user/pass (RFC 1929) + CONNECT 1.1.1.1:80, HTTP —
+  CONNECT + Proxy-Authorization; контракт ответа и сохранение
+  (`last_checked`, `is_working`) без изменений; `web-panel/main.js` —
+  `cache: "no-store"` в `api()` + мгновенный патч строки после теста;
+  `web-panel/index.html` — ассеты `?v=20260923-proxy-v1`.
+- Создано: `tests/test_proxy_check.py` (10 тестов на stub-серверах:
+  закрытый порт, немой listener, SOCKS5 ok/плохой пароль/без кредов/
+  отказ CONNECT, HTTP 200/407, плохой порт) + 2 guard-теста фронта.
+- Проверки: новые тесты 22/22; полный `pytest` — 269 passed, 1 deselected
+  (предсуществующий observability-фейл); `ruff check`, `node --check`,
+  `git diff --check` чистые; живой `127.0.0.1:8081` отдаёт новый бандл
+  (`no-store`, `?v=20260923-proxy-v1`); Control Plane перезапущен.
+- Владельцу: обновить страницу (Ctrl+F5) и перепроверить прокси кнопкой
+  «Проверить все» — старые мёртвые покажут FAIL с причиной
+  (auth failed / tcp failed), колонка ПРОВЕРКА станет «только что».

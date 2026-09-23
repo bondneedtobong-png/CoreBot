@@ -124,6 +124,23 @@ def test_panel_assets_versioned_for_cache_bust():
     assert m_js, "main.js без ?v= — старый бандл может остаться в кэше браузера"
     assert m_css, "styles.css без ?v= — старые стили могут остаться в кэше браузера"
     assert m_js.group(1) != "20260917-tdata-v1", "версия main.js не обновлена после правок"
+    assert m_js.group(1) != "20260923-ux-v1", "версия main.js не обновлена после правок прокси"
+
+
+def test_api_fetch_bypasses_http_cache():
+    """api() обязан ходить с cache: no-store — иначе GET-списки после
+    POST-мутаций (тест прокси) возвращаются из кэша и таблица врёт."""
+    js = _read("main.js")
+    assert 'cache: "no-store"' in js, "api() без cache:no-store — stale-таблицы"
+
+
+def test_proxy_single_test_updates_row_immediately():
+    """Кнопка Тест обязана сразу патчить строку (is_working/last_checked),
+    а не надеяться только на refetch."""
+    js = _read("main.js")
+    assert "item.is_working = !!r.ok" in js
+    assert "item.last_checked = new Date().toISOString()" in js
+    assert "paintProxiesTable();" in js
 
 
 def test_panel_served_with_no_store():
