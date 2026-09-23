@@ -111,6 +111,43 @@ class ProxyRepository:
         return list(result.scalars().all())
 
     @staticmethod
+    async def get_active_in_group(session: AsyncSession, group_id: int) -> List[Proxy]:
+        """Активные рабочие прокси конкретной группы (для TData-check lease)."""
+        result = await session.execute(
+            select(Proxy)
+            .options(selectinload(Proxy.group))
+            .where(
+                Proxy.group_id == group_id,
+                Proxy.is_active == True,
+                Proxy.is_working == True,
+            )
+            .order_by(Proxy.id)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_active_by_purpose(
+        session: AsyncSession, purpose: str
+    ) -> List[Proxy]:
+        """Активные рабочие прокси всех групп с заданным purpose.
+
+        TData-check обязан брать прокси только отсюда (purpose=TDATA_CHECK);
+        runtime-пул сюда не попадает — смешивание исключено на уровне запроса.
+        """
+        result = await session.execute(
+            select(Proxy)
+            .join(ProxyGroup, Proxy.group_id == ProxyGroup.id)
+            .options(selectinload(Proxy.group))
+            .where(
+                ProxyGroup.purpose == purpose,
+                Proxy.is_active == True,
+                Proxy.is_working == True,
+            )
+            .order_by(Proxy.id)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
     async def get_free_by_group(session: AsyncSession, group_id: int) -> List[Proxy]:
         """Свободные прокси группы (не назначены аккаунтам)."""
         assigned_subq = select(Account.proxy_id).where(Account.proxy_id.isnot(None))
@@ -1096,9 +1133,24 @@ class GroupRepository:
 class ProxyGroupRepository:
     """Группы прокси и автораздача свободных прокси."""
 
+    VALID_PURPOSES = ("ACCOUNT_RUNTIME", "TDATA_CHECK")
+
     @staticmethod
-    async def create(session: AsyncSession, name: str) -> ProxyGroup:
-        row = ProxyGroup(name=name.strip())
+    def normalize_purpose(purpose: Optional[str]) -> str:
+        """Нормализация purpose; неизвестное/пустое → ACCOUNT_RUNTIME."""
+        cleaned = (purpose or "").strip().upper()
+        if cleaned in ProxyGroupRepository.VALID_PURPOSES:
+            return cleaned
+        return "ACCOUNT_RUNTIME"
+
+    @staticmethod
+    async def create(
+        session: AsyncSession, name: str, purpose: str = "ACCOUNT_RUNTIME"
+    ) -> ProxyGroup:
+        row = ProxyGroup(
+            name=name.strip(),
+            purpose=ProxyGroupRepository.normalize_purpose(purpose),
+        )
         session.add(row)
         await session.commit()
         await session.refresh(row)
@@ -1119,17 +1171,39 @@ class ProxyGroupRepository:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def get_or_create(session: AsyncSession, name: str) -> ProxyGroup:
+    async def get_or_create(
+        session: AsyncSession, name: str, purpose: Optional[str] = None
+    ) -> ProxyGroup:
         cleaned = (name or "").strip()
-        stmt = sqlite_insert(ProxyGroup).values(name=cleaned)
+        stmt = sqlite_insert(ProxyGroup).values(
+            name=cleaned,
+            purpose=ProxyGroupRepository.normalize_purpose(purpose),
+        )
         stmt = stmt.on_conflict_do_nothing(index_elements=[ProxyGroup.name])
         await execute_with_busy_retry(session, stmt, op_name="proxy-group-get-or-create")
         await commit_with_busy_retry(session, op_name="proxy-group-get-or-create")
         existing = await ProxyGroupRepository.get_by_name(session, name)
         if existing is not None:
+            # С var purpose существующей группы не меняем: поведение 01–11
+            # и явный выбор назначения при импорте не должны дрейфовать.
             return existing
         # Не должно случаться: fallback на прямое создание.
-        return await ProxyGroupRepository.create(session, name)
+        return await ProxyGroupRepository.create(session, name, purpose or "ACCOUNT_RUNTIME")
+
+    @staticmethod
+    async def get_by_purpose(
+        session: AsyncSession, purpose: str
+    ) -> List[ProxyGroup]:
+        """Группы с заданным purpose (TDATA_CHECK — только для проверки)."""
+        result = await session.execute(
+            select(ProxyGroup)
+            .where(
+                ProxyGroup.purpose
+                == ProxyGroupRepository.normalize_purpose(purpose)
+            )
+            .order_by(ProxyGroup.name)
+        )
+        return list(result.scalars().all())
 
     @staticmethod
     async def get_all(session: AsyncSession) -> List[ProxyGroup]:

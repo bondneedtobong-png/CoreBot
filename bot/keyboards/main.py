@@ -258,6 +258,12 @@ def get_accounts_keyboard() -> InlineKeyboardMarkup:
             ),
         ],
         [
+            InlineKeyboardButton(
+                text="🔍 Проверить Tdata (без импорта)",
+                callback_data="accounts_check_tdata",
+            ),
+        ],
+        [
             InlineKeyboardButton(text="📋 Список аккаунтов", callback_data="accounts_list"),
         ],
         [
@@ -1314,6 +1320,55 @@ def get_proxy_group_select_keyboard(
     if back_callback:
         rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data=cancel_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_proxy_bulk_purpose_keyboard() -> InlineKeyboardMarkup:
+    """Выбор назначения пула при массовом импорте (задача 12).
+
+    Явный выбор исключает случайное смешивание check-прокси с runtime.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🌐 Runtime (аккаунты)",
+                    callback_data="proxy_bulk_purpose_runtime",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔍 TData-check (только проверка)",
+                    callback_data="proxy_bulk_purpose_check",
+                )
+            ],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_proxy")],
+        ]
+    )
+
+
+def get_tdata_check_group_keyboard(
+    groups_usage: list[tuple[object, int, int]],
+) -> InlineKeyboardMarkup:
+    """Выбор TDATA_CHECK-группы для проверки (только check-пулы, без 'без прокси')."""
+    rows = []
+    if not groups_usage:
+        rows.append(
+            [InlineKeyboardButton(text="📭 Нет TDATA_CHECK групп", callback_data="tdata_check_no_groups")]
+        )
+    else:
+        for group, used, total in groups_usage:
+            free = max(0, int(total) - int(used))
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"🔍 {group.name} ({used}/{total}, free {free})",
+                        callback_data=f"tdata_check_group_{group.id}",
+                    )
+                ]
+            )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_accounts")])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_accounts")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -27,6 +27,7 @@ from . import (
     proxy_assign,
     tags,
     tdata,
+    tdata_check,
     twofa,
     warmup,
 )
@@ -34,6 +35,7 @@ from . import (
 router = Router()
 
 router.include_router(tdata.router)
+router.include_router(tdata_check.router)
 router.include_router(list_card.router)
 router.include_router(groups.router)
 router.include_router(profile.router)

@@ -80,6 +80,13 @@ class ProxyType(enum.Enum):
     MTProxy = "mtproxy"
 
 
+class ProxyGroupPurpose(str, enum.Enum):
+    """Назначение proxy pool (задача 12): runtime и check пулы не смешиваются."""
+
+    ACCOUNT_RUNTIME = "ACCOUNT_RUNTIME"
+    TDATA_CHECK = "TDATA_CHECK"
+
+
 class Proxy(Base):
     """
     Прокси для аккаунтов.
@@ -230,6 +237,10 @@ class ProxyGroup(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), unique=True, nullable=False)
+    # Назначение пула (задача 12): ACCOUNT_RUNTIME (дефолт, поведение 01–11
+    # не меняется) или TDATA_CHECK (только для проверки TData, forward-only
+    # миграция в database/repository.py backfill'ит существующие строки).
+    purpose = Column(String(32), nullable=False, default="ACCOUNT_RUNTIME")
     # Курсор round-robin по свободным прокси внутри группы.
     rr_cursor = Column(Integer, default=0)
     created_at = Column(DateTime, default=utcnow_naive)

@@ -332,3 +332,37 @@
   node --check, bash -n 7/7, skill validator, config validator, BAT --check.
 - Статус: код и локальные gates готовы; production GO не подтверждён
   (нет VPS-прогона). Push не выполнялся (нет разрешения).
+
+## 12 — Backend-проверка TData через отдельный proxy-pool ✅ принята 2026-09-23
+
+- Commit: (см. git log, `feat: task 12 TData account precheck via isolated pool`).
+- База исполнения: `5e9daa1` (задача 11). Вне очереди 01–11, по решению владельца.
+- Создано: `services/tdata_check/` (`__init__` контракт+лимиты+sync/job,
+  `models` 12 статусов, `limits`, `zip_safety` safe-extract + `find_check_roots`,
+  `lease` exclusive, `checker` proxy-gated движок с sanitize и tmp-cleanup),
+  `control_plane/business/tdata_check_routes.py`
+  (`POST /business/tdata/check` + `GET /business/tdata/check/{run_id}`,
+  in-memory run store, НЕ вызывает `_create_account_from_tdata`),
+  `bot/handlers/accounts/tdata_check.py` (check-flow без создания Account),
+  `tests/test_tdata_check.py` (31 тест).
+- Изменено: `database/models.py` (ProxyGroupPurpose + `purpose` String(32)
+  NOT NULL DEFAULT ACCOUNT_RUNTIME), `database/repository.py`
+  (`migrate_proxy_group_purpose`, ADDITIVE + backfill, идемпотентна),
+  `database/repositories.py` (repo-методы TDATA_CHECK), `control_plane/main.py`
+  (+router), `business/schemas.py` + `business/proxies.py` (purpose в API,
+  `POST /business/proxy-groups`), `bot/handlers/proxy.py` + `accounts/__init__`
+  + `keyboards/main.py` (выбор назначения, кнопка проверки), curated-списки
+  24→33 (pyproject/CI/README), QUICKSTART/RUNBOOK (лимиты минимально).
+- Решения: SYNC bounded + pollable run store (20 папок × conc 3 — десятки
+  секунд, job не окупается); exclusive lease (peak=1); лимиты: архив 200МБ,
+  папок 20, concurrency 3, connect-timeout 25с, SpamBot-timeout 15с (выкл
+  по умолчанию), tmp retention 0 (finally-cleanup), FloodWait без ретрая.
+- Проверки (оркестратор): миграция ADDITIVE чтением кода (ALTER + backfill);
+  checker всегда `proxy=proxy` + assert non-empty; route не создаёт Account
+  (только docstring-упоминание запрета); `test_tdata_check` 31/31; полный
+  `pytest -q` — 248 passed, 0 failed; `ruff check` clean; curated format 33
+  (9 новых файлов formatted); compileall ok; secret-скан нового пакета пуст;
+  `git diff --check` чист; контракты, `.env`, `data/*` не тронуты.
+- Follow-up (от исполнителя): SPA-экран проверки (web-panel/main.js с двойной
+  кодировкой кириллицы — отдельный проход с браузерными тестами); фоновый job
+  при лимитах >50 папок; SpamBot-probe по умолчанию опционально.

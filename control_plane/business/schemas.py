@@ -436,6 +436,13 @@ class ProxyGroupItem(BaseModel):
     id: int
     name: str
     proxies_count: int
+    # Назначение пула (задача 12): ACCOUNT_RUNTIME | TDATA_CHECK.
+    purpose: str = "ACCOUNT_RUNTIME"
+
+
+class ProxyGroupCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    purpose: str = Field(default="ACCOUNT_RUNTIME", pattern="^(ACCOUNT_RUNTIME|TDATA_CHECK)$")
 
 
 class ProxyItem(BaseModel):

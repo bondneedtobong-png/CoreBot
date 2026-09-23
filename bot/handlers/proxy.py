@@ -14,6 +14,7 @@ from aiogram.types import Message, CallbackQuery
 from bot.config import OWNER_ID
 from bot.keyboards.main import (
     get_proxy_keyboard,
+    get_proxy_bulk_purpose_keyboard,
     get_proxy_list_keyboard,
     get_proxy_card_keyboard,
     get_edit_proxy_keyboard,
@@ -52,6 +53,7 @@ class ProxyBulkAdd(StatesGroup):
     """Состояния массового добавления прокси."""
     waiting_for_lines = State()
     waiting_for_group_name = State()
+    waiting_for_purpose = State()
 
 
 # ==================== Главное меню прокси ====================
@@ -287,6 +289,26 @@ async def process_bulk_proxy_group(message: Message, state: FSMContext):
         await message.answer("Введите непустое название группы.")
         return
 
+    await state.update_data(proxy_group_name=group_name)
+    await state.set_state(ProxyBulkAdd.waiting_for_purpose)
+    await message.answer(
+        "🎯 <b>Назначение пула</b> — выберите явно, чтобы не смешать "
+        "check-прокси с runtime:\n\n"
+        "🌐 <b>Runtime</b> — прокси для рабочих аккаунтов.\n"
+        "🔍 <b>TData-check</b> — ТОЛЬКО для проверки TData, "
+        "автоназначение аккаунтам их не тронет.",
+        reply_markup=get_proxy_bulk_purpose_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _run_bulk_proxy_import(
+    message: Message,
+    state: FSMContext,
+    *,
+    group_name: str,
+    purpose: str,
+) -> None:
     data = await state.get_data()
     lines = data.get("proxy_lines", [])
     added = 0
@@ -294,7 +316,9 @@ async def process_bulk_proxy_group(message: Message, state: FSMContext):
     bad = 0
 
     async with session_scope() as session:
-        group = await ProxyGroupRepository.get_or_create(session, group_name)
+        group = await ProxyGroupRepository.get_or_create(
+            session, group_name, purpose=purpose
+        )
         existing = await ProxyRepository.get_all(session)
         existing_keys = {(p.host, int(p.port), p.username or "", p.password or "") for p in existing}
 
@@ -323,14 +347,50 @@ async def process_bulk_proxy_group(message: Message, state: FSMContext):
             added += 1
 
     await state.clear()
+    purpose_label = "🔍 TData-check" if purpose == "TDATA_CHECK" else "🌐 Runtime"
     await message.answer(
         f"✅ Массовый импорт завершён.\n\n"
         f"Группа: <b>{group_name}</b>\n"
+        f"Назначение: <b>{purpose_label}</b>\n"
         f"Добавлено: <b>{added}</b>\n"
         f"Пропущено дубликатов: <b>{skipped}</b>\n"
         f"Ошибочных строк: <b>{bad}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_proxy_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "proxy_bulk_purpose_runtime")
+async def cb_bulk_proxy_purpose_runtime(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    data = await state.get_data()
+    group_name = (data.get("proxy_group_name") or "").strip()
+    if not group_name:
+        await callback.answer("Название группы потеряно, начните заново", show_alert=True)
+        await state.clear()
+        return
+    await callback.answer()
+    await _run_bulk_proxy_import(
+        callback.message, state, group_name=group_name, purpose="ACCOUNT_RUNTIME"
+    )
+
+
+@router.callback_query(F.data == "proxy_bulk_purpose_check")
+async def cb_bulk_proxy_purpose_check(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    data = await state.get_data()
+    group_name = (data.get("proxy_group_name") or "").strip()
+    if not group_name:
+        await callback.answer("Название группы потеряно, начните заново", show_alert=True)
+        await state.clear()
+        return
+    await callback.answer()
+    await _run_bulk_proxy_import(
+        callback.message, state, group_name=group_name, purpose="TDATA_CHECK"
     )
 
 

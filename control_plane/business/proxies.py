@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from control_plane.business.db import get_bot_db
 from control_plane.business.schemas import (
     ProxyCreate,
+    ProxyGroupCreate,
     ProxyGroupItem,
     ProxyItem,
     ProxyPatch,
@@ -271,6 +272,48 @@ def list_proxy_groups(
             id=int(g.id),
             name=g.name or f"#{g.id}",
             proxies_count=int(counts.get(g.id, 0)),
+            purpose=(getattr(g, "purpose", None) or "ACCOUNT_RUNTIME"),
         )
         for g in rows
     ]
+
+
+@router.post(
+    "/business/proxy-groups",
+    response_model=ProxyGroupItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_proxy_group(
+    payload: ProxyGroupCreate,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(require_operator_write),
+):
+    """Создание proxy pool с ЯВНЫМ назначением (задача 12).
+
+    ``purpose=TDATA_CHECK`` — только для проверки TData; такие группы
+    никогда не используются runtime-автоназначением аккаунтов.
+    """
+    purpose = (payload.purpose or "ACCOUNT_RUNTIME").strip().upper()
+    if purpose not in ("ACCOUNT_RUNTIME", "TDATA_CHECK"):
+        raise HTTPException(status_code=400, detail="unknown pool purpose")
+    existing = (
+        db.execute(select(ProxyGroup).where(ProxyGroup.name == payload.name.strip()))
+        .scalars()
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="proxy group with this name exists")
+    group = ProxyGroup(name=payload.name.strip(), purpose=purpose)
+    db.add(group)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="proxy group with this name exists")
+    db.refresh(group)
+    return ProxyGroupItem(
+        id=int(group.id),
+        name=group.name,
+        proxies_count=0,
+        purpose=(group.purpose or "ACCOUNT_RUNTIME"),
+    )

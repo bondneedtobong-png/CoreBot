@@ -23,15 +23,18 @@
 #   (task 02-11 scope); legacy files are NOT reformatted
 #   (148 files would change — style-only noise, out of scope).
 #   Curated list (keep in sync with .github/workflows/ci.yml + README):
+#   bot/handlers/accounts/tdata_check.py,
+#   control_plane/business/tdata_check_routes.py,
 #   control_plane/services/{heartbeat,sanitize,snapshot,watchdog}.py,
 #   control_plane/version.py, database/sqlite_pragmas.py,
 #   scripts/{backup_lib,make_release,release_lib}.py,
+#   services/tdata_check/{__init__,checker,lease,limits,models,zip_safety}.py,
 #   tests/{test_backup_restore,test_config_validation,test_fleet_automation,
 #   test_integration_flows,test_lifespan_bootstrap,test_load_acceptance,
 #   test_observability,test_release_workflow,test_sqlite_reliability,
-#   test_utc_time_model}.py,
+#   test_tdata_check,test_utc_time_model}.py,
 #   tools/{__init__,instance_status,validate_config,validate_skill}.py,
-#   utils/time.py (24 files).
+#   utils/time.py (33 files).
 
 [tool.ruff]
 target-version = "py311"

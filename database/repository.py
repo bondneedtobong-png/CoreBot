@@ -12,6 +12,31 @@ from database.sqlite_pragmas import register_async_sqlite_pragmas
 from utils.logger import log
 
 
+async def migrate_proxy_group_purpose(conn) -> None:
+    """Forward-only миграция purpose пулов (задача 12, ADDITIVE only).
+
+    Новый столбец ``proxy_groups.purpose`` + backfill существующих строк в
+    ``ACCOUNT_RUNTIME`` без изменения поведения 01–11. Идемпотентна.
+    """
+    pg_exists = await conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='proxy_groups'"
+    ))
+    if not pg_exists.fetchone():
+        return
+    pg_info = await conn.execute(text("PRAGMA table_info(proxy_groups)"))
+    pgcols = {row[1] for row in pg_info.fetchall()}
+    if "purpose" not in pgcols:
+        log.info("➕ proxy_groups: purpose (ACCOUNT_RUNTIME | TDATA_CHECK)")
+        await conn.execute(text(
+            "ALTER TABLE proxy_groups ADD COLUMN purpose VARCHAR(32) "
+            "NOT NULL DEFAULT 'ACCOUNT_RUNTIME'"
+        ))
+    await conn.execute(text(
+        "UPDATE proxy_groups SET purpose='ACCOUNT_RUNTIME' "
+        "WHERE purpose IS NULL OR purpose=''"
+    ))
+
+
 class Database:
     """
     Класс для управления подключением к базе данных.
@@ -248,6 +273,9 @@ class Database:
                         await conn.execute(text(
                             "ALTER TABLE proxies ADD COLUMN group_id INTEGER"
                         ))
+
+                # --- proxy pool purposes (задача 12): runtime vs TData-check ---
+                await migrate_proxy_group_purpose(conn)
 
                 # --- Миграция: колонки mailings (группа, варианты текста, нейрочат) ---
                 m_exists = await conn.execute(text(
