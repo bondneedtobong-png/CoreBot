@@ -489,6 +489,22 @@ class ProxyTestResult(BaseModel):
     detail: Optional[str] = None
 
 
+class ProxyImportRequest(BaseModel):
+    group_name: str = Field(min_length=1, max_length=100)
+    purpose: str = Field(default="ACCOUNT_RUNTIME", pattern="^(ACCOUNT_RUNTIME|TDATA_CHECK)$")
+    lines: list[str] = Field(min_length=1, max_length=20000)
+
+
+class ProxyImportResult(BaseModel):
+    group_id: int
+    group_name: str
+    total_lines: int
+    added: int
+    skipped_duplicates: int
+    bad: int
+    bad_samples: list[str] = []
+
+
 # ===== Mailings (edit + prompt) =====
 
 

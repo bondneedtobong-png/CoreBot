@@ -3463,11 +3463,11 @@ async function renderProxies() {
     <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
       <div class="card">
         <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
-          <h3 class="font-semibold">Группы (пулы)</h3>
-          <span class="text-xs text-slate-500">переименование/удаление групп API не предоставляет</span>
+          <h3 class="font-semibold">Пулы (по регионам)</h3>
+          <span class="text-xs text-slate-500">клик по пулу — фильтр таблицы</span>
         </div>
-        <p class="text-xs text-slate-500 mb-3">Пулы <b>TDATA_CHECK</b> используются только проверкой TData и никогда — runtime-аккаунтами.</p>
-        <div id="prxGroups" class="flex flex-wrap gap-2 text-sm mb-3">Загрузка…</div>
+        <p class="text-xs text-slate-500 mb-3">Пулы <b>TDATA_CHECK</b> используются только проверкой TData и никогда — runtime-аккаунтами. Свободно — прокси без привязанных аккаунтов, занято — с аккаунтами.</p>
+        <div id="prxGroups" class="grid gap-2 text-sm mb-3" style="grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));">Загрузка…</div>
         ${readOnly
           ? `<p class="text-xs text-amber-300">ⓘ Создание групп недоступно для роли read-only.</p>`
           : `<form id="prxGroupForm" class="flex items-end gap-2 text-sm flex-wrap">
@@ -3506,22 +3506,40 @@ async function renderProxies() {
       </div>
       <div class="card">
         <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
-          <h3 class="font-semibold">Импорт списком</h3>
-          <span class="text-xs text-slate-500">создание идёт через обычный POST /business/proxies, построчно</span>
+          <h3 class="font-semibold">Загрузка прокси из файла</h3>
+          <span class="text-xs text-slate-500">один запрос на весь список — быстро даже для 1000+ строк</span>
         </div>
-        <p class="text-xs text-slate-500 mb-3">Формат: <code>host:port</code> или <code>host:port:user:pass</code>, префикс <code>http://</code> — для HTTP. Невалидные строки отклоняются до отправки.</p>
+        <p class="text-xs text-slate-500 mb-3">Форматы строк: <code>host:port@user:pass</code>, <code>user:pass@host:port</code>, <code>host:port:user:pass</code>, <code>host:port</code>; префикс <code>http://</code> — для HTTP. Дубликаты (host/port/логин/пароль) пропускаются, ошибочные строки — в отчёте.</p>
         ${readOnly
           ? `<p class="text-xs text-amber-300">ⓘ Импорт недоступен для роли read-only.</p>`
-          : `<label class="block text-sm mb-2">
-              <span class="text-slate-400 text-xs">Строки прокси (по одной в строке)</span>
-              <textarea id="prxImportText" rows="4" placeholder="10.0.0.1:1080&#10;http://10.0.0.2:8080:user:pw"
+          : `<div class="flex items-end gap-2 flex-wrap text-sm mb-2">
+              <label class="block">
+                <span class="text-slate-400 text-xs">Файл .txt (лист на ~1000 прокси)</span>
+                <input id="prxImportFile" type="file" accept=".txt,text/plain"
+                       class="mt-1 block bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 text-xs" />
+              </label>
+              <label class="block">
+                <span class="text-slate-400 text-xs">Пул (новый или существующий)</span>
+                <input id="prxImportGroup" placeholder="например, КЕНИЯ-989"
+                       class="mt-1 bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+              </label>
+              <label class="block">
+                <span class="text-slate-400 text-xs">Назначение (для нового пула)</span>
+                <select id="prxImportPurpose" class="mt-1 bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
+                  <option value="ACCOUNT_RUNTIME">ACCOUNT_RUNTIME</option>
+                  <option value="TDATA_CHECK">TDATA_CHECK</option>
+                </select>
+              </label>
+            </div>
+            <label class="block text-sm mb-2">
+              <span class="text-slate-400 text-xs">Или вставьте строки вручную (по одной в строке)</span>
+              <textarea id="prxImportText" rows="4" placeholder="10.0.0.1:1080@user:pw&#10;http://10.0.0.2:8080:user:pw"
                         class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs"></textarea>
             </label>
             <div class="flex items-center gap-3 flex-wrap">
               <button id="prxImportBtn" class="btn btn-secondary">Импортировать</button>
               <span id="prxImportMsg" class="text-xs text-slate-400"></span>
-            </div>
-            <div class="check-progress mt-3" id="prxImportBar" style="display:none"><div style="width:0%"></div></div>`}
+            </div>`}
       </div>
     </div>
   `;
@@ -3531,10 +3549,25 @@ async function renderProxies() {
     state.proxies = state.proxies || {};
     state.proxies.group = ev.currentTarget.value || "";
     paintProxiesTable();
+    paintPoolCards();
   });
   $("#prxGroupForm")?.addEventListener("submit", onCreateProxyGroup);
   $("#prxCheckAll")?.addEventListener("click", checkAllProxies);
   $("#prxImportBtn")?.addEventListener("click", importProxiesBulk);
+  $("#prxImportFile")?.addEventListener("change", (ev) => {
+    // Файл подставляем в textarea — импорт один (bulk-эндпоинт), лимит 15 МБ как в боте.
+    const f = ev.currentTarget.files?.[0];
+    if (!f) return;
+    if (f.size > 15 * 1024 * 1024) {
+      toast("Файл слишком большой (макс. 15 МБ)", "error");
+      ev.currentTarget.value = "";
+      return;
+    }
+    const rd = new FileReader();
+    rd.onload = () => { $("#prxImportText").value = String(rd.result || ""); };
+    rd.onerror = () => toast("Не удалось прочитать файл", "error");
+    rd.readAsText(f);
+  });
   await loadProxyGroups();
   await loadProxiesTable();
 }
@@ -3550,21 +3583,62 @@ async function loadProxyGroups() {
       box.innerHTML = `<span class="text-slate-500 text-xs">Групп пока нет.</span>`;
       return;
     }
-    box.innerHTML = groups.map(g => {
-      const purpose = (g.purpose || "ACCOUNT_RUNTIME").toUpperCase();
-      const pill = purpose === "TDATA_CHECK" ? "pill-blue" : "pill-gray";
-      return `<span class="pill ${pill}" title="id=${g.id}">${escapeHTML(g.name)} · ${g.proxies_count ?? 0} · ${escapeHTML(purpose)}</span>`;
-    }).join("");
     const sel = $("#prxGroupFilter");
     if (sel) {
       const cur = state.proxies.group || "";
-      sel.innerHTML = `<option value="">все группы</option>` + groups.map(g =>
+      sel.innerHTML = `<option value="">все группы</option><option value="none">без пула</option>` + groups.map(g =>
         `<option value="${g.id}" ${String(g.id) === String(cur) ? "selected" : ""}>${escapeHTML(g.name)}</option>`
       ).join("");
+      if (cur === "none") sel.value = "none";
     }
+    paintPoolCards();
   } catch (e) {
     box.innerHTML = `<span class="text-rose-400 text-xs">${escapeHTML(e.message)}</span>`;
   }
+}
+
+/* Карточки пулов: всего / свободно / занято / ok / fail. Клик — фильтр таблицы. */
+function paintPoolCards() {
+  const box = $("#prxGroups");
+  if (!box) return;
+  const groups = (state.proxies && state.proxies.groups) || [];
+  const all = (state.proxies && state.proxies.list) || [];
+  const cur = (state.proxies && state.proxies.group) || "";
+  const card = (gid, name, poolPurpose, members) => {
+    const total = members.length;
+    const busy = members.filter(p => (p.accounts_count || 0) > 0).length;
+    const free = total - busy;
+    const ok = members.filter(p => p.is_active && p.is_working).length;
+    const fail = members.filter(p => p.is_active && !p.is_working).length;
+    const purpose = (poolPurpose || "").toUpperCase();
+    const active = String(gid ?? "") === String(cur);
+    return `<button data-gid="${gid ?? ""}" title="Показать только этот пул"
+              class="text-left rounded-lg border px-3 py-2 ${active ? "border-accent-500 bg-ink-700" : "border-ink-600 bg-ink-800 hover:border-slate-500"}">
+      <div class="flex items-center justify-between gap-2">
+        <span class="font-semibold text-slate-100 truncate">${escapeHTML(name)}</span>
+        <span class="pill ${purpose === "TDATA_CHECK" ? "pill-blue" : "pill-gray"}">${escapeHTML(purpose || "—")}</span>
+      </div>
+      <div class="mt-1 text-xs text-slate-400">всего <b class="text-slate-200">${total}</b> · свободно <b class="text-emerald-300">${free}</b> · занято <b class="text-amber-300">${busy}</b></div>
+      <div class="mt-1 flex gap-1">
+        <span class="pill pill-green">ok ${ok}</span>
+        ${fail ? `<span class="pill pill-red">fail ${fail}</span>` : ""}
+      </div>
+    </button>`;
+  };
+  const ungrouped = all.filter(p => !p.group_id);
+  box.innerHTML =
+    groups.map(g => card(g.id, g.name, g.purpose,
+      all.filter(p => String(p.group_id) === String(g.id)))).join("") +
+    (ungrouped.length ? card("none", "Без пула", "", ungrouped) : "");
+  box.querySelectorAll("[data-gid]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.proxies.group = btn.dataset.gid || "";
+      const sel = $("#prxGroupFilter");
+      if (sel) sel.value = state.proxies.group;
+      paintProxiesTable();
+      paintPoolCards();
+    });
+  });
 }
 
 async function onCreateProxyGroup(ev) {
@@ -3597,81 +3671,52 @@ async function onCreateProxyGroup(ev) {
   }
 }
 
-/* Построчный парсинг импорта: невалидное отклоняем до запросов. */
-function parseProxyImportLine(raw) {
-  const line = (raw || "").trim();
-  if (!line) return null;
-  let rest = line;
-  let proxy_type = "socks5";
-  const m = rest.match(/^(socks5|http):\/\/(.+)$/i);
-  if (m) {
-    proxy_type = m[1].toLowerCase();
-    rest = m[2];
-  }
-  const parts = rest.split(":").map(s => s.trim());
-  if (parts.length < 2 || !parts[0] || !parts[1]) {
-    return { error: `не формат host:port — «${line.slice(0, 40)}»` };
-  }
-  const port = Number(parts[1]);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return { error: `плохой порт — «${line.slice(0, 40)}»` };
-  }
-  return {
-    entry: {
-      name: `${parts[0]}:${port}`,
-      host: parts[0],
-      port,
-      username: parts[2] || null,
-      password: parts[3] || null,
-      proxy_type,
-      group_id: 0,
-      is_active: true,
-    },
-  };
-}
-
+/* Bulk-импорт одним запросом: сервер парсит, дедупит и раскладывает по пулу. */
 async function importProxiesBulk() {
   const ta = $("#prxImportText");
   const out = $("#prxImportMsg");
-  const bar = $("#prxImportBar");
   const btn = $("#prxImportBtn");
-  const lines = (ta?.value || "").split(/\r?\n/);
-  const parsed = lines.map(parseProxyImportLine).filter(Boolean);
-  const bad = parsed.filter(p => p.error);
-  const good = parsed.filter(p => !p.error);
-  if (!parsed.length) {
-    out.textContent = "Вставьте хотя бы одну строку.";
+  const groupInput = $("#prxImportGroup");
+  const lines = (ta?.value || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const group_name = (groupInput?.value || "").trim();
+  if (!lines.length) {
+    out.textContent = "Выберите .txt файл или вставьте хотя бы одну строку.";
     out.className = "text-xs text-rose-400";
     return;
   }
-  if (bad.length) {
-    out.textContent = `Невалидных строк: ${bad.length} (первая: ${bad[0].error}). Они пропущены.`;
-    out.className = "text-xs text-amber-300";
-    if (!good.length) return;
+  if (!group_name) {
+    out.textContent = "Укажите пул (новый создастся, в существующий добавится).";
+    out.className = "text-xs text-rose-400";
+    groupInput?.focus();
+    return;
   }
   setBusy(btn, true, "Импорт…");
-  if (bar) {
-    bar.style.display = "block";
-    bar.firstElementChild.style.width = "0%";
+  out.textContent = `Отправка ${lines.length} строк…`;
+  out.className = "text-xs text-slate-400";
+  try {
+    const r = await api("/business/proxies/import", {
+      method: "POST",
+      body: {
+        group_name,
+        purpose: ($("#prxImportPurpose")?.value || "ACCOUNT_RUNTIME"),
+        lines,
+      },
+    });
+    const summary = `Пул «${r.group_name}»: добавлено ${r.added}, дубликатов ${r.skipped_duplicates}, ошибочных ${r.bad}`;
+    out.textContent = r.bad_samples?.length ? `${summary}. Примеры: ${r.bad_samples.join(" · ")}` : summary;
+    out.className = "text-xs " + (r.added ? "text-emerald-300" : "text-amber-300");
+    toast(summary, r.added ? "success" : "info");
+    if (ta) ta.value = "";
+    const fi = $("#prxImportFile");
+    if (fi) fi.value = "";
+    await loadProxyGroups();
+    await loadProxiesTable();
+  } catch (e) {
+    out.textContent = e.message;
+    out.className = "text-xs text-rose-400";
+  } finally {
+    setBusy(btn, false);
   }
-  let ok = 0;
-  const fails = [];
-  for (let i = 0; i < good.length; i++) {
-    try {
-      await api("/business/proxies", { method: "POST", body: good[i].entry });
-      ok++;
-    } catch (e) {
-      fails.push(`${good[i].entry.name}: ${e.message}`);
-    }
-    if (bar) bar.firstElementChild.style.width = `${Math.round(((i + 1) / good.length) * 100)}%`;
-  }
-  setBusy(btn, false);
-  if (bar) bar.style.display = "none";
-  const summary = `Импорт: создано ${ok}/${good.length}` + (fails.length ? `, ошибок: ${fails.length}` : "");
-  out.textContent = fails.length ? `${summary}. Первая: ${fails[0]}` : summary;
-  out.className = "text-xs " + (fails.length ? (ok ? "text-amber-300" : "text-rose-400") : "text-emerald-300");
-  toast(summary, fails.length ? (ok ? "info" : "error") : "success");
-  await loadProxiesTable();
 }
 
 async function checkAllProxies() {
@@ -3706,6 +3751,7 @@ async function loadProxiesTable() {
     state.proxies = state.proxies || {};
     state.proxies.list = list || [];
     paintProxiesTable();
+    paintPoolCards();
   } catch (e) {
     tbl.innerHTML = `<div class="text-rose-400 text-sm">${escapeHTML(e.message)}</div>`;
   }
@@ -3717,7 +3763,9 @@ function paintProxiesTable() {
   if (!tbl) return;
   const all = (state.proxies && state.proxies.list) || [];
   const gf = (state.proxies && state.proxies.group) || "";
-  const list = gf ? all.filter(p => String(p.group_id) === String(gf)) : all;
+  const list = !gf ? all
+    : gf === "none" ? all.filter(p => !p.group_id)
+    : all.filter(p => String(p.group_id) === String(gf));
   if (!all.length) {
     tbl.innerHTML = `<div class="text-slate-500 text-xs">Прокси пока нет. Добавьте через «+ Добавить» или импортом ниже.</div>`;
     return;

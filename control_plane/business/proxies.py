@@ -12,6 +12,7 @@ HTTP — CONNECT с Proxy-Authorization. Мёртвые логины/парол�
     PATCH  /business/proxies/{id}             — изменить
     DELETE /business/proxies/{id}             — удалить (Account.proxy_id → NULL)
     POST   /business/proxies/{id}/test        — handshake-проверка
+    POST   /business/proxies/import           — bulk-импорт из строк в группу
     GET    /business/proxy-groups             — список групп прокси
 """
 from __future__ import annotations
@@ -31,6 +32,8 @@ from control_plane.business.schemas import (
     ProxyCreate,
     ProxyGroupCreate,
     ProxyGroupItem,
+    ProxyImportRequest,
+    ProxyImportResult,
     ProxyItem,
     ProxyPatch,
     ProxyTestResult,
@@ -38,6 +41,7 @@ from control_plane.business.schemas import (
 from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
 from database.models import Account, Proxy, ProxyGroup, ProxyType
+from utils.proxy_line import dedup_key, parse_proxy_line
 
 
 router = APIRouter(tags=["business-proxies"])
@@ -383,6 +387,95 @@ def test_proxy(
         ok=ok,
         elapsed_ms=elapsed,
         detail=detail,
+    )
+
+
+@router.post("/business/proxies/import", response_model=ProxyImportResult)
+def import_proxies(
+    payload: ProxyImportRequest,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(require_operator_write),
+):
+    """Bulk-импорт прокси из строк (файл .txt читается в браузере).
+
+    Форматы строк — как в боте: ``host:port@user:pass``,
+    ``user:pass@host:port``, ``host:port:user:pass``, ``host:port``
+    (+ префиксы ``socks5://`` / ``http://``). Дедуп по
+    (host, port, username, password) на всю таблицу; существующая группа
+    не меняет purpose.
+    """
+    group_name = payload.group_name.strip()
+    group = db.execute(select(ProxyGroup).where(ProxyGroup.name == group_name)).scalars().first()
+    if group is None:
+        group = ProxyGroup(name=group_name, purpose=payload.purpose.strip().upper())
+        db.add(group)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            group = db.execute(select(ProxyGroup).where(ProxyGroup.name == group_name)).scalars().first()
+            if group is None:
+                raise HTTPException(status_code=409, detail="proxy group race, retry")
+        else:
+            db.refresh(group)
+
+    existing_keys = {
+        (p.host, int(p.port), p.username or "", p.password or "")
+        for p in db.execute(select(Proxy)).scalars().all()
+    }
+    added = skipped = bad = 0
+    bad_samples: list[str] = []
+    seq = 0
+    for raw in payload.lines:
+        line = (raw or "").strip()
+        if not line:
+            continue
+        parsed = parse_proxy_line(line)
+        if parsed is None:
+            bad += 1
+            if len(bad_samples) < 5:
+                bad_samples.append(line[:80])
+            continue
+        key = dedup_key(parsed.host, parsed.port, parsed.username, parsed.password)
+        if key in existing_keys:
+            skipped += 1
+            continue
+        seq += 1
+        base = f"{group.name.lower()}_{seq}_{parsed.host}:{parsed.port}"[:100]
+        name = base
+        suffix = 1
+        while db.execute(select(Proxy.id).where(Proxy.name == name)).scalars().first():
+            suffix += 1
+            name = f"{base[:90]}~{suffix}"
+        db.add(
+            Proxy(
+                name=name,
+                host=parsed.host,
+                port=int(parsed.port),
+                username=parsed.username,
+                password=parsed.password,
+                proxy_type=ProxyType.HTTP if parsed.proxy_type == "http" else ProxyType.SOCKS5,
+                is_active=True,
+                is_working=True,
+                group_id=int(group.id),
+            )
+        )
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            skipped += 1
+            continue
+        existing_keys.add(key)
+        added += 1
+    return ProxyImportResult(
+        group_id=int(group.id),
+        group_name=group.name,
+        total_lines=len(payload.lines),
+        added=added,
+        skipped_duplicates=skipped,
+        bad=bad,
+        bad_samples=bad_samples,
     )
 
 

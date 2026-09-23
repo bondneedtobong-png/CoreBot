@@ -143,6 +143,17 @@ def test_proxy_single_test_updates_row_immediately():
     assert "paintProxiesTable();" in js
 
 
+def test_proxy_pools_and_file_import_wired():
+    """Пулы карточками (свободно/занято) + загрузка .txt через bulk-import."""
+    html = _read("index.html")
+    js = _read("main.js")
+    assert "paintPoolCards" in js
+    assert "свободно" in js and "занято" in js
+    assert 'id="prxImportFile"' in js
+    assert "/business/proxies/import" in js
+    assert "host:port@user:pass" in js
+
+
 def test_panel_served_with_no_store():
     """Статика /panel отдаётся с Cache-Control: no-store (без застревания в кэше)."""
     os.environ.setdefault("PARSER_EMBEDDED", "0")

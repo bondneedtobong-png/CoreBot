@@ -103,8 +103,11 @@ async def cb_proxy_bulk_add(callback: CallbackQuery, state: FSMContext):
         "📥 <b>Массовое добавление прокси</b>\n\n"
         "Пришлите <b>файл .txt</b> со списком прокси — по одному в строке.\n\n"
         "Поддерживаемые форматы строк:\n"
+        "• <code>host:port@user:pass</code>\n"
         "• <code>user:pass@host:port</code>\n"
-        "• <code>host:port</code>\n\n"
+        "• <code>host:port:user:pass</code>\n"
+        "• <code>host:port</code>\n"
+        "(префикс <code>http://</code> — для HTTP)\n\n"
         "Так список не разбивается на несколько сообщений и не перемешивается.\n\n"
         "❌ Отмена: /start",
         parse_mode=ParseMode.HTML,
@@ -208,21 +211,12 @@ async def process_proxy(message: Message, state: FSMContext):
     log.info(f"Добавлен прокси: {name}")
 
 
-def _parse_proxy_line(line: str) -> tuple[str, str, int, str | None, str | None] | None:
-    s = line.strip()
-    if not s:
-        return None
-    # user:pass@host:port
-    m_auth = re.match(r"^([^:\s]+):([^@\s]+)@([^:\s]+):(\d+)$", s)
-    if m_auth:
-        user, pwd, host, port = m_auth.groups()
-        return host, user, int(port), user, pwd
-    # host:port
-    m_plain = re.match(r"^([^:\s]+):(\d+)$", s)
-    if m_plain:
-        host, port = m_plain.groups()
-        return host, host, int(port), None, None
-    return None
+def _parse_proxy_line(line: str):
+    """Единый парсер (utils.proxy_line): user:pass@host:port, host:port,
+    host:port:user:pass, host:port@user:pass + префиксы socks5://|http://."""
+    from utils.proxy_line import parse_proxy_line
+
+    return parse_proxy_line(line)
 
 
 @router.message(ProxyBulkAdd.waiting_for_lines, F.document)
@@ -327,7 +321,9 @@ async def _run_bulk_proxy_import(
             if not parsed:
                 bad += 1
                 continue
-            host, default_name, port, username, password = parsed
+            host, port, username, password = (
+                parsed.host, parsed.port, parsed.username, parsed.password,
+            )
             key = (host, int(port), username or "", password or "")
             if key in existing_keys:
                 skipped += 1
@@ -341,7 +337,7 @@ async def _run_bulk_proxy_import(
                 username=username,
                 password=password,
                 group_id=group.id,
-                proxy_type=ProxyType.SOCKS5,
+                proxy_type=ProxyType.HTTP if parsed.proxy_type == "http" else ProxyType.SOCKS5,
             )
             existing_keys.add(key)
             added += 1
