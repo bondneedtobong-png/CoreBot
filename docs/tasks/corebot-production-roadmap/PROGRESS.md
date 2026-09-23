@@ -295,3 +295,40 @@
   create_all + naive-сравнение без TypeError).
 - Проверки: `test_utc_time_model` 9/9, `ruff check` + `format --check` чистые,
   `git ls-files --eol` — индекс и дерево уже LF (переписываний нет).
+
+## 11 — Production acceptance и нагрузка ⚠️ частично (локальная часть) 2026-09-23
+
+- База исполнения: `770fa31`. VPS недоступен — выполнена только безопасная
+  локальная часть; production GO НЕ подтверждён (требование оркестратора).
+- Создано: `docs/operations/PRODUCTION_ACCEPTANCE.md` (14 разделов чистого VPS:
+  команды + ожидаемое + поля timestamp/SHA/факт, только плейсхолдеры),
+  `docs/operations/GO_LIVE_REPORT.md` (вердикт + факты + риски с владельцем/
+  сроком + follow-up), `tests/test_load_acceptance.py` (all-mocks a–g,
+  константы LOAD_*, JSON-артефакт в tmp, network-guard).
+- Изменено оркестратором: curated format-список 23→24 файла
+  (`test_load_acceptance.py` в pyproject/CI/README).
+- Измерено локально (3 прогона): p95 записи 135–334мс (≤500, с оговоркой R3);
+  busy 0.0/мин, exhausted 0; WAL ~1.96МиБ (×130 запас); ready p95 0.001с;
+  startup 0.006–0.022с / shutdown ~0.001с; drain 100/100 за 0.04–0.08с;
+  backup+restore 0.01с; claim race 1/8, UPSERT ровно 16; pytest 217/217,
+  ruff check/format чисто.
+- Проверки (оркестратор): `test_load_acceptance` 2/2; полный `pytest -q` —
+  217 passed, 0 failed; `git diff --check` чист; секретов/PII в доках нет;
+  контракты, код, `.env`, `data/*` не тронуты.
+- Вердикты: SQLite-миграция НЕ требуется (триггеры ADR 0002 не сработали);
+  итог очереди — «код и локальные gates готовы; production GO ещё не
+  подтверждён». PG task-файл не создаётся.
+- Блокеры владельца: disposable VPS + прогон PRODUCTION_ACCEPTANCE.md с
+  заполнением полей; сроки рисков R1–R6 из GO_LIVE_REPORT; branch protection +
+  первый Actions-прогон; зависимость файла задачи — `12-tdata-account-precheck.md`
+  (вне очереди 01–11, требует отдельного решения).
+
+## Итог очереди 01–11
+
+- Commits: `e20e2e3`(01) `0a3b402`(02) `49f99d1`(03) `0dea82d`(04) `ee7d8bd`(05)
+  `e1c0a50`(06) `09ec334`(07) `a77dc86`(08) `5988705`(09) `cd98484`(10)
+  `770fa31`(gate-hardening REVIEW-01-09) + задача 11 (этот commit).
+- Локальный gate: pytest 217/217, ruff check, ruff format (curated-24),
+  node --check, bash -n 7/7, skill validator, config validator, BAT --check.
+- Статус: код и локальные gates готовы; production GO не подтверждён
+  (нет VPS-прогона). Push не выполнялся (нет разрешения).

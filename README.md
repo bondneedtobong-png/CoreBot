@@ -259,14 +259,14 @@ pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest tests/ -q
 python -m compileall -q bot control_plane database workers services utils tools scripts tests main.py migrate_mailings.py
 python -m ruff check .
-python -m ruff format --check control_plane/services/heartbeat.py control_plane/services/sanitize.py control_plane/services/snapshot.py control_plane/services/watchdog.py control_plane/version.py database/sqlite_pragmas.py scripts/backup_lib.py scripts/make_release.py scripts/release_lib.py tests/test_backup_restore.py tests/test_config_validation.py tests/test_fleet_automation.py tests/test_integration_flows.py tests/test_lifespan_bootstrap.py tests/test_observability.py tests/test_release_workflow.py tests/test_sqlite_reliability.py tests/test_utc_time_model.py tools/__init__.py tools/instance_status.py tools/validate_config.py tools/validate_skill.py utils/time.py
+python -m ruff format --check control_plane/services/heartbeat.py control_plane/services/sanitize.py control_plane/services/snapshot.py control_plane/services/watchdog.py control_plane/version.py database/sqlite_pragmas.py scripts/backup_lib.py scripts/make_release.py scripts/release_lib.py tests/test_backup_restore.py tests/test_config_validation.py tests/test_fleet_automation.py tests/test_integration_flows.py tests/test_lifespan_bootstrap.py tests/test_load_acceptance.py tests/test_observability.py tests/test_release_workflow.py tests/test_sqlite_reliability.py tests/test_utc_time_model.py tools/__init__.py tools/instance_status.py tools/validate_config.py tools/validate_skill.py utils/time.py
 node --check web-panel/main.js
 for f in scripts/*.sh skills/corebot-vps-deploy/scripts/*.sh; do bash -n "$f" || exit 1; done
 python -m tools.validate_skill
 python -m tools.validate_config --mode local --env-file .env.example
 ```
 
-`ruff format --check` покрывает только curated-список файлов задач 02–10
+`ruff format --check` покрывает только curated-список файлов задач 02–11
 (см. шапку `pyproject.toml`): legacy-код покрыт `ruff check` + `compileall`,
 массовый reformat legacy в скоуп задачи 10 не входит. Конфиг pytest —
 только `pytest.ini` (в `pyproject.toml` его дубликата нет осознанно).
