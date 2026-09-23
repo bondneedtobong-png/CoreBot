@@ -341,6 +341,7 @@ function navigate(hash) {
     case "queue":     return renderQueue();
     case "parsing":   return renderParsing(segments[1]);
     case "mailings":  return renderMailings(segments[1]);
+    case "links":     return renderLinks();
     case "clients":   return renderClients(segments[1]);
     case "groups":    return renderGroups(segments[1]);
     case "proxies":   return renderProxies(segments[1]);
@@ -1001,7 +1002,7 @@ async function renderDashboard() {
         </div>
       </div>
 
-      <!-- Recent live + последние сообщения -->
+      <!-- Recent live + переходы по ссылкам -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div class="card">
           <div class="flex items-center justify-between mb-3">
@@ -1011,8 +1012,17 @@ async function renderDashboard() {
           <div id="dashRecent" class="space-y-2 text-sm text-slate-400">Подождите событий…</div>
         </div>
         <div class="card">
-          <h3 class="font-semibold mb-3">Последние сообщения (БД)</h3>
-          <div id="dashRecentDb" class="space-y-2 text-sm text-slate-400">…</div>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-semibold">🔗 Переходы по ссылкам</h3>
+            <a href="#/links" class="text-xs text-accent-500 hover:text-accent-400">все ссылки →</a>
+          </div>
+          <div class="flex gap-6 mb-3">
+            <div><div id="dashClicksTotal" class="text-2xl font-semibold text-white">…</div>
+              <div class="text-[11px] text-slate-500">всего переходов</div></div>
+            <div><div id="dashClicks24" class="text-2xl font-semibold text-emerald-300">…</div>
+              <div class="text-[11px] text-slate-500">за 24 часа</div></div>
+          </div>
+          <div id="dashLinks" class="space-y-2 text-sm text-slate-400">…</div>
         </div>
       </div>
     </div>
@@ -1024,7 +1034,7 @@ async function renderDashboard() {
     loadDashClasses(),
     loadDashTopAccounts(),
     loadDashMailings(),
-    loadDashRecentDb(),
+    loadDashLinks(),
   ]);
   const upd = $("#dashUpdated");
   if (upd) upd.textContent = ` · обновлено ${new Date().toLocaleTimeString("ru-RU", { hour12: false })}`;
@@ -1172,24 +1182,187 @@ async function loadDashMailings() {
   } catch (e) { el.innerHTML = `<div class="text-rose-400">${escapeHTML(e.message)}</div>`; }
 }
 
-async function loadDashRecentDb() {
-  const el = $("#dashRecentDb");
-  if (!el) return;
+/* Виджет переходов: топ-5 ссылок по кликам за 24ч. */
+async function loadDashLinks() {
+  const box = $("#dashLinks");
+  if (!box) return;
   try {
-    const list = await api("/business/dashboard/recent_messages?limit=20");
-    if (!list.length) { el.innerHTML = `<div class="text-slate-500">Сообщений нет.</div>`; return; }
-    el.innerHTML = list.map(m => `
-      <div class="flex items-start gap-2">
-        <span class="pill ${m.role === 'assistant' ? 'pill-blue' : 'pill-gray'}">${escapeHTML(m.role)}</span>
-        <div class="min-w-0 flex-1">
-          <div class="truncate text-slate-200">${escapeHTML(m.content || "")}</div>
-          <div class="text-[11px] text-slate-500"><a href="#/dialogs/${m.account_id}/${m.peer_user_id}" class="hover:text-accent-500">${escapeHTML(m.account_title)} ↔ ${escapeHTML(m.peer_title)}</a> В· ${fmtRelative(m.created_at)}</div>
+    const list = await api("/business/links");
+    const total = list.reduce((m, l) => m + (l.clicks_total || 0), 0);
+    const day = list.reduce((m, l) => m + (l.clicks_24h || 0), 0);
+    $("#dashClicksTotal").textContent = total;
+    $("#dashClicks24").textContent = day;
+    if (!list.length) {
+      box.innerHTML = `<div class="text-slate-500">Ссылок пока нет — создайте в разделе «Ссылки».</div>`;
+      return;
+    }
+    const top = [...list].sort((a, b) => (b.clicks_24h || 0) - (a.clicks_24h || 0)).slice(0, 5);
+    const max = Math.max(1, ...top.map(l => l.clicks_24h || 0));
+    box.innerHTML = top.map(l => `
+      <div>
+        <div class="flex items-center justify-between text-xs gap-2">
+          <span class="text-slate-200 truncate" title="${escapeHTML(l.target_url)}">/${escapeHTML(l.code)} · ${escapeHTML(l.name)}</span>
+          <span class="text-slate-500 whitespace-nowrap"><b class="text-emerald-300">${l.clicks_24h || 0}</b> / ${l.clicks_total || 0}</span>
         </div>
-      </div>`).join("");
-  } catch (e) { el.innerHTML = `<div class="text-rose-400">${escapeHTML(e.message)}</div>`; }
+        <div class="cb-bar mt-1"><div class="cb-bar-fill" style="width:${Math.round(((l.clicks_24h || 0) / max) * 100)}%"></div></div>
+      </div>
+    `).join("");
+  } catch (e) {
+    box.innerHTML = `<div class="text-rose-400">${escapeHTML(e.message)}</div>`;
+  }
 }
 
 /* ---------------------------- Accounts view ---------------------------- */
+
+/* Трекинг-ссылки: создание /r/{code}, счётчики переходов. */
+async function renderLinks() {
+  setHeader("Ссылки", "Трекинг переходов по рекламе: короткая ссылка → ваш канал");
+  const readOnly = isReadOnlyRole();
+  const root = $("#pageRoot");
+  root.innerHTML = `
+    <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
+      <div class="card">
+        <p class="text-xs text-slate-500">Как это работает: создайте ссылку на канал/пост → вставьте короткую
+        <code>/r/…</code> в рекламу (или в <b>community_link</b> рассылки — тогда <code>{link}</code> станет трекаемой).
+        Каждый переход считается в дашборде. Важно: снаружи ссылка открывается, только если Control Plane
+        доступен из интернета (домен/VPS); на локальном <code>127.0.0.1</code> — лишь для проверки.</p>
+      </div>
+      ${readOnly ? "" : `
+      <div class="card">
+        <h3 class="font-semibold mb-3">Новая ссылка</h3>
+        <form id="linkForm" class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+          <label class="block">
+            <span class="text-slate-400 text-xs">Название</span>
+            <input name="name" placeholder="например, Канал — посев 23.09"
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+          </label>
+          <label class="block md:col-span-2">
+            <span class="text-slate-400 text-xs">Куда ведёт (https://…)</span>
+            <input name="target_url" placeholder="https://t.me/+abcdef"
+                   class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono" />
+          </label>
+          <label class="block">
+            <span class="text-slate-400 text-xs">Рассылка (необязательно)</span>
+            <select name="mailing_id" id="linkMailing"
+                    class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
+              <option value="0">— без привязки —</option>
+            </select>
+          </label>
+          <div class="md:col-span-4 flex items-center gap-3">
+            <button type="submit" class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white">Создать ссылку</button>
+            <span id="linkFormMsg" class="text-xs text-slate-400"></span>
+          </div>
+        </form>
+      </div>`}
+      <div class="card">
+        <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h3 class="font-semibold">Ссылки</h3>
+          <button id="linkRefresh" class="px-3 py-1.5 rounded-md bg-ink-700 hover:bg-ink-600 text-sm">⟳</button>
+        </div>
+        <div id="linkTable" class="text-sm text-slate-400">Загрузка…</div>
+      </div>
+    </div>
+  `;
+  try {
+    const ms = await api("/business/mailings?limit=500").catch(() => []);
+    const sel = $("#linkMailing");
+    if (sel && ms?.length) {
+      sel.innerHTML = `<option value="0">— без привязки —</option>` + ms.map(m =>
+        `<option value="${m.id}">${escapeHTML(m.name)} (#${m.id})</option>`).join("");
+    }
+  } catch {}
+  $("#linkRefresh").addEventListener("click", loadLinksTable);
+  $("#linkForm")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const fd = new FormData(ev.currentTarget);
+    const out = $("#linkFormMsg");
+    const name = (fd.get("name") || "").toString().trim();
+    const target_url = (fd.get("target_url") || "").toString().trim();
+    const mailing_id = Number(fd.get("mailing_id") || 0);
+    if (!name || !target_url) {
+      out.textContent = "Заполните название и ссылку.";
+      out.className = "text-xs text-rose-400";
+      return;
+    }
+    out.textContent = "…";
+    try {
+      const r = await api("/business/links", {
+        method: "POST",
+        body: { name, target_url, mailing_id: mailing_id > 0 ? mailing_id : null },
+      });
+      out.textContent = `ok: ${location.origin}/r/${r.code}`;
+      out.className = "text-xs text-emerald-300";
+      toast("Ссылка создана", "success");
+      ev.currentTarget.reset();
+      await loadLinksTable();
+    } catch (e) {
+      out.textContent = e.message;
+      out.className = "text-xs text-rose-400";
+    }
+  });
+  await loadLinksTable();
+}
+
+async function loadLinksTable() {
+  const tbl = $("#linkTable");
+  if (!tbl) return;
+  const readOnly = isReadOnlyRole();
+  try {
+    const list = await api("/business/links");
+    if (!list.length) {
+      tbl.innerHTML = `<div class="text-slate-500 text-xs">Ссылок пока нет.</div>`;
+      return;
+    }
+    tbl.innerHTML = `
+      <table class="cb-table">
+        <thead><tr>
+          <th>Короткая ссылка</th><th>Название</th><th>Куда ведёт</th>
+          <th class="text-right">Всего</th><th class="text-right">24ч</th><th>Создана</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${list.map(l => {
+            const short = `${location.origin}/r/${l.code}`;
+            return `<tr>
+              <td class="font-mono text-xs whitespace-nowrap">
+                <span class="text-accent-500">/r/${escapeHTML(l.code)}</span>
+                <button data-act="copy" data-url="${escapeHTML(short)}" aria-label="Скопировать ссылку"
+                        class="ml-1 px-1.5 py-0.5 rounded bg-ink-700 hover:bg-ink-600 text-xs">⧉</button>
+              </td>
+              <td class="text-slate-100">${escapeHTML(l.name)}</td>
+              <td class="text-xs text-slate-400 max-w-[280px] truncate" title="${escapeHTML(l.target_url)}">${escapeHTML(l.target_url)}</td>
+              <td class="text-right text-slate-200"><b>${l.clicks_total || 0}</b></td>
+              <td class="text-right text-emerald-300"><b>${l.clicks_24h || 0}</b></td>
+              <td class="text-xs text-slate-500">${fmtRelative(l.created_at)}</td>
+              <td class="text-right whitespace-nowrap">
+                ${readOnly ? "" : `<button data-act="del" data-id="${l.id}" aria-label="Удалить ссылку"
+                    class="px-2 py-1 rounded bg-rose-700 hover:bg-rose-600 text-xs text-white">🗑</button>`}
+              </td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>`;
+    tbl.querySelectorAll('[data-act="copy"]').forEach(b => {
+      b.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(b.dataset.url);
+          toast("Ссылка скопирована", "success");
+        } catch { toast(b.dataset.url, "info"); }
+      });
+    });
+    tbl.querySelectorAll('[data-act="del"]').forEach(b => {
+      b.addEventListener("click", async () => {
+        if (!confirmDanger(`Удалить ссылку #${b.dataset.id} вместе со статистикой?`)) return;
+        try {
+          await api(`/business/links/${b.dataset.id}`, { method: "DELETE" });
+          toast("Удалено", "success");
+          await loadLinksTable();
+        } catch (e) { toast(e.message, "error"); }
+      });
+    });
+  } catch (e) {
+    tbl.innerHTML = `<div class="text-rose-400 text-sm">${escapeHTML(e.message)}</div>`;
+  }
+}
 
 async function renderAccounts(accountIdStr) {
   const accountId = accountIdStr ? Number(accountIdStr) : null;
@@ -2355,7 +2528,7 @@ async function loadMailingDetail(id) {
                 class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">${groupOptions}</select>
             </label>
             <label class="block md:col-span-2">
-              <span class="text-slate-400 text-xs">Community link (для {link})</span>
+              <span class="text-slate-400 text-xs">Community link (для {link}) — вставьте сюда /r/… из раздела «Ссылки», и переходы посчитаются</span>
               <input name="community_link" value="${escapeHTML(m.community_link || "")}" ${editLocked ? "disabled" : ""}
                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
             </label>

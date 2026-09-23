@@ -352,6 +352,26 @@ class ClientImportResult(BaseModel):
     invalid: int
 
 
+# ===== Tracked links (/r/{code}) =====
+
+
+class LinkCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    target_url: str = Field(min_length=8, max_length=2048)
+    mailing_id: Optional[int] = None
+
+
+class LinkItem(BaseModel):
+    id: int
+    code: str
+    name: str
+    target_url: str
+    mailing_id: Optional[int] = None
+    created_at: datetime
+    clicks_total: int = 0
+    clicks_24h: int = 0
+
+
 # ===== Instance settings =====
 
 

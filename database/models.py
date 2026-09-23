@@ -1030,3 +1030,38 @@ class ParsedUserSource(Base):
     created_at = Column(DateTime, default=utcnow_naive, nullable=False)
 
     user = relationship("ParsedUser", backref="sources", foreign_keys=[parsed_user_id])
+
+
+class TrackedLink(Base):
+    """Короткая ссылка для рекламы: /r/{code} → target_url, считаем переходы."""
+
+    __tablename__ = "tracked_links"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_tracked_link_code"),
+        Index("ix_tracked_links_mailing", "mailing_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(32), nullable=False)
+    name = Column(String(255), nullable=False, default="")
+    target_url = Column(String(2048), nullable=False)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)
+
+    hits = relationship("LinkHit", backref="link", cascade="all, delete-orphan",
+                        foreign_keys="LinkHit.link_id")
+
+
+class LinkHit(Base):
+    """Один переход по короткой ссылке (анонимный: ip/ua для грубой аналитики)."""
+
+    __tablename__ = "link_hits"
+    __table_args__ = (
+        Index("ix_link_hits_link_created", "link_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    link_id = Column(Integer, ForeignKey("tracked_links.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)
+    ip = Column(String(64), nullable=True)
+    ua = Column(String(255), nullable=True)

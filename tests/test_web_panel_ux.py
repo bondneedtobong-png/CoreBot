@@ -179,6 +179,20 @@ def test_client_import_wired():
     assert "/business/clients/import" in js
 
 
+def test_links_tracking_wired_and_recent_removed():
+    """Раздел Ссылки + виджет переходов; «Последние сообщения (БД)» убраны."""
+    html = _read("index.html")
+    js = _read("main.js")
+    assert 'data-route="links"' in html
+    assert 'case "links"' in js
+    assert "renderLinks" in js
+    assert "/business/links" in js
+    assert "/r/${" in js or '"/r/"' in js
+    assert "loadDashLinks" in js
+    assert "dashRecentDb" not in js
+    assert "loadDashRecentDb" not in js
+
+
 def test_panel_served_with_no_store():
     """Статика /panel отдаётся с Cache-Control: no-store (без застревания в кэше)."""
     os.environ.setdefault("PARSER_EMBEDDED", "0")

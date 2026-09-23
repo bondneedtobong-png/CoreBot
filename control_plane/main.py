@@ -31,6 +31,7 @@ from control_plane.business.groups import router as biz_groups_router
 from control_plane.business.proxies import router as biz_proxies_router
 from control_plane.business.parsing import router as biz_parsing_router
 from control_plane.business.tdata_routes import router as biz_tdata_router
+from control_plane.business.links import router as biz_links_router
 from control_plane.business.tdata_check_routes import router as biz_tdata_check_router
 from database.repository import db as bot_db
 from utils.logger import log
@@ -109,6 +110,7 @@ app.include_router(biz_clients_router)
 app.include_router(biz_instance_router)
 app.include_router(biz_groups_router)
 app.include_router(biz_proxies_router)
+app.include_router(biz_links_router)
 app.include_router(biz_parsing_router)
 app.include_router(biz_tdata_router)
 app.include_router(biz_tdata_check_router)
