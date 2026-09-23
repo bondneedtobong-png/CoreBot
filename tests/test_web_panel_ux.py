@@ -154,6 +154,24 @@ def test_proxy_pools_and_file_import_wired():
     assert "host:port@user:pass" in js
 
 
+def test_mailing_full_settings_wired():
+    """Все настройки из бота доступны в карточке рассылки."""
+    js = _read("main.js")
+    for name in (
+        'name="use_typing"',
+        'name="smart_delay"',
+        'name="variant_mode"',
+        'name="max_recipients"',
+        'name="mailing_cooldown_hours"',
+        'name="audience_client_status"',
+        'name="audience_include_classes"',
+        'name="audience_exclude_classes"',
+        "/test-recipients",
+        'id="mailTestUsers"',
+    ):
+        assert name in js, f"в форме рассылки нет {name}"
+
+
 def test_panel_served_with_no_store():
     """Статика /panel отдаётся с Cache-Control: no-store (без застревания в кэше)."""
     os.environ.setdefault("PARSER_EMBEDDED", "0")

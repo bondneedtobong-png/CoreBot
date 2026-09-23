@@ -2366,6 +2366,50 @@ async function loadMailingDetail(id) {
                 ${["classes","test","all"].map(v => `<option value="${v}" ${m.audience_mode === v ? "selected" : ""}>${v}</option>`).join("")}
               </select>
             </label>
+            <label class="flex items-center gap-2 mt-6 text-slate-300">
+              <input name="use_typing" type="checkbox" ${m.use_typing ? "checked" : ""} ${editLocked ? "disabled" : ""}
+                     class="rounded border-ink-600 bg-ink-800" />
+              Имитация «печатает…» (пауза 5–10с)
+            </label>
+            <label class="flex items-center gap-2 mt-6 text-slate-300">
+              <input name="smart_delay" type="checkbox" ${m.smart_delay ? "checked" : ""} ${editLocked ? "disabled" : ""}
+                     class="rounded border-ink-600 bg-ink-800" />
+              Умная задержка (±30% джиттер)
+            </label>
+            <label class="block">
+              <span class="text-slate-400 text-xs">Порядок вариантов</span>
+              <select name="variant_mode" ${editLocked ? "disabled" : ""}
+                class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
+                ${["random","sequential"].map(v => `<option value="${v}" ${(m.variant_mode || "random") === v ? "selected" : ""}>${v}</option>`).join("")}
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-slate-400 text-xs">Лимит успешных за запуск (0 = нет)</span>
+              <input name="max_recipients" type="number" min="0" max="1000000" value="${m.max_recipients ?? 0}" ${editLocked ? "disabled" : ""}
+                     class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+            </label>
+            <label class="block">
+              <span class="text-slate-400 text-xs">Кулдаун аккаунта после пакета (ч)</span>
+              <input name="mailing_cooldown_hours" type="number" step="0.1" min="0" max="168" value="${m.mailing_cooldown_hours ?? 12}" ${editLocked ? "disabled" : ""}
+                     class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100" />
+            </label>
+            <label class="block">
+              <span class="text-slate-400 text-xs">Статус клиентов (фильтр)</span>
+              <select name="audience_client_status" ${editLocked ? "disabled" : ""}
+                class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100">
+                ${["new","open"].map(v => `<option value="${v}" ${(m.audience_client_status || "new") === v ? "selected" : ""}>${v}</option>`).join("")}
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-slate-400 text-xs">Только классы (через запятую)</span>
+              <input name="audience_include_classes" value="${escapeHTML((m.audience_include_classes || []).join(", "))}" ${editLocked ? "disabled" : ""}
+                     class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono" />
+            </label>
+            <label class="block">
+              <span class="text-slate-400 text-xs">Исключить классы (через запятую)</span>
+              <input name="audience_exclude_classes" value="${escapeHTML((m.audience_exclude_classes || []).join(", "))}" ${editLocked ? "disabled" : ""}
+                     class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono" />
+            </label>
             <div class="md:col-span-3 flex items-center gap-3">
               <button type="submit" ${editLocked ? "disabled" : ""}
                 class="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed">Сохранить рассылку</button>
@@ -2425,25 +2469,65 @@ async function loadMailingDetail(id) {
       b.addEventListener("click", () => onMailingAction(Number(b.dataset.mid), b.dataset.mailAct));
     });
     if (!editLocked) {
+      const loadTestRecipients = async () => {
+        try {
+          const tr = await api(`/business/mailings/${id}/test-recipients`);
+          $("#mailTestUsers").value = (tr.usernames || []).map(u => "@" + u).join("\n");
+          $("#mailTestCount").textContent = `в списке: ${tr.unique ?? (tr.usernames || []).length}`;
+        } catch (e) {
+          $("#mailTestCount").textContent = "не загрузилось";
+        }
+      };
+      loadTestRecipients();
+      $("#mailTestSave").addEventListener("click", async () => {
+        const out = $("#mailTestMsg");
+        const usernames = $("#mailTestUsers").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        if (!usernames.length) {
+          out.textContent = "Список пуст — нечего сохранять.";
+          out.className = "text-xs text-amber-300";
+          return;
+        }
+        out.textContent = "…";
+        try {
+          const r = await api(`/business/mailings/${id}/test-recipients`, { method: "PUT", body: { usernames } });
+          out.textContent = `ok: уникальных ${r.unique}, дубликатов ${r.duplicates}, новых клиентов ${r.created_clients}`;
+          out.className = "text-xs text-emerald-300";
+          toast("Тестовые получатели сохранены", "success");
+          loadTestRecipients();
+        } catch (e) {
+          out.textContent = e.message;
+          out.className = "text-xs text-rose-400";
+        }
+      });
       $("#mailEditForm").addEventListener("submit", async (ev) => {
         ev.preventDefault();
         const fd = new FormData(ev.currentTarget);
         const variantsRaw = (fd.get("message_variants") || "").toString();
         const variants = variantsRaw.split("\n").map(s => s.trim()).filter(Boolean);
         const auto = Number(fd.get("auto_stop_hours") || 0);
+        const cap = Number(fd.get("max_recipients") || 0);
+        const splitClasses = (v) => (v || "").toString().split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
         const body = {
           name: (fd.get("name") || "").toString(),
           message_text: (fd.get("message_text") || "").toString(),
           message_variants: variants,
+          variant_mode: (fd.get("variant_mode") || "random").toString(),
+          use_typing: !!fd.get("use_typing"),
+          smart_delay: !!fd.get("smart_delay"),
           delay_between_messages: Number(fd.get("delay_between_messages") || 0),
           delay_between_accounts: Number(fd.get("delay_between_accounts") || 0),
           daily_limit: Number(fd.get("daily_limit") || 0),
           messages_per_batch: Number(fd.get("messages_per_batch") || 0),
           batch_delay: Number(fd.get("batch_delay") || 0),
+          max_recipients: cap > 0 ? cap : 0,
+          mailing_cooldown_hours: Number(fd.get("mailing_cooldown_hours") || 0),
           auto_stop_hours: auto > 0 ? auto : 0,
           target_group_id: Number(fd.get("target_group_id") || 0),
           community_link: (fd.get("community_link") || "").toString(),
           audience_mode: (fd.get("audience_mode") || "classes").toString(),
+          audience_client_status: (fd.get("audience_client_status") || "new").toString(),
+          audience_include_classes: splitClasses(fd.get("audience_include_classes")),
+          audience_exclude_classes: splitClasses(fd.get("audience_exclude_classes")),
         };
         const out = $("#mailEditMsg");
         out.textContent = "…";
@@ -2663,7 +2747,25 @@ async function loadClientDetail(id) {
         </div>
 
         ${c.tags?.length ? `
-          <div class="card">
+        <div class="card">
+          <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+            <h3 class="font-semibold">Тестовые получатели</h3>
+            <span id="mailTestCount" class="text-xs text-slate-500">…</span>
+          </div>
+          <p class="text-xs text-slate-500 mb-3">Для режима аудитории <b>test</b>: каждый подключённый аккаунт пишет каждому из списка. По одному @username в строке, с @ или без (как txt в боте).</p>
+          <label class="block text-sm mb-2">
+            <textarea id="mailTestUsers" rows="3" ${editLocked ? "disabled" : ""}
+              placeholder="@username1&#10;username2"
+              class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs"></textarea>
+          </label>
+          <div class="flex items-center gap-3">
+            <button id="mailTestSave" ${editLocked ? "disabled" : ""}
+              class="px-4 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 text-slate-200 text-sm disabled:opacity-50">Сохранить список (замена)</button>
+            <span id="mailTestMsg" class="text-xs text-slate-400"></span>
+          </div>
+        </div>
+
+        <div class="card">
             <h3 class="font-semibold mb-2">Теги</h3>
             <div class="flex flex-wrap gap-2">
               ${c.tags.map(t => `<span class="pill pill-gray">${escapeHTML(t)}</span>`).join("")}

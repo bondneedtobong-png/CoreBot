@@ -5,9 +5,11 @@
 bot_commands — её поллит `workers/bot_command_consumer.py` внутри процесса
 бота. Контрол-плейн только пишет команду в БД и сразу возвращает 200.
 """
+
 from __future__ import annotations
 
 import json
+import re
 from utils.time import utcnow_naive
 from typing import Optional
 
@@ -24,10 +26,18 @@ from control_plane.business.schemas import (
     MailingPatch,
     MailingPromptIn,
     MailingPromptOut,
+    MailingTestRecipientsIn,
+    MailingTestRecipientsOut,
 )
 from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
-from database.models import BotCommand, Mailing, MailingStatus
+from database.models import (
+    BotCommand,
+    Client,
+    Mailing,
+    MailingStatus,
+    MailingTestRecipient,
+)
 from database.sqlite_pragmas import run_sync_with_busy_retry
 from utils.neuro_prompts import (
     load_system_prompt,
@@ -47,6 +57,53 @@ _STOPPABLE = {"RUNNING", "PAUSED"}
 
 def _status_str(m: Mailing) -> str:
     return getattr(m.status, "value", str(m.status)) if m.status else "draft"
+
+
+_DEFAULT_AUDIENCE = {
+    "client_status": "new",
+    "include_classes": [],
+    "exclude_classes": ["bl"],
+}
+
+_USERNAME_RE = re.compile(r"^[a-z0-9_]{5,32}$")
+
+
+def _parse_audience(raw: object) -> dict:
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else {}
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    out = dict(_DEFAULT_AUDIENCE)
+    if data.get("client_status") in ("new", "open"):
+        out["client_status"] = data["client_status"]
+    for key in ("include_classes", "exclude_classes"):
+        vals = data.get(key)
+        if isinstance(vals, list):
+            out[key] = [str(x).strip() for x in vals if str(x).strip()][:50]
+    return out
+
+
+def _dump_audience(data: dict) -> str:
+    return json.dumps(
+        {
+            "client_status": data.get("client_status", "new"),
+            "include_classes": data.get("include_classes", []),
+            "exclude_classes": data.get("exclude_classes", []),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _normalize_username(raw: str) -> str | None:
+    """Юзернейм как в боте: без @, lower, 5–32 [a-z0-9_], без telegram*/bot*."""
+    s = (raw or "").strip().lstrip("@").lower()
+    if not _USERNAME_RE.match(s):
+        return None
+    if s.startswith("telegram") or s.startswith("bot"):
+        return None
+    return s
 
 
 def _serialize_list(m: Mailing) -> MailingListItem:
@@ -74,19 +131,32 @@ def _serialize_detail(m: Mailing) -> MailingDetail:
     except Exception:
         variants = []
     base = _serialize_list(m).model_dump()
+    aud = _parse_audience(getattr(m, "audience_filter_json", None))
     base.update(
         message_text=m.message_text or "",
         message_variants=variants,
+        variant_mode=(getattr(m, "variant_mode", None) or "random"),
+        use_typing=bool(getattr(m, "use_typing", True)),
+        smart_delay=bool(getattr(m, "smart_delay", False)),
         delay_between_messages=float(m.delay_between_messages or 0.0),
         delay_between_accounts=float(m.delay_between_accounts or 0.0),
         daily_limit=int(m.daily_limit or 0),
         messages_per_batch=int(m.messages_per_batch or 0),
         batch_delay=float(m.batch_delay or 0.0),
+        max_recipients=(
+            int(m.max_recipients) if getattr(m, "max_recipients", None) else None
+        ),
+        mailing_cooldown_hours=float(
+            getattr(m, "mailing_cooldown_hours", None) or 12.0
+        ),
         auto_stop_hours=(
             float(m.auto_stop_hours) if m.auto_stop_hours is not None else None
         ),
         target_group_id=int(m.target_group_id) if m.target_group_id else None,
         community_link=m.community_link,
+        audience_client_status=aud["client_status"],
+        audience_include_classes=aud["include_classes"],
+        audience_exclude_classes=aud["exclude_classes"],
     )
     return MailingDetail(**base)
 
@@ -264,6 +334,35 @@ def patch_mailing(
     if payload.message_variants is not None:
         cleaned = [str(x) for x in payload.message_variants if str(x).strip()]
         m.message_variants_json = json.dumps(cleaned, ensure_ascii=False)
+    if payload.variant_mode is not None:
+        m.variant_mode = payload.variant_mode
+    if payload.use_typing is not None:
+        m.use_typing = bool(payload.use_typing)
+    if payload.smart_delay is not None:
+        m.smart_delay = bool(payload.smart_delay)
+    if payload.max_recipients is not None:
+        m.max_recipients = (
+            int(payload.max_recipients) if payload.max_recipients > 0 else None
+        )
+    if payload.mailing_cooldown_hours is not None:
+        m.mailing_cooldown_hours = float(payload.mailing_cooldown_hours)
+    if (
+        payload.audience_client_status is not None
+        or payload.audience_include_classes is not None
+        or payload.audience_exclude_classes is not None
+    ):
+        aud = _parse_audience(getattr(m, "audience_filter_json", None))
+        if payload.audience_client_status is not None:
+            aud["client_status"] = payload.audience_client_status
+        if payload.audience_include_classes is not None:
+            aud["include_classes"] = [
+                s.strip() for s in payload.audience_include_classes if s.strip()
+            ][:50]
+        if payload.audience_exclude_classes is not None:
+            aud["exclude_classes"] = [
+                s.strip() for s in payload.audience_exclude_classes if s.strip()
+            ][:50]
+        m.audience_filter_json = _dump_audience(aud)
     if payload.delay_between_messages is not None:
         m.delay_between_messages = float(payload.delay_between_messages)
     if payload.delay_between_accounts is not None:
@@ -275,7 +374,9 @@ def patch_mailing(
     if payload.batch_delay is not None:
         m.batch_delay = float(payload.batch_delay)
     if payload.auto_stop_hours is not None:
-        m.auto_stop_hours = float(payload.auto_stop_hours) if payload.auto_stop_hours > 0 else None
+        m.auto_stop_hours = (
+            float(payload.auto_stop_hours) if payload.auto_stop_hours > 0 else None
+        )
     if payload.target_group_id is not None:
         m.target_group_id = (
             int(payload.target_group_id) if payload.target_group_id > 0 else None
@@ -379,4 +480,84 @@ def delete_mailing_prompt(
         mailing_id=int(mailing_id),
         text=load_system_prompt(int(mailing_id)),
         has_custom_file=False,
+    )
+
+
+# ---------------------------- Test recipients ----------------------------
+
+
+@router.get("/{mailing_id}/test-recipients", response_model=MailingTestRecipientsOut)
+def get_test_recipients(
+    mailing_id: int,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(get_current_user),
+):
+    m = db.get(Mailing, mailing_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="mailing not found")
+    rows = (
+        db.execute(
+            select(MailingTestRecipient.username)
+            .where(MailingTestRecipient.mailing_id == mailing_id)
+            .order_by(MailingTestRecipient.id)
+        )
+        .scalars()
+        .all()
+    )
+    return MailingTestRecipientsOut(
+        mailing_id=int(mailing_id),
+        usernames=list(rows),
+        unique=len(rows),
+    )
+
+
+@router.put("/{mailing_id}/test-recipients", response_model=MailingTestRecipientsOut)
+def put_test_recipients(
+    mailing_id: int,
+    payload: MailingTestRecipientsIn,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(require_operator_write),
+):
+    """Замена тестовой аудитории (как ввод txt в боте): нормализация,
+    дедуп, автосоздание Client(NEW). Полная замена списка."""
+    m = db.get(Mailing, mailing_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="mailing not found")
+    seen: set[str] = set()
+    unique: list[str] = []
+    dups = 0
+    for raw in payload.usernames:
+        norm = _normalize_username(raw)
+        if norm is None:
+            continue
+        if norm in seen:
+            dups += 1
+            continue
+        seen.add(norm)
+        unique.append(norm)
+    created_clients = 0
+    for uname in unique:
+        c = db.execute(select(Client).where(Client.username == uname)).scalars().first()
+        if c is None:
+            c = Client(username=uname)  # status по умолчанию NEW (Enum default)
+            db.add(c)
+            db.flush()
+            created_clients += 1
+    db.query(MailingTestRecipient).filter(
+        MailingTestRecipient.mailing_id == mailing_id
+    ).delete(synchronize_session=False)
+    for uname in unique:
+        c = db.execute(select(Client).where(Client.username == uname)).scalars().first()
+        db.add(
+            MailingTestRecipient(
+                mailing_id=mailing_id, username=uname, client_id=int(c.id)
+            )
+        )
+    db.commit()
+    return MailingTestRecipientsOut(
+        mailing_id=int(mailing_id),
+        usernames=unique,
+        unique=len(unique),
+        duplicates=dups,
+        created_clients=created_clients,
     )

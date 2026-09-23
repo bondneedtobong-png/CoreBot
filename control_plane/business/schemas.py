@@ -258,14 +258,22 @@ class MailingListItem(BaseModel):
 class MailingDetail(MailingListItem):
     message_text: str
     message_variants: list[str] = []
+    variant_mode: str = "random"
+    use_typing: bool = True
+    smart_delay: bool = False
     delay_between_messages: float
     delay_between_accounts: float
     daily_limit: int
     messages_per_batch: int
     batch_delay: float
+    max_recipients: Optional[int] = None
+    mailing_cooldown_hours: float = 12.0
     auto_stop_hours: Optional[float] = None
     target_group_id: Optional[int] = None
     community_link: Optional[str] = None
+    audience_client_status: str = "new"
+    audience_include_classes: list[str] = []
+    audience_exclude_classes: list[str] = []
 
 
 class MailingActionResult(BaseModel):
@@ -274,6 +282,18 @@ class MailingActionResult(BaseModel):
     command_id: int
     status: str    # queued | rejected
     detail: Optional[str] = None
+
+
+class MailingTestRecipientsIn(BaseModel):
+    usernames: list[str] = Field(min_length=1, max_length=500)
+
+
+class MailingTestRecipientsOut(BaseModel):
+    mailing_id: int
+    usernames: list[str] = []
+    unique: int = 0
+    duplicates: int = 0
+    created_clients: int = 0
 
 
 # ===== Clients =====
@@ -512,11 +532,16 @@ class MailingPatch(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     message_text: Optional[str] = Field(default=None, max_length=8000)
     message_variants: Optional[list[str]] = None
+    variant_mode: Optional[str] = Field(default=None, pattern="^(random|sequential)$")
+    use_typing: Optional[bool] = None
+    smart_delay: Optional[bool] = None
     delay_between_messages: Optional[float] = Field(default=None, ge=0, le=600)
     delay_between_accounts: Optional[float] = Field(default=None, ge=0, le=600)
     daily_limit: Optional[int] = Field(default=None, ge=0, le=10000)
     messages_per_batch: Optional[int] = Field(default=None, ge=0, le=10000)
     batch_delay: Optional[float] = Field(default=None, ge=0, le=86400)
+    max_recipients: Optional[int] = Field(default=None, ge=0, le=1000000)
+    mailing_cooldown_hours: Optional[float] = Field(default=None, ge=0, le=168)
     auto_stop_hours: Optional[float] = Field(default=None, ge=0, le=720)
     target_group_id: Optional[int] = None
     community_link: Optional[str] = Field(default=None, max_length=1024)
@@ -524,6 +549,9 @@ class MailingPatch(BaseModel):
     neuro_model: Optional[str] = Field(default=None, max_length=255)
     neuro_sampling_json: Optional[str] = Field(default=None, max_length=4000)
     audience_mode: Optional[str] = Field(default=None, pattern="^(classes|test|all)$")
+    audience_client_status: Optional[str] = Field(default=None, pattern="^(new|open)$")
+    audience_include_classes: Optional[list[str]] = None
+    audience_exclude_classes: Optional[list[str]] = None
 
 
 class MailingCreate(BaseModel):
