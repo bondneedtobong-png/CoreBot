@@ -36,7 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="tools.instance_status",
         description="CoreBot instance status: snapshot + readiness + version (no secrets).",
     )
-    parser.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    parser.add_argument(
+        "--json", action="store_true", help="machine-readable JSON output"
+    )
     parser.add_argument(
         "--app-dir",
         default=str(APP_ROOT),
@@ -48,8 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="journal + announce scripts/update_corebot.sh exit code (0/3/4)",
     )
-    parser.add_argument("--target-sha", default="", help="update target SHA for --report-update-exit")
-    parser.add_argument("--backup-path", default="", help="backup archive path for --report-update-exit")
+    parser.add_argument(
+        "--target-sha", default="", help="update target SHA for --report-update-exit"
+    )
+    parser.add_argument(
+        "--backup-path", default="", help="backup archive path for --report-update-exit"
+    )
     return parser
 
 
@@ -60,12 +66,16 @@ def build_payload(app_dir: Path) -> dict:
         collect_live_inputs,
     )
 
-    inputs = collect_live_inputs(CollectOptions(app_dir=Path(app_dir), in_process=False))
+    inputs = collect_live_inputs(
+        CollectOptions(app_dir=Path(app_dir), in_process=False)
+    )
     snapshot = build_snapshot(inputs)
     return {
         "snapshot": snapshot,
         "readiness": snapshot.get("readiness", {}),
-        "version": (snapshot.get("components", {}) or {}).get("version", {}).get("detail", {}),
+        "version": (snapshot.get("components", {}) or {})
+        .get("version", {})
+        .get("detail", {}),
         "coverage": "external",
     }
 
@@ -114,7 +124,9 @@ def render_human(payload: dict) -> str:
         "worker_pool",
     ):
         comp = components.get(name) or {}
-        lines.append(f"[{comp.get('state', '?'):^8}] {name:20} last_seen={comp.get('last_seen')}")
+        lines.append(
+            f"[{comp.get('state', '?'):^8}] {name:20} last_seen={comp.get('last_seen')}"
+        )
     return "\n".join(lines)
 
 
@@ -123,7 +135,9 @@ def report_update_exit(exit_code: int, target_sha: str, backup_path: str) -> int
     from control_plane.services.alerts import send_telegram_alert, upsert_alert
     from control_plane.services.watchdog import default_tenant_id, note_update_result
 
-    spec = note_update_result(exit_code=exit_code, target_sha=target_sha, backup_path=backup_path)
+    spec = note_update_result(
+        exit_code=exit_code, target_sha=target_sha, backup_path=backup_path
+    )
     if spec is None:
         print(f"update exit {exit_code}: no alert (success/no-op or pre-swap failure)")
         return 0
@@ -153,7 +167,9 @@ def report_update_exit(exit_code: int, target_sha: str, backup_path: str) -> int
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.report_update_exit is not None:
-        return report_update_exit(args.report_update_exit, args.target_sha, args.backup_path)
+        return report_update_exit(
+            args.report_update_exit, args.target_sha, args.backup_path
+        )
     try:
         payload = build_payload(Path(args.app_dir))
     except Exception as exc:
@@ -165,7 +181,10 @@ def main(argv: list[str] | None = None) -> int:
         text = render_human(payload)
     offender = _leak_check(text)
     if offender:
-        print(f"tools.instance_status: error: secret leak detected ({offender})", file=sys.stderr)
+        print(
+            f"tools.instance_status: error: secret leak detected ({offender})",
+            file=sys.stderr,
+        )
         return 2
     print(text)
     overall = (payload.get("snapshot", {}) or {}).get("overall")

@@ -11,13 +11,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from bot.config import FILES_DIR, OWNER_ID
+from bot.config import OWNER_ID
 from bot.keyboards.database_menu import (
     kb_database_debug_windows,
     kb_database_detail,
     kb_database_stats,
 )
-from database.repositories import ClientRepository
 from database.session import session_scope
 from services.database.client_search import (
     parse_simple_classes,

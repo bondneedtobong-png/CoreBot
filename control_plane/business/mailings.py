@@ -8,12 +8,11 @@ bot_commands — её поллит `workers/bot_command_consumer.py` внутр�
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from utils.time import utcnow_naive
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from control_plane.business.db import get_bot_db

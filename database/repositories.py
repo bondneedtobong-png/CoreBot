@@ -939,7 +939,6 @@ class AccountRepository:
         membership: "Membership",
     ) -> bool:
         """Смена принадлежности аккаунта."""
-        from database.models import Membership
         await session.execute(
             update(Account)
             .where(Account.id == account_id)

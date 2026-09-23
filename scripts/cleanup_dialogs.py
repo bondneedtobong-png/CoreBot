@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from utils.time import utcnow_naive
 
 from sqlalchemy import and_, create_engine, delete, func, select

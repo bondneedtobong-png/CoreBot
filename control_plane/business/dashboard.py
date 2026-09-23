@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from utils.time import utcnow_naive
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, case, desc, func, select
+from sqlalchemy import case, desc, func, select
 from sqlalchemy.orm import Session
 
 from control_plane.business.db import get_bot_db
@@ -28,7 +27,6 @@ from database.models import (
     Account,
     Client,
     ClientClassCounter,
-    ClientInteraction,
     Mailing,
     MailingLog,
     NeuroChatMessage,

@@ -32,7 +32,6 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from backup_lib import (  # noqa: E402
     BACKUP_FORMAT,
     BACKUP_MAX_AGE_HOURS,
-    MANIFEST_NAME,
     RETENTION_COUNT,
     RETENTION_DAYS,
     build_manifest,
@@ -43,7 +42,6 @@ from backup_lib import (  # noqa: E402
     render_summary,
     scan_stage,
     select_retention_victims,
-    sha256_file,
     sqlite_backup,
     verify_manifest,
     verify_sidecar,
@@ -51,8 +49,12 @@ from backup_lib import (  # noqa: E402
     write_sidecar,
 )
 
-BACKUP_SH = REPO_ROOT / "skills" / "corebot-vps-deploy" / "scripts" / "backup_corebot.sh"
-RESTORE_SH = REPO_ROOT / "skills" / "corebot-vps-deploy" / "scripts" / "restore_corebot.sh"
+BACKUP_SH = (
+    REPO_ROOT / "skills" / "corebot-vps-deploy" / "scripts" / "backup_corebot.sh"
+)
+RESTORE_SH = (
+    REPO_ROOT / "skills" / "corebot-vps-deploy" / "scripts" / "restore_corebot.sh"
+)
 SYSTEMD_DIR = REPO_ROOT / "skills" / "corebot-vps-deploy" / "systemd"
 
 SYNTHETIC_ENV = (
@@ -69,7 +71,9 @@ def make_db(path: Path, user_version: int = 0, rows: int = 3) -> None:
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(f"PRAGMA user_version={int(user_version)}")
-        conn.execute("CREATE TABLE IF NOT EXISTS probe (id INTEGER PRIMARY KEY, v TEXT)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS probe (id INTEGER PRIMARY KEY, v TEXT)"
+        )
         for i in range(rows):
             conn.execute("INSERT INTO probe (v) VALUES (?)", (f"v{i}",))
         conn.commit()
@@ -219,7 +223,10 @@ def test_sqlite_backup_under_wal_write_load(tmp_path):
 def test_retention_never_deletes_last():
     now = 1_786_000_000.0
     # Lone backup is kept even when ancient.
-    assert select_retention_victims([("corebot-old.tar.gz", now - 400 * 86400)], now=now) == []
+    assert (
+        select_retention_victims([("corebot-old.tar.gz", now - 400 * 86400)], now=now)
+        == []
+    )
     assert select_retention_victims([], now=now) == []
     # Age rule deletes old archives but never the newest.
     entries = [
@@ -251,7 +258,14 @@ def test_release_info_reuses_task06_format(tmp_path):
     info = read_release_info(tmp_path)
     assert info["version"] == "0.1.0"
     assert "sha" in info
-    assert set(info) <= {"version", "sha", "python_requires", "ubuntu", "released_at", "code_checksum"}
+    assert set(info) <= {
+        "version",
+        "sha",
+        "python_requires",
+        "ubuntu",
+        "released_at",
+        "code_checksum",
+    }
 
 
 # --- shell tests (WSL bash.exe; all data in WSL /tmp) --------------------------
@@ -322,20 +336,23 @@ def _run_driver(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
         "ROOT=$(mktemp -d)\n"
         "trap 'rm -rf \"$ROOT\"' EXIT\n"
         "APP=$ROOT/app; BACKUPS=$ROOT/backups\n"
-        "mkdir -p \"$APP\" \"$BACKUPS\"\n"
-        "python3 \"$SETUP\" \"$APP\"\n"
-        "export APP_DIR=\"$APP\" BACKUP_DIR=\"$BACKUPS\" PYTHON_BIN=python3\n"
+        'mkdir -p "$APP" "$BACKUPS"\n'
+        'python3 "$SETUP" "$APP"\n'
+        'export APP_DIR="$APP" BACKUP_DIR="$BACKUPS" PYTHON_BIN=python3\n'
         "export INSTANCE_ID=drill-instance INSTANCE_NAME=drillhost SYSTEMCTL=true\n"
     )
     driver = tmp_path / "driver.sh"
     driver.write_bytes((header + body).encode("utf-8"))
-    return subprocess.run([str(BASH_EXE), _to_wsl(driver)],
-                          capture_output=True, text=True, timeout=300)
+    return subprocess.run(
+        [str(BASH_EXE), _to_wsl(driver)], capture_output=True, text=True, timeout=300
+    )
 
 
 def test_backup_script_produces_archive_manifest_sidecar(tmp_path):
     _need_shell()
-    proc = _run_driver(tmp_path, """\
+    proc = _run_driver(
+        tmp_path,
+        """\
 archive=$("$BACKUP" | tail -n 1)
 [ -f "$archive" ]
 [ "$(stat -c %a "$archive")" = 600 ]
@@ -350,27 +367,33 @@ e="$ROOT/extract"; mkdir -p "$e"; tar -xzf "$archive" -C "$e"
 python3 "$LIB" manifest-verify --stage "$e"
 python3 "$LIB" sidecar-verify --archive "$archive" --stage "$e"
 echo BACKUP-OK
-""")
+""",
+    )
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "BACKUP-OK" in proc.stdout
 
 
 def test_backup_dry_run_changes_nothing(tmp_path):
     _need_shell()
-    proc = _run_driver(tmp_path, """\
+    proc = _run_driver(
+        tmp_path,
+        """\
 out=$("$BACKUP" --dry-run | tail -n 1)
 [ ! -e "$out" ]
 [ -z "$(ls "$BACKUPS"/corebot-*.tar.gz 2>/dev/null || true)" ]
 [ ! -e "$BACKUPS/.last_backup_ok" ]
 echo DRYRUN-OK
-""")
+""",
+    )
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "DRYRUN-OK" in proc.stdout
 
 
 def test_restore_roundtrip_and_perms(tmp_path):
     _need_shell()
-    proc = _run_driver(tmp_path, """\
+    proc = _run_driver(
+        tmp_path,
+        """\
 archive=$("$BACKUP" | tail -n 1)
 target=$ROOT/restored
 "$RESTORE" --archive "$archive" --target "$target" > "$ROOT/restore.out"
@@ -381,14 +404,17 @@ python3 "$LIB" integrity-check --db "$target/data/corebot.db"
 python3 "$LIB" integrity-check --db "$target/data/control_plane.db"
 ! grep -q SYNTHETIC_TEST_ONLY "$ROOT/restore.out"
 echo RESTORE-OK
-""")
+""",
+    )
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "RESTORE-OK" in proc.stdout
 
 
 def test_restore_refuses_nonempty_dir(tmp_path):
     _need_shell()
-    proc = _run_driver(tmp_path, """\
+    proc = _run_driver(
+        tmp_path,
+        """\
 archive=$("$BACKUP" | tail -n 1)
 target=$ROOT/restored; mkdir -p "$target"; echo x > "$target/something.txt"
 set +e
@@ -398,14 +424,17 @@ set -e
 [ "$rc" = 4 ]
 grep -q "not empty" "$ROOT/err"
 echo REFUSE-NONEMPTY-OK
-""")
+""",
+    )
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "REFUSE-NONEMPTY-OK" in proc.stdout
 
 
 def test_restore_refuses_live_even_with_allow_nonempty(tmp_path):
     _need_shell()
-    proc = _run_driver(tmp_path, """\
+    proc = _run_driver(
+        tmp_path,
+        """\
 archive=$("$BACKUP" | tail -n 1)
 live=$ROOT/live
 python3 "$SETUP" "$live"
@@ -418,14 +447,17 @@ set -e
 grep -q "LIVE" "$ROOT/err"
 [ "$(cat "$live/data/sessions/acc.session")" = "$before" ]
 echo REFUSE-LIVE-OK
-""")
+""",
+    )
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "REFUSE-LIVE-OK" in proc.stdout
 
 
 def test_restore_refuses_checksum_mismatch(tmp_path):
     _need_shell()
-    proc = _run_driver(tmp_path, """\
+    proc = _run_driver(
+        tmp_path,
+        """\
 archive=$("$BACKUP" | tail -n 1)
 printf '\\x00' >> "$archive"
 set +e
@@ -435,14 +467,17 @@ set -e
 [ "$rc" = 3 ]
 [ ! -e "$ROOT/restored/.env" ]
 echo REFUSE-CHECKSUM-OK
-""")
+""",
+    )
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "REFUSE-CHECKSUM-OK" in proc.stdout
 
 
 def test_restore_refuses_manifest_mismatch(tmp_path):
     _need_shell()
-    proc = _run_driver(tmp_path, """\
+    proc = _run_driver(
+        tmp_path,
+        """\
 archive=$("$BACKUP" | tail -n 1)
 e="$ROOT/repack"; mkdir -p "$e"
 tar -xzf "$archive" -C "$e"
@@ -456,14 +491,17 @@ set -e
 [ "$rc" = 5 ]
 [ ! -e "$ROOT/restored/.env" ]
 echo REFUSE-MANIFEST-OK
-""")
+""",
+    )
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "REFUSE-MANIFEST-OK" in proc.stdout
 
 
 def test_shell_retention_keeps_newest_and_caps_count(tmp_path):
     _need_shell()
-    proc = _run_driver(tmp_path, """\
+    proc = _run_driver(
+        tmp_path,
+        """\
 for i in $(seq 0 8); do
   f="$BACKUPS/corebot-2025070${i}T000000Z.tar.gz"
   echo fake > "$f"; echo x > "$f.sha256"
@@ -474,7 +512,8 @@ n=$(ls "$BACKUPS"/corebot-*.tar.gz | wc -l)
 [ "$n" -le 7 ]
 [ -f "$archive" ]
 echo RETENTION-OK
-""")
+""",
+    )
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "RETENTION-OK" in proc.stdout
 
@@ -482,7 +521,9 @@ echo RETENTION-OK
 def test_backup_under_wal_write_load_shell(tmp_path):
     """Writer hammers corebot.db (WAL) while backup+restore run; integrity ok."""
     _need_shell()
-    proc = _run_driver(tmp_path, """\
+    proc = _run_driver(
+        tmp_path,
+        """\
 python3 "$WRITER" "$APP/data/corebot.db" 20 & writer=$!
 archive=$("$BACKUP" | tail -n 1)
 wait "$writer"
@@ -491,7 +532,8 @@ python3 "$LIB" sidecar-verify --archive "$archive"
 python3 "$LIB" integrity-check --db "$ROOT/restored/data/corebot.db"
 python3 "$LIB" integrity-check --db "$ROOT/restored/data/control_plane.db"
 echo "LOAD-DRILL OK $(basename "$archive")"
-""")
+""",
+    )
     assert proc.returncode == 0, proc.stderr[-4000:]
     assert "LOAD-DRILL OK" in proc.stdout
 

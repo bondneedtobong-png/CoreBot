@@ -140,7 +140,11 @@ def git_sha(root: str | Path) -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     sha = (out.stdout or "").strip()
-    return sha if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha.lower()) else None
+    return (
+        sha
+        if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha.lower())
+        else None
+    )
 
 
 def read_version(root: str | Path) -> str:
@@ -173,7 +177,9 @@ def write_manifest(root: str | Path, path: str | Path, sha: str | None = None) -
     """Build and write the manifest; returns the manifest dict."""
     manifest = build_manifest(root, sha=sha)
     dest = Path(path)
-    dest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    dest.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return manifest
 
 
@@ -201,17 +207,23 @@ def verify_manifest(manifest: dict, root: str | Path | None = None) -> list[str]
     if manifest.get("python_requires") != PYTHON_REQUIRES:
         errors.append(f"manifest: 'python_requires' must be {PYTHON_REQUIRES!r}")
     ubuntu = manifest.get("ubuntu")
-    if not isinstance(ubuntu, list) or not ubuntu or any(
-        not isinstance(v, str) or v not in UBUNTU_SUPPORTED for v in ubuntu
+    if (
+        not isinstance(ubuntu, list)
+        or not ubuntu
+        or any(not isinstance(v, str) or v not in UBUNTU_SUPPORTED for v in ubuntu)
     ):
-        errors.append(f"manifest: 'ubuntu' must be a non-empty subset of {UBUNTU_SUPPORTED}")
+        errors.append(
+            f"manifest: 'ubuntu' must be a non-empty subset of {UBUNTU_SUPPORTED}"
+        )
     released_at = str(manifest.get("released_at", ""))
     try:
         datetime.strptime(released_at, "%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         errors.append("manifest: 'released_at' must be UTC '%Y%m%dT%H%M%SZ'-style ISO")
     checksum = str(manifest.get("code_checksum", ""))
-    if len(checksum) != 64 or any(c not in "0123456789abcdef" for c in checksum.lower()):
+    if len(checksum) != 64 or any(
+        c not in "0123456789abcdef" for c in checksum.lower()
+    ):
         errors.append("manifest: 'code_checksum' must be a 64-hex sha256")
     if not errors and root is not None and sha != "unknown":
         actual = compute_code_checksum(root)
@@ -260,9 +272,14 @@ def render_status(manifest: dict | None, live: dict | None) -> str:
                 if field == "ubuntu" and isinstance(value, list):
                     value = ",".join(value)
                 lines.append(f"  {field}={value}")
-        m_sha, l_sha = normalize_sha((manifest or {}).get("sha")), normalize_sha(live.get("sha"))
+        m_sha, l_sha = (
+            normalize_sha((manifest or {}).get("sha")),
+            normalize_sha(live.get("sha")),
+        )
         if m_sha and l_sha and m_sha != "unknown" and l_sha != "unknown":
-            lines.append(f"match={'OK' if l_sha.startswith(m_sha[:12]) or m_sha.startswith(l_sha[:12]) else 'MISMATCH'}")
+            lines.append(
+                f"match={'OK' if l_sha.startswith(m_sha[:12]) or m_sha.startswith(l_sha[:12]) else 'MISMATCH'}"
+            )
     else:
         lines.append("live /version: UNAVAILABLE")
     return "\n".join(lines) + "\n"

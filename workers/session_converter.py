@@ -422,7 +422,7 @@ async def convert_tdata_to_session(
         # Создаём сессию из Tdata через tgconvertor
         if hint == "":
             try:
-                log.info(f"🔄 Загрузка Tdata через tgconvertor...")
+                log.info("🔄 Загрузка Tdata через tgconvertor...")
                 from TGConvertor import SessionManager  # ленивый импорт: не валим старт всего бота
                 # from_tdata_folder — синхронный метод; запускаем в thread + таймаут
                 if password:
@@ -443,7 +443,7 @@ async def convert_tdata_to_session(
                         timeout=120,
                     )
 
-                log.info(f"✅ Tdata загружена")
+                log.info("✅ Tdata загружена")
 
             except BaseException as e:
                 log.warning(f"⚠️ Primary конвертация упала: {e}")
@@ -493,7 +493,7 @@ async def convert_tdata_to_session(
             
             client = TelegramClient(str(session_path), api_id=api_id, api_hash=api_hash)
             await client.connect()
-            log.info(f"🔌 Подключение к Telegram...")
+            log.info("🔌 Подключение к Telegram...")
             
             # Используем is_user_authorized() вместо isAuthorized()
             if await client.is_user_authorized():
@@ -508,14 +508,14 @@ async def convert_tdata_to_session(
                 
                 display_name = f"{first_name} {last_name}".strip() if first_name else "Unknown"
                 
-                log.info(f"✅ Аккаунт успешно конвертирован:")
+                log.info("✅ Аккаунт успешно конвертирован:")
                 log.info(f"   📱 Телефон: {phone}")
                 log.info(f"   👤 Username: @{username or 'N/A'}")
                 log.info(f"   🆔 ID: {user_id}")
                 log.info(f"   📛 Имя: {display_name}")
                 
                 await client.disconnect()
-                log.info(f"🔌 Отключено")
+                log.info("🔌 Отключено")
                 
                 return {
                     "success": True,

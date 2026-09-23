@@ -3,12 +3,14 @@
 Covers: import without side effects, single startup/shutdown via TestClient,
 embedded-parser task lifecycle, and startup-failure cleanup.
 
-NOTE: this environment has no ``python-multipart`` installed (pre-existing,
-unrelated to task 03 — see tests/test_tdata_web_import.py failures). Only
-``control_plane.business.tdata_routes`` needs it (``UploadFile`` param), so it
-is stubbed with an empty router while *this* module runs. The stub is removed
-afterwards, restoring baseline behaviour for the tdata tests.
+NOTE: ``control_plane.business.tdata_routes`` needs ``python-multipart``
+(``UploadFile`` param; provided via requirements-dev.txt since task 10, which
+fixed the pre-existing tdata failures). It is stubbed here with an empty
+router while *this* module runs so lifespan tests stay hermetic and ordering
+independent. The stub is removed afterwards, restoring baseline behaviour
+for the tdata tests.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -87,9 +89,7 @@ def test_startup_shutdown_once_parser_disabled(monkeypatch):
     main = _load_main()
     monkeypatch.setenv("PARSER_EMBEDDED", "0")
     bootstrap_calls: list[int] = []
-    monkeypatch.setattr(
-        main, "bootstrap_defaults", lambda: bootstrap_calls.append(1)
-    )
+    monkeypatch.setattr(main, "bootstrap_defaults", lambda: bootstrap_calls.append(1))
     fake_db = _fake_bot_db()
     monkeypatch.setattr(main, "bot_db", fake_db)
 
@@ -117,9 +117,7 @@ def test_parser_enabled_task_lifecycle(monkeypatch):
     main = _load_main()
     monkeypatch.setenv("PARSER_EMBEDDED", "1")
     bootstrap_calls: list[int] = []
-    monkeypatch.setattr(
-        main, "bootstrap_defaults", lambda: bootstrap_calls.append(1)
-    )
+    monkeypatch.setattr(main, "bootstrap_defaults", lambda: bootstrap_calls.append(1))
     fake_db = _fake_bot_db()
     monkeypatch.setattr(main, "bot_db", fake_db)
 
@@ -183,7 +181,9 @@ def test_connect_failure_creates_no_parser_task(monkeypatch):
     main = _load_main()
     monkeypatch.setenv("PARSER_EMBEDDED", "1")
     monkeypatch.setattr(main, "bootstrap_defaults", lambda: None)
-    fake_db = _fake_bot_db(connect_kwargs={"side_effect": ConnectionError("bot db down")})
+    fake_db = _fake_bot_db(
+        connect_kwargs={"side_effect": ConnectionError("bot db down")}
+    )
     monkeypatch.setattr(main, "bot_db", fake_db)
 
     created_names: list[str | None] = []

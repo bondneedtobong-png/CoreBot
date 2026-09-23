@@ -153,13 +153,17 @@ def read_instance_identity(app_dir: str | Path) -> dict:
     instance_id = (os.getenv("INSTANCE_ID", "") or "").strip()
     if not instance_id:
         try:
-            instance_id = (app_dir / ".instance_id").read_text(encoding="utf-8").strip().split()[0]
+            instance_id = (
+                (app_dir / ".instance_id")
+                .read_text(encoding="utf-8")
+                .strip()
+                .split()[0]
+            )
         except (OSError, IndexError):
             instance_id = "unknown"
-    name = (
-        (os.getenv("INSTANCE_NAME", "") or "").strip()
-        or (os.getenv("TENANT_NAME", "") or "").strip()
-    )
+    name = (os.getenv("INSTANCE_NAME", "") or "").strip() or (
+        os.getenv("TENANT_NAME", "") or ""
+    ).strip()
     if not name:
         try:
             name = socket.gethostname()
@@ -257,7 +261,9 @@ def scan_stage(stage: str | Path) -> tuple[list[dict], dict]:
         rel = path.relative_to(stage).as_posix()
         if rel == MANIFEST_NAME:
             continue
-        files.append({"path": rel, "size": path.stat().st_size, "sha256": sha256_file(path)})
+        files.append(
+            {"path": rel, "size": path.stat().st_size, "sha256": sha256_file(path)}
+        )
         if path.suffix == ".db":
             databases[rel] = db_identity(path)
     files.sort(key=lambda entry: entry["path"])
@@ -293,7 +299,9 @@ def build_manifest(
 def write_manifest(manifest: dict, stage: str | Path) -> Path:
     """Write the manifest into the staging dir; returns its path."""
     dest = Path(stage) / MANIFEST_NAME
-    dest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    dest.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return dest
 
 
@@ -337,7 +345,9 @@ def verify_manifest(manifest: dict, stage: str | Path) -> list[str]:
             errors.append(f"manifest: bad file path {rel!r}")
             continue
         seen.add(rel)
-        if len(want_sha) != 64 or any(c not in "0123456789abcdef" for c in want_sha.lower()):
+        if len(want_sha) != 64 or any(
+            c not in "0123456789abcdef" for c in want_sha.lower()
+        ):
             errors.append(f"manifest: bad sha256 for {rel!r}")
             continue
         if not isinstance(want_size, int) or want_size < 0:
@@ -357,7 +367,11 @@ def verify_manifest(manifest: dict, stage: str | Path) -> list[str]:
         errors.append("manifest: 'databases' must be an object")
     else:
         for rel, ident in databases.items():
-            if not isinstance(ident, dict) or "tables_hash" not in ident or "user_version" not in ident:
+            if (
+                not isinstance(ident, dict)
+                or "tables_hash" not in ident
+                or "user_version" not in ident
+            ):
                 errors.append(f"manifest: bad db identity for {rel!r}")
     return errors
 
@@ -472,7 +486,9 @@ def select_retention_victims(
             victims.append(name)
     survivors = [name for name, _ in ordered if name not in victims]
     while len(survivors) > keep_count:
-        oldest = next(name for name, _ in ordered if name in survivors and name != newest)
+        oldest = next(
+            name for name, _ in ordered if name in survivors and name != newest
+        )
         victims.append(oldest)
         survivors.remove(oldest)
     return sorted(victims)
@@ -490,9 +506,13 @@ def render_summary(manifest: dict) -> str:
         f"created_at_utc={manifest.get('created_at_utc', 'unknown')}",
     ]
     instance = manifest.get("instance") or {}
-    lines.append(f"instance={instance.get('id', 'unknown')} ({instance.get('name', 'unknown')})")
+    lines.append(
+        f"instance={instance.get('id', 'unknown')} ({instance.get('name', 'unknown')})"
+    )
     release = manifest.get("release") or {}
-    lines.append(f"release={release.get('version', 'unknown')} sha={release.get('sha', 'unknown')}")
+    lines.append(
+        f"release={release.get('version', 'unknown')} sha={release.get('sha', 'unknown')}"
+    )
     databases = manifest.get("databases") or {}
     for rel in sorted(databases):
         ident = databases[rel] or {}
@@ -500,7 +520,9 @@ def render_summary(manifest: dict) -> str:
             f"db {rel}: user_version={ident.get('user_version', '?')} "
             f"tables_hash={str(ident.get('tables_hash', '?'))[:12]}"
         )
-    lines.append(f"files={len(manifest.get('files', []))} total_bytes={manifest.get('total_bytes', '?')}")
+    lines.append(
+        f"files={len(manifest.get('files', []))} total_bytes={manifest.get('total_bytes', '?')}"
+    )
     lines.append(f"duration_sec={manifest.get('duration_sec', '?')}")
     return "\n".join(lines) + "\n"
 
@@ -617,9 +639,13 @@ def _cmd_retention_plan(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="backup_lib", description="CoreBot backup manifest helpers.")
+    parser = argparse.ArgumentParser(
+        prog="backup_lib", description="CoreBot backup manifest helpers."
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    build = sub.add_parser("manifest-build", help="scan stage dir and write backup_manifest.json")
+    build = sub.add_parser(
+        "manifest-build", help="scan stage dir and write backup_manifest.json"
+    )
     build.add_argument("--app-dir", required=True)
     build.add_argument("--stage", required=True)
     build.add_argument("--instance-id", default="unknown")
@@ -627,30 +653,42 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--created-at", required=True)
     build.add_argument("--duration-sec", default="0")
     build.set_defaults(func=_cmd_manifest_build)
-    verify = sub.add_parser("manifest-verify", help="verify staged manifest + checksums")
+    verify = sub.add_parser(
+        "manifest-verify", help="verify staged manifest + checksums"
+    )
     verify.add_argument("--stage", required=True)
     verify.set_defaults(func=_cmd_manifest_verify)
     sidecar_write = sub.add_parser("sidecar-write", help="write <archive>.sha256")
     sidecar_write.add_argument("--archive", required=True)
     sidecar_write.add_argument("--stage", required=True)
     sidecar_write.set_defaults(func=_cmd_sidecar_write)
-    sidecar_verify = sub.add_parser("sidecar-verify", help="verify archive (+ staged manifest) vs sidecar")
+    sidecar_verify = sub.add_parser(
+        "sidecar-verify", help="verify archive (+ staged manifest) vs sidecar"
+    )
     sidecar_verify.add_argument("--archive", required=True)
     sidecar_verify.add_argument("--stage", default=None)
     sidecar_verify.set_defaults(func=_cmd_sidecar_verify)
-    backup = sub.add_parser("sqlite-backup", help="consistent online SQLite backup (backup API)")
+    backup = sub.add_parser(
+        "sqlite-backup", help="consistent online SQLite backup (backup API)"
+    )
     backup.add_argument("--src", required=True)
     backup.add_argument("--dst", required=True)
     backup.set_defaults(func=_cmd_sqlite_backup)
-    integrity = sub.add_parser("integrity-check", help="PRAGMA integrity_check (prints ok)")
+    integrity = sub.add_parser(
+        "integrity-check", help="PRAGMA integrity_check (prints ok)"
+    )
     integrity.add_argument("--db", required=True)
     integrity.set_defaults(func=_cmd_integrity_check)
-    retention = sub.add_parser("retention-plan", help="print victim archive names (never the newest)")
+    retention = sub.add_parser(
+        "retention-plan", help="print victim archive names (never the newest)"
+    )
     retention.add_argument("--dir", required=True)
     retention.add_argument("--keep", type=int, default=RETENTION_COUNT)
     retention.add_argument("--max-age-days", type=int, default=RETENTION_DAYS)
     retention.set_defaults(func=_cmd_retention_plan)
-    summary = sub.add_parser("summary", help="print allowlisted manifest summary (no secrets)")
+    summary = sub.add_parser(
+        "summary", help="print allowlisted manifest summary (no secrets)"
+    )
     summary.add_argument("--stage", required=True)
     summary.set_defaults(func=_cmd_summary)
     return parser

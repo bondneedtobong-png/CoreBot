@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from utils.time import utcnow_naive
-from typing import Any, Optional
+from typing import Optional
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert

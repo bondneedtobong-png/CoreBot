@@ -240,16 +240,42 @@ uvicorn control_plane.main:app --host 127.0.0.1 --port 8081 --reload
 python -m pytest tests/ -q
 ```
 
-Sanity-check фронта:
-
-```bash
-node -c web-panel/main.js
-```
-
 In-process smoke панели без поднятия uvicorn:
 
 ```bash
 python -c "from fastapi.testclient import TestClient; from control_plane.main import app; print(TestClient(app).get('/health').json())"
+```
+
+### 6. Quality gate (совпадает с `.github/workflows/ci.yml`)
+
+Полный локальный gate — те же команды, что крутит CI на Windows (py3.11)
+и Ubuntu (py3.11, py3.12). Failing gate = красный PR. Всё hermetic:
+без реальных Telegram/OpenRouter-вызовов и без секретов
+(`.env`/`data/` в git не коммитятся; для BAT-проверки `.env`
+синтезируется из `.env.example`).
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests/ -q
+python -m compileall -q bot control_plane database workers services utils tools scripts tests main.py migrate_mailings.py
+python -m ruff check .
+python -m ruff format --check control_plane/services/heartbeat.py control_plane/services/sanitize.py control_plane/services/snapshot.py control_plane/services/watchdog.py control_plane/version.py database/sqlite_pragmas.py scripts/backup_lib.py scripts/make_release.py scripts/release_lib.py tests/test_backup_restore.py tests/test_config_validation.py tests/test_fleet_automation.py tests/test_integration_flows.py tests/test_lifespan_bootstrap.py tests/test_observability.py tests/test_release_workflow.py tests/test_sqlite_reliability.py tests/test_utc_time_model.py tools/__init__.py tools/instance_status.py tools/validate_config.py tools/validate_skill.py utils/time.py
+node --check web-panel/main.js
+for f in scripts/*.sh skills/corebot-vps-deploy/scripts/*.sh; do bash -n "$f" || exit 1; done
+python -m tools.validate_skill
+python -m tools.validate_config --mode local --env-file .env.example
+```
+
+`ruff format --check` покрывает только curated-список файлов задач 02–10
+(см. шапку `pyproject.toml`): legacy-код покрыт `ruff check` + `compileall`,
+массовый reformat legacy в скоуп задачи 10 не входит. Конфиг pytest —
+только `pytest.ini` (в `pyproject.toml` его дубликата нет осознанно).
+
+Только Windows (BAT-гейт с временным env без секретов):
+
+```bat
+copy /Y .env.example .env
+start_corebot.bat --check
 ```
 
 ---

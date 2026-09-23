@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from utils.time import utcnow_naive
 import hashlib
 

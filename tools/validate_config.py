@@ -204,7 +204,9 @@ def _check_float(
 def _check_jwt_secret(col: _Collector, env: Mapping[str, str]) -> None:
     value = env.get("CP_JWT_SECRET", "")
     if not value or not value.strip():
-        col.fail("CP_JWT_SECRET", "is missing or empty; generate with `openssl rand -hex 32`")
+        col.fail(
+            "CP_JWT_SECRET", "is missing or empty; generate with `openssl rand -hex 32`"
+        )
         return
     secret = value.strip()
     lowered = secret.lower()
@@ -224,12 +226,17 @@ def _check_jwt_secret(col: _Collector, env: Mapping[str, str]) -> None:
 def _check_admin_password(col: _Collector, env: Mapping[str, str]) -> None:
     value = env.get("CP_BOOTSTRAP_ADMIN_PASSWORD", "")
     if not value or not value.strip():
-        col.fail("CP_BOOTSTRAP_ADMIN_PASSWORD", "is missing or empty; set a strong password")
+        col.fail(
+            "CP_BOOTSTRAP_ADMIN_PASSWORD", "is missing or empty; set a strong password"
+        )
         return
     password = value.strip()
     lowered = password.lower()
     if lowered in UNSAFE_SECRET_MARKERS or lowered.startswith("change-me"):
-        col.fail("CP_BOOTSTRAP_ADMIN_PASSWORD", "uses a forbidden placeholder/default; set a strong password")
+        col.fail(
+            "CP_BOOTSTRAP_ADMIN_PASSWORD",
+            "uses a forbidden placeholder/default; set a strong password",
+        )
     if len(password) < 12:
         col.fail(
             "CP_BOOTSTRAP_ADMIN_PASSWORD",
@@ -263,10 +270,14 @@ def _check_ingest_url(col: _Collector, env: Mapping[str, str]) -> None:
     try:
         parsed = urlparse(value)
     except ValueError:
-        col.fail("CP_INGEST_URL", "is malformed; expected http://127.0.0.1:8081/ingest/batch")
+        col.fail(
+            "CP_INGEST_URL", "is malformed; expected http://127.0.0.1:8081/ingest/batch"
+        )
         return
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        col.fail("CP_INGEST_URL", "is malformed; expected http://127.0.0.1:8081/ingest/batch")
+        col.fail(
+            "CP_INGEST_URL", "is malformed; expected http://127.0.0.1:8081/ingest/batch"
+        )
         return
     if parsed.hostname not in LOOPBACK_HOSTS:
         col.fail("CP_INGEST_URL", "must stay loopback (127.0.0.1), never a public host")
@@ -276,13 +287,19 @@ def _check_ingest_url(col: _Collector, env: Mapping[str, str]) -> None:
 
 def _check_public_hosts(col: _Collector, env: Mapping[str, str]) -> None:
     """Reject 0.0.0.0 wherever an env var carries a host/URL."""
-    for name in ("OPENROUTER_BASE_URL", "OPENROUTER_HTTP_REFERER", "CONTROL_BOT_PROXY_HOST"):
+    for name in (
+        "OPENROUTER_BASE_URL",
+        "OPENROUTER_HTTP_REFERER",
+        "CONTROL_BOT_PROXY_HOST",
+    ):
         value = (env.get(name, "") or "").strip()
         if value and "0.0.0.0" in value:
             col.fail(name, "must not reference 0.0.0.0")
 
 
-def validate(mode: str | None = None, env: Mapping[str, str] | None = None) -> ValidationResult:
+def validate(
+    mode: str | None = None, env: Mapping[str, str] | None = None
+) -> ValidationResult:
     """Validate bot + Control Plane config. Env re-read on every call."""
     snapshot: Mapping[str, str] = dict(os.environ) if env is None else dict(env)
     active_mode = resolve_mode(mode, snapshot)
@@ -291,13 +308,17 @@ def validate(mode: str | None = None, env: Mapping[str, str] | None = None) -> V
     # --- Telegram credentials (CONFIG_CONTRACT: mandatory) ---
     api_id = (snapshot.get("API_ID", "") or "").strip()
     if not api_id:
-        col.fail("API_ID", "is missing or empty; set the numeric id from my.telegram.org")
+        col.fail(
+            "API_ID", "is missing or empty; set the numeric id from my.telegram.org"
+        )
     elif not api_id.isdigit() or int(api_id) <= 0:
         col.fail("API_ID", "must be a positive integer from my.telegram.org")
 
     api_hash = (snapshot.get("API_HASH", "") or "").strip()
     if not api_hash:
-        col.fail("API_HASH", "is missing or empty; set the 32-hex value from my.telegram.org")
+        col.fail(
+            "API_HASH", "is missing or empty; set the 32-hex value from my.telegram.org"
+        )
     elif not _API_HASH_RE.match(api_hash):
         col.fail("API_HASH", "must be 32 hex characters from my.telegram.org")
 
@@ -309,7 +330,9 @@ def validate(mode: str | None = None, env: Mapping[str, str] | None = None) -> V
 
     owner_id = (snapshot.get("OWNER_ID", "") or "").strip()
     if not owner_id or owner_id == "0":
-        col.fail("OWNER_ID", "is missing or empty; set the numeric Telegram id of the owner")
+        col.fail(
+            "OWNER_ID", "is missing or empty; set the numeric Telegram id of the owner"
+        )
     elif not owner_id.isdigit() or int(owner_id) <= 0:
         col.fail("OWNER_ID", "must be a positive numeric Telegram id")
 
@@ -354,7 +377,9 @@ def validate(mode: str | None = None, env: Mapping[str, str] | None = None) -> V
     _check_float(col, snapshot, "NEURO_DEFAULT_TEMPERATURE", minimum=0, maximum=2)
     _check_float(col, snapshot, "NEURO_DEFAULT_TOP_P", minimum=0, maximum=1)
     _check_int(col, snapshot, "NEURO_DEFAULT_TOP_K", minimum=0)
-    _check_float(col, snapshot, "NEURO_DEFAULT_FREQUENCY_PENALTY", minimum=-2, maximum=2)
+    _check_float(
+        col, snapshot, "NEURO_DEFAULT_FREQUENCY_PENALTY", minimum=-2, maximum=2
+    )
     _check_float(col, snapshot, "NEURO_DEFAULT_PRESENCE_PENALTY", minimum=-2, maximum=2)
     _check_float(col, snapshot, "NEURO_DEFAULT_REPETITION_PENALTY", minimum=0)
     _check_float(col, snapshot, "NEURO_DEFAULT_MIN_P", minimum=0, maximum=1)
@@ -368,19 +393,32 @@ def validate(mode: str | None = None, env: Mapping[str, str] | None = None) -> V
             col.fail("CONTROL_BOT_PROXY_TYPE", "must be empty, socks5 or http")
         else:
             if not (snapshot.get("CONTROL_BOT_PROXY_HOST", "") or "").strip():
-                col.fail("CONTROL_BOT_PROXY_HOST", "is required when CONTROL_BOT_PROXY_TYPE is set")
-            _check_int(col, snapshot, "CONTROL_BOT_PROXY_PORT", minimum=1, maximum=65535)
+                col.fail(
+                    "CONTROL_BOT_PROXY_HOST",
+                    "is required when CONTROL_BOT_PROXY_TYPE is set",
+                )
+            _check_int(
+                col, snapshot, "CONTROL_BOT_PROXY_PORT", minimum=1, maximum=65535
+            )
             if not (snapshot.get("CONTROL_BOT_PROXY_PORT", "") or "").strip():
-                col.fail("CONTROL_BOT_PROXY_PORT", "is required when CONTROL_BOT_PROXY_TYPE is set")
+                col.fail(
+                    "CONTROL_BOT_PROXY_PORT",
+                    "is required when CONTROL_BOT_PROXY_TYPE is set",
+                )
 
     # --- Control Plane Telegram alerts ---
     cp_tg_token = (snapshot.get("CP_TELEGRAM_BOT_TOKEN", "") or "").strip()
     if cp_tg_token:
         if not _looks_like_bot_token(cp_tg_token):
-            col.fail("CP_TELEGRAM_BOT_TOKEN", "is malformed; expected <id>:<hash> or empty")
+            col.fail(
+                "CP_TELEGRAM_BOT_TOKEN", "is malformed; expected <id>:<hash> or empty"
+            )
         chat_id = (snapshot.get("CP_TELEGRAM_ALERT_CHAT_ID", "") or "").strip()
         if not chat_id:
-            col.fail("CP_TELEGRAM_ALERT_CHAT_ID", "is required when CP_TELEGRAM_BOT_TOKEN is set")
+            col.fail(
+                "CP_TELEGRAM_ALERT_CHAT_ID",
+                "is required when CP_TELEGRAM_BOT_TOKEN is set",
+            )
         else:
             neg = chat_id.startswith("-")
             if not chat_id.lstrip("-").isdigit() or (neg and len(chat_id) < 2):
@@ -403,7 +441,9 @@ def validate(mode: str | None = None, env: Mapping[str, str] | None = None) -> V
     return col.result
 
 
-def require_valid_production_config(mode: str | None = "production") -> ValidationResult:
+def require_valid_production_config(
+    mode: str | None = "production",
+) -> ValidationResult:
     """Validate and raise :class:`ProductionConfigError` on failure.
 
     The message lists variable *names* only, never values.
@@ -461,12 +501,18 @@ def main(argv: list[str] | None = None) -> int:
     snapshot: dict[str, str] = dict(os.environ)
     if args.env_file:
         if not os.path.isfile(args.env_file):
-            print(f"tools.validate_config: error: env file not found: {args.env_file}", file=sys.stderr)
+            print(
+                f"tools.validate_config: error: env file not found: {args.env_file}",
+                file=sys.stderr,
+            )
             return 1
         try:
             snapshot.update(load_env_file(args.env_file))
         except OSError as exc:
-            print(f"tools.validate_config: error: cannot read env file: {exc}", file=sys.stderr)
+            print(
+                f"tools.validate_config: error: cannot read env file: {exc}",
+                file=sys.stderr,
+            )
             return 1
 
     try:

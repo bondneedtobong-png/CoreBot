@@ -1,4 +1,3 @@
-from datetime import datetime
 from utils.time import utcnow_naive
 
 from sqlalchemy import (

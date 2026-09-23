@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from utils.time import utcnow_naive
 from pathlib import Path
 import shutil
@@ -6,7 +6,7 @@ import shutil
 from sqlalchemy.orm import Session
 
 from control_plane.config import CP_RETENTION_DAYS, CP_DATABASE_URL
-from control_plane.models import IngestEvent, MetricPoint, AuditLog
+from control_plane.models import IngestEvent, MetricPoint
 
 
 def cleanup_retention(db: Session) -> dict:

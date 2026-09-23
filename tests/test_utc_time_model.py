@@ -4,11 +4,12 @@
 коде, совместимость с legacy naive значениями и сериализацию без
 двойного +00:00.
 """
+
 from __future__ import annotations
 
 import pathlib
 import warnings
-from datetime import datetime, timezone
+from datetime import datetime
 
 
 def test_helpers_naive_format():
@@ -67,7 +68,15 @@ def test_legacy_utcnow_emits_deprecation_warning():
 
 
 def test_no_utcnow_in_own_code():
-    roots = ["bot", "control_plane", "database", "services", "workers", "utils", "scripts"]
+    roots = [
+        "bot",
+        "control_plane",
+        "database",
+        "services",
+        "workers",
+        "utils",
+        "scripts",
+    ]
     base = pathlib.Path(__file__).resolve().parents[1]
     offenders: list[str] = []
     files = [base / "main.py"]
@@ -110,19 +119,25 @@ def test_model_defaults_are_callable_naive():
                 if col.default is not None and not isinstance(col.default, bool):
                     default = col.default.arg if hasattr(col.default, "arg") else None
                     if default is not None:
-                        assert callable(default), f"{model.__name__}.{col.name} default not callable"
+                        assert callable(default), (
+                            f"{model.__name__}.{col.name} default not callable"
+                        )
                         # SQLAlchemy 2.0 заворачивает zero-arg callable в wrapper(ctx);
                         # вызываем с dummy-контекстом как это делает ORM при INSERT.
                         val = default(None)
                         assert isinstance(val, datetime) and val.tzinfo is None
                         checked += 1
                 if col.onupdate is not None and hasattr(col.onupdate, "arg"):
-                    assert callable(col.onupdate.arg), f"{model.__name__}.{col.name} onupdate not callable"
+                    assert callable(col.onupdate.arg), (
+                        f"{model.__name__}.{col.name} onupdate not callable"
+                    )
     for model in [cpm.Tenant, cpm.User, cpm.Alert]:
         for col in model.__table__.columns:
             if col.name in ("created_at", "last_triggered_at"):
                 if col.default is not None and hasattr(col.default, "arg"):
-                    assert callable(col.default.arg), f"{model.__name__}.{col.name} default not callable"
+                    assert callable(col.default.arg), (
+                        f"{model.__name__}.{col.name} default not callable"
+                    )
                     checked += 1
     assert checked > 0, "expected at least one datetime default to check"
     # helper сам возвращает naive
@@ -136,7 +151,9 @@ def test_serialization_no_double_offset():
     assert "+00:00" not in naive_iso, "naive ORM isoformat must have no suffix"
 
     aware_iso = utcnow_aware().isoformat()
-    assert aware_iso.count("+00:00") == 1, "aware external ts must carry exactly one +00:00"
+    assert aware_iso.count("+00:00") == 1, (
+        "aware external ts must carry exactly one +00:00"
+    )
     assert "++" not in aware_iso and "+00:00+00:00" not in aware_iso
 
     # legacy naive значение из БД сериализуется без суффикса
@@ -153,7 +170,10 @@ def test_existing_sqlite_opens_without_migration():
         return  # в CI без data/ — нечего проверять
     con = sqlite3.connect(str(db_path))
     try:
-        tables = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
+        tables = {
+            r[0]
+            for r in con.execute("select name from sqlite_master where type='table'")
+        }
         assert "accounts" in tables
     finally:
         con.close()

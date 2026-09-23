@@ -16,7 +16,6 @@ from bot.keyboards.main import (
     get_main_keyboard,
     get_proxy_keyboard,
     get_accounts_keyboard,
-    get_mailing_keyboard,
 )
 from bot.handlers.accounts import router as accounts_router
 from bot.handlers.clients import router as clients_router
@@ -225,7 +224,6 @@ async def run_bot():
 
         from workers.manager import worker_manager
         from database.session import session_scope
-        from database.models import MailingStatus
         from database.repositories import MailingRepository
 
         async with session_scope() as session:

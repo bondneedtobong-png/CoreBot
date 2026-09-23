@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
 from utils.time import utcnow_naive
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from control_plane.database import get_db
 from control_plane.deps import resolve_agent_by_token
-from control_plane.models import Agent, IngestEvent, MetricPoint
+from control_plane.models import IngestEvent, MetricPoint
 from control_plane.schemas import IngestBatchIn
 from control_plane.services.alerts import upsert_alert, send_telegram_alert
 

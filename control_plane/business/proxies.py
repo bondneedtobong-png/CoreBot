@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import socket
 import time
-from datetime import datetime
 from utils.time import utcnow_naive
 
 from fastapi import APIRouter, Depends, HTTPException, status

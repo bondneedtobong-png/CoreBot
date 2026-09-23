@@ -1,0 +1,73 @@
+# CoreBot quality gate configuration (task 10).
+#
+# This pyproject.toml is TOOL CONFIG ONLY: there is no [project] section on
+# purpose — the release version source of truth stays VERSION + git SHA
+# (task 06, RELEASE.json manifest), and runtime deps stay in requirements.txt.
+#
+# Decisions (fixed by task 10, see report):
+# - pytest config stays in pytest.ini (single source; no
+#   [tool.pytest.ini_options] here, otherwise pytest would warn/override).
+# - Dev/test tooling lives in requirements-dev.txt (plain pip file, not a
+#   PEP 735 dependency group: works on stock pip 23+ on both CI images).
+# - Ruff rules: pyflakes (F) + pycodestyle syntax-level (E4/E7/E9).
+#   * NO isort (I): legacy import order is not isort-clean (task 02 risk);
+#     enabling it would produce a repo-wide diff. Revisit after task 11.
+#   * E711/E712 ignored GLOBALLY and on purpose: SQLAlchemy filters use
+#     `col == True` / `col == None` to build SQL (`IS TRUE` / `IS NULL`);
+#     rewriting them to `col` / `col is None` would silently break queries
+#     (e.g. database/repositories.py, control_plane/deps.py).
+# - Legacy baseline (per-file-ignores below): pre-roadmap files keep a
+#   minimal, reasoned ignore list. New files from tasks 02-10 have NO
+#   ignores — every finding there is fixed instead.
+# - `ruff format` gate (CI + README) covers only the curated file list
+#   (task 02-10 scope); legacy files are NOT reformatted in this task
+#   (148 files would change — style-only noise, out of scope).
+#   Curated list (keep in sync with .github/workflows/ci.yml + README):
+#   control_plane/services/{heartbeat,sanitize,snapshot,watchdog}.py,
+#   control_plane/version.py, database/sqlite_pragmas.py,
+#   scripts/{backup_lib,make_release,release_lib}.py,
+#   tests/{test_backup_restore,test_config_validation,test_fleet_automation,
+#   test_integration_flows,test_lifespan_bootstrap,test_observability,
+#   test_release_workflow,test_sqlite_reliability,test_utc_time_model}.py,
+#   tools/{__init__,instance_status,validate_config,validate_skill}.py,
+#   utils/time.py (23 files).
+
+[tool.ruff]
+target-version = "py311"
+# Task requirement: exclude generated/vendor/venv/data (+ .git safety).
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  "venv*/",
+  "data",
+  "logs",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = [
+  "E711", # see header: `col == None` builds SQL IS NULL in SQLAlchemy filters
+  "E712", # see header: `col == True` builds SQL in SQLAlchemy filters
+]
+
+[tool.ruff.lint.per-file-ignores]
+# --- legacy baseline, task 10. Reasons are behavioural, not stylistic. ---
+# Quoted annotations + function-local imports: runtime-safe, typing pass
+# is out of scope (task boundary: no mass mypy rewrite of legacy).
+"database/repositories.py" = ["F821"]
+"workers/warmup.py" = ["F821"]
+# load_dotenv() MUST run before database/bot.config imports (env is read
+# at import time); moving imports above it would change behaviour.
+"workers/parser_worker.py" = ["E402"]
+# Style-only leftovers in pre-roadmap code; fixed opportunistically.
+"bot/handlers/warmup_menu.py" = ["E702"]
+"control_plane/business/archive.py" = ["F841"]
+# Optional-dependency availability probe: `import aiohttp_socks` inside
+# try/except ImportError with a friendly SystemExit message. Removing the
+# "unused" import would delete the probe and its error message.
+"bot/main.py" = ["F401"]

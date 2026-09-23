@@ -83,7 +83,11 @@ def sanitize(obj: Any, _key: str = "") -> Any:
     """Recursively sanitize a JSON-like payload (dicts/lists/scalars)."""
     if isinstance(obj, dict):
         return {
-            k: (MASK if (_is_deny_key(k) and isinstance(v, str)) else sanitize(v, str(k)))
+            k: (
+                MASK
+                if (_is_deny_key(k) and isinstance(v, str))
+                else sanitize(v, str(k))
+            )
             for k, v in obj.items()
         }
     if isinstance(obj, (list, tuple)):

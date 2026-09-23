@@ -72,8 +72,8 @@ SQLITE_BUSY_MARKERS = (
 # Простая счётчик-метрика retry (читается мониторингом задачи 08,
 # инкрементируется только здесь).
 SQLITE_BUSY_RETRY_STATS: Dict[str, int] = {
-    "attempts": 0,   # всего вызовов через retry-helper
-    "retries": 0,    # transient-повторов выполнено
+    "attempts": 0,  # всего вызовов через retry-helper
+    "retries": 0,  # transient-повторов выполнено
     "exhausted": 0,  # исчерпаний лимита попыток
     "failed_fast": 0,  # немедленных пробросов (IntegrityError и др.)
 }
@@ -162,7 +162,12 @@ def read_sqlite_pragmas(dbapi_connection: Any) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     cursor = dbapi_connection.cursor()
     try:
-        for name in ("journal_mode", "foreign_keys", "busy_timeout", "wal_autocheckpoint"):
+        for name in (
+            "journal_mode",
+            "foreign_keys",
+            "busy_timeout",
+            "wal_autocheckpoint",
+        ):
             cursor.execute(f"PRAGMA {name}")
             row = cursor.fetchone()
             out[name] = row[0] if row else None
@@ -189,7 +194,9 @@ def is_transient_sqlite_busy(exc: BaseException) -> bool:
     return any(marker in text for marker in SQLITE_BUSY_MARKERS)
 
 
-def _backoff_delay_sec(attempt: int, base_delay_sec: float, max_delay_sec: float) -> float:
+def _backoff_delay_sec(
+    attempt: int, base_delay_sec: float, max_delay_sec: float
+) -> float:
     """Экспоненциальный backoff с jitter. attempt: 1-based номер повтора."""
     delay = min(max_delay_sec, base_delay_sec * (2 ** max(0, attempt - 1)))
     return delay + random.uniform(0, base_delay_sec)
@@ -267,7 +274,9 @@ def run_sync_with_busy_retry(
     raise last_exc
 
 
-async def execute_with_busy_retry(session: Any, stmt: Any, op_name: str = "execute") -> Any:
+async def execute_with_busy_retry(
+    session: Any, stmt: Any, op_name: str = "execute"
+) -> Any:
     """session.execute с retry только при transient SQLITE_BUSY."""
     return await run_with_busy_retry(lambda: session.execute(stmt), op_name=op_name)
 

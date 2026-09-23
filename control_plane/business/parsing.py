@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
 from utils.time import utcnow_aware, utcnow_naive
 import asyncio
 import json

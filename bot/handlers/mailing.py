@@ -2,12 +2,10 @@
 Хендлеры для управления рассылками.
 Новая система: создание, список, настройки по модулям, запуск по клику.
 """
-import asyncio
 import html
 import io
 import json
 import re
-from datetime import datetime
 from utils.time import utcnow_naive
 
 from aiogram import F, Router

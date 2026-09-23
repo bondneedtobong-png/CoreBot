@@ -1,0 +1,115 @@
+# CoreBot quality gate (task 10).
+#
+# Failing gate = red PR (enable branch protection on `main` requiring this
+# workflow; that setting lives in GitHub repo settings, not in this file).
+# Runs on a clean checkout: no committed `.env` / `data/` (asserted below).
+# The Windows BAT check synthesizes `.env` from `.env.example` (dummy values,
+# no secrets) and never touches real credentials.
+#
+# Local equivalent of every gate: README "Quality gate (CI)" — keep in sync.
+
+name: corebot-quality-gate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate (py${{ matrix.python }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.12"
+
+    steps:
+      - name: Checkout (clean, no .env / data expected)
+        uses: actions/checkout@v4
+
+      - name: Assert clean checkout (no .env, no data dir)
+        run: >-
+          python -c "import pathlib,sys;
+          bad=[p for p in ('.env','data') if pathlib.Path(p).exists()];
+          sys.exit('clean-checkout violated: '+','.join(bad)) if bad else print('clean checkout ok')"
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Set up Node (for web-panel syntax gate)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install runtime + dev dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      # Windows BAT gate warms .venv BEFORE pytest: start_corebot.bat --check
+      # creates .venv + installs runtime deps on first run (>30 s), while
+      # tests/test_start_corebot_batch.py calls it with timeout=30. Running
+      # the launcher once here keeps the in-pytest call fast and hermetic.
+      - name: BAT --check with synthetic test env (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          copy /Y .env.example .env
+          start_corebot.bat --check
+
+      - name: pytest (full suite, hermetic — no real network)
+        run: python -m pytest tests/ -q
+
+      - name: compileall (syntax gate, all first-party code)
+        run: python -m compileall -q bot control_plane database workers services utils tools scripts tests main.py migrate_mailings.py
+
+      - name: ruff check (lint gate)
+        run: python -m ruff check .
+
+      # Format gate covers ONLY the curated task 02-10 file list (pyproject
+      # header documents why): legacy files are not reformatted in task 10.
+      - name: ruff format --check (curated task 02-10 list)
+        run: python -m ruff format --check control_plane/services/heartbeat.py control_plane/services/sanitize.py control_plane/services/snapshot.py control_plane/services/watchdog.py control_plane/version.py database/sqlite_pragmas.py scripts/backup_lib.py scripts/make_release.py scripts/release_lib.py tests/test_backup_restore.py tests/test_config_validation.py tests/test_fleet_automation.py tests/test_integration_flows.py tests/test_lifespan_bootstrap.py tests/test_observability.py tests/test_release_workflow.py tests/test_sqlite_reliability.py tests/test_utc_time_model.py tools/__init__.py tools/instance_status.py tools/validate_config.py tools/validate_skill.py utils/time.py
+
+      - name: node --check (web-panel syntax gate)
+        run: node --check web-panel/main.js
+
+      - name: bash -n (deployment scripts syntax gate)
+        shell: bash
+        run: |
+          for f in scripts/*.sh skills/corebot-vps-deploy/scripts/*.sh; do
+            echo "checking $f"
+            bash -n "$f" || exit 1
+          done
+
+      - name: skill validator (SKILL.md checklist, no secrets)
+        run: python -m tools.validate_skill
+
+      # .env.example is synthetic by contract: local mode tolerates it
+      # (exit 0, warnings allowed), production mode must reject it (exit 2).
+      # This pins both the fail-fast behaviour and "no valid secrets in git".
+      - name: config validator contract (.env.example)
+        shell: bash
+        run: |
+          python -m tools.validate_config --mode local --env-file .env.example
+          if python -m tools.validate_config --mode production --env-file .env.example; then
+            echo "ERROR: .env.example unexpectedly passes production validation" >&2
+            exit 1
+          fi

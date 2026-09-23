@@ -4,11 +4,11 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Set
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.crm_repositories import ClientClassCounterRepository
-from database.models import Client, ClientClassCounter, ClientTag
+from database.models import Client, ClientTag
 from database.repositories import ClientRepository
 
 

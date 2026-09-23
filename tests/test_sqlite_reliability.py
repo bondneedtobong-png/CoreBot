@@ -3,6 +3,7 @@
 Все БД — только в tmp_path, data/*.db не трогаем. Стиль — как в
 tests/test_parser_concurrency.py (asyncio.run внутри sync-тестов).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,7 +33,12 @@ from database.sqlite_pragmas import (
 def _read_pragmas_sync(engine):
     with engine.connect() as conn:
         out = {}
-        for name in ("journal_mode", "foreign_keys", "busy_timeout", "wal_autocheckpoint"):
+        for name in (
+            "journal_mode",
+            "foreign_keys",
+            "busy_timeout",
+            "wal_autocheckpoint",
+        ):
             out[name] = conn.exec_driver_sql(f"PRAGMA {name}").scalar()
         return out
 
@@ -68,7 +74,12 @@ def test_all_three_engines_get_identical_pragmas(tmp_path):
     async def read_async():
         async with aengine.connect() as conn:
             out = {}
-            for name in ("journal_mode", "foreign_keys", "busy_timeout", "wal_autocheckpoint"):
+            for name in (
+                "journal_mode",
+                "foreign_keys",
+                "busy_timeout",
+                "wal_autocheckpoint",
+            ):
                 res = await conn.exec_driver_sql(f"PRAGMA {name}")
                 out[name] = res.scalar()
             return out
@@ -109,7 +120,10 @@ def test_production_modules_wire_shared_helper():
     # Пути/URL не менялись (validate_config требует абсолютных путей в prod).
     from control_plane.config import BOT_DATABASE_URL, CP_DATABASE_URL
 
-    assert BOT_DATABASE_URL == "sqlite:///data/corebot.db" or BOT_DATABASE_URL.startswith("sqlite")
+    assert (
+        BOT_DATABASE_URL == "sqlite:///data/corebot.db"
+        or BOT_DATABASE_URL.startswith("sqlite")
+    )
     assert CP_DATABASE_URL.startswith("sqlite")
     assert SQLITE_BUSY_TIMEOUT_MS == 30000
     assert SQLITE_WAL_AUTOCHECKPOINT_PAGES == 1000
@@ -138,7 +152,9 @@ def test_concurrent_duplicate_client_is_idempotent(tmp_path):
 
         async def one():
             async with Session() as s:
-                row = await ClientRepository.create(s, "dupuser", status=ClientStatus.NEW)
+                row = await ClientRepository.create(
+                    s, "dupuser", status=ClientStatus.NEW
+                )
                 return int(row.id)
 
         first, second = await asyncio.gather(one(), one())
@@ -327,10 +343,11 @@ def test_no_blanket_integrityerror_around_commits():
         "bot/handlers/accounts/groups.py",  # сообщение "уже существует"
     }
     offenders: list[str] = []
-    for path in list((repo_root / "database").rglob("*.py")) + list(
-        (repo_root / "control_plane").rglob("*.py")
-    ) + list((repo_root / "workers").rglob("*.py")) + list(
-        (repo_root / "bot").rglob("*.py")
+    for path in (
+        list((repo_root / "database").rglob("*.py"))
+        + list((repo_root / "control_plane").rglob("*.py"))
+        + list((repo_root / "workers").rglob("*.py"))
+        + list((repo_root / "bot").rglob("*.py"))
     ):
         if path.name == "sqlite_pragmas.py":
             continue  # классификатор is_transient_sqlite_busy, не хендлер коммитов
@@ -344,7 +361,9 @@ def test_no_blanket_integrityerror_around_commits():
 
 def test_memory_engine_helper_smoke():
     """Helper регистрируется и на :memory: (StaticPool) без ошибок."""
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     register_sqlite_pragmas(engine)
     pragmas = _read_pragmas_sync(engine)
     assert int(pragmas["foreign_keys"]) == 1

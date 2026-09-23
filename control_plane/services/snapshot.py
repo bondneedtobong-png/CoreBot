@@ -48,8 +48,13 @@ only — never message bodies or credentials.
 
 from __future__ import annotations
 
+import os as _os
+import re as _re
+import shutil as _shutil
+from dataclasses import dataclass as _dataclass
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path as _Path
 from typing import Any, Optional
 
 from control_plane.services import sanitize as _sanitize
@@ -154,7 +159,9 @@ def _iso(ts: Optional[datetime]) -> Optional[str]:
         return None
 
 
-def _component(state: str, last_seen: Optional[datetime], detail: Any = None) -> dict[str, Any]:
+def _component(
+    state: str, last_seen: Optional[datetime], detail: Any = None
+) -> dict[str, Any]:
     return {"state": state, "last_seen": _iso(last_seen), "detail": detail or {}}
 
 
@@ -188,11 +195,18 @@ def classify_bot(inputs: SnapshotInputs) -> dict[str, Any]:
     row = inputs.beats.get("bot", {})
     seen = row.get("updated_at")
     if not _fresh(inputs.now, seen, BOT_STALE_SEC):
-        return _component(DOWN, seen, {"reason": "heartbeat-stale", "stale_sec": BOT_STALE_SEC})
+        return _component(
+            DOWN, seen, {"reason": "heartbeat-stale", "stale_sec": BOT_STALE_SEC}
+        )
     detail = _clean_detail(row.get("detail"), BOT_DETAIL_ALLOWLIST)
     total = detail.get("workers_total")
     connected = detail.get("workers_connected")
-    if isinstance(total, int) and isinstance(connected, int) and total > 0 and connected == 0:
+    if (
+        isinstance(total, int)
+        and isinstance(connected, int)
+        and total > 0
+        and connected == 0
+    ):
         return _component(DEGRADED, seen, {"reason": "worker-pool-offline", **detail})
     return _component(OK, seen, detail)
 
@@ -210,11 +224,21 @@ def classify_consumer(inputs: SnapshotInputs, component: str) -> dict[str, Any]:
     if row is None or seen is None:
         bot_seen = inputs.beats.get("bot", {}).get("updated_at")
         if _fresh(inputs.now, bot_seen, BOT_STALE_SEC):
-            return _component(DEGRADED, None, {"reason": "no-tick-yet", "stale_sec": CONSUMER_STALE_SEC})
-        return _component(DOWN, None, {"reason": "no-tick", "stale_sec": CONSUMER_STALE_SEC})
+            return _component(
+                DEGRADED,
+                None,
+                {"reason": "no-tick-yet", "stale_sec": CONSUMER_STALE_SEC},
+            )
+        return _component(
+            DOWN, None, {"reason": "no-tick", "stale_sec": CONSUMER_STALE_SEC}
+        )
     if not _fresh(inputs.now, seen, CONSUMER_STALE_SEC):
-        return _component(DOWN, seen, {"reason": "tick-stale", "stale_sec": CONSUMER_STALE_SEC})
-    return _component(OK, seen, _clean_detail((row or {}).get("detail"), CONSUMER_DETAIL_ALLOWLIST))
+        return _component(
+            DOWN, seen, {"reason": "tick-stale", "stale_sec": CONSUMER_STALE_SEC}
+        )
+    return _component(
+        OK, seen, _clean_detail((row or {}).get("detail"), CONSUMER_DETAIL_ALLOWLIST)
+    )
 
 
 def classify_parser(inputs: SnapshotInputs) -> dict[str, Any]:
@@ -265,7 +289,9 @@ def classify_background(inputs: SnapshotInputs) -> dict[str, Any]:
             {"reason": "task-failed", "failures": snap.get("failures", [])},
         )
     return _component(
-        OK, inputs.now, {"active": snap.get("active", 0), "active_names": snap.get("active_names", [])}
+        OK,
+        inputs.now,
+        {"active": snap.get("active", 0), "active_names": snap.get("active_names", [])},
     )
 
 
@@ -279,9 +305,17 @@ def classify_queues(inputs: SnapshotInputs) -> dict[str, Any]:
         "crit_at": OUTBOUND_BACKLOG_CRIT,
     }
     worst = max(int(inputs.outbound_pending), int(inputs.botcmd_pending))
-    if worst >= OUTBOUND_BACKLOG_CRIT or int(inputs.botcmd_pending) >= BOTCMD_BACKLOG_WARN * 4:
-        return _component(DEGRADED, inputs.now, {**detail, "reason": "backlog-critical"})
-    if worst >= OUTBOUND_BACKLOG_WARN or int(inputs.botcmd_pending) >= BOTCMD_BACKLOG_WARN:
+    if (
+        worst >= OUTBOUND_BACKLOG_CRIT
+        or int(inputs.botcmd_pending) >= BOTCMD_BACKLOG_WARN * 4
+    ):
+        return _component(
+            DEGRADED, inputs.now, {**detail, "reason": "backlog-critical"}
+        )
+    if (
+        worst >= OUTBOUND_BACKLOG_WARN
+        or int(inputs.botcmd_pending) >= BOTCMD_BACKLOG_WARN
+    ):
         return _component(DEGRADED, inputs.now, {**detail, "reason": "backlog-warning"})
     return _component(OK, inputs.now, detail)
 
@@ -318,9 +352,15 @@ def classify_signals(inputs: SnapshotInputs) -> dict[str, Any]:
         "busy_delta": dict(inputs.busy_delta or {}),
     }
     reasons: list[str] = []
-    if inputs.floodwait_1h is not None and inputs.floodwait_1h >= FLOODWAIT_SPIKE_PER_HOUR:
+    if (
+        inputs.floodwait_1h is not None
+        and inputs.floodwait_1h >= FLOODWAIT_SPIKE_PER_HOUR
+    ):
         reasons.append("floodwait-spike")
-    if inputs.ingest401_10m is not None and inputs.ingest401_10m >= INGEST_401_SPIKE_COUNT:
+    if (
+        inputs.ingest401_10m is not None
+        and inputs.ingest401_10m >= INGEST_401_SPIKE_COUNT
+    ):
         reasons.append("ingest-401-spike")
     delta = inputs.busy_delta or {}
     if int(delta.get("exhausted", 0)) > 0:
@@ -388,13 +428,21 @@ def build_snapshot(inputs: SnapshotInputs) -> dict[str, Any]:
         "queues": classify_queues(inputs),
         "storage": classify_storage(inputs),
         "signals": classify_signals(inputs),
-        "mailing": _component(OK, inputs.now if inputs.mailing else None, inputs.mailing or {"active": False}),
+        "mailing": _component(
+            OK,
+            inputs.now if inputs.mailing else None,
+            inputs.mailing or {"active": False},
+        ),
         "worker_pool": _component(
             OK if inputs.beats.get("bot", {}).get("updated_at") else UNKNOWN,
             inputs.beats.get("bot", {}).get("updated_at"),
             {
-                "total": (inputs.beats.get("bot", {}).get("detail") or {}).get("workers_total"),
-                "connected": (inputs.beats.get("bot", {}).get("detail") or {}).get("workers_connected"),
+                "total": (inputs.beats.get("bot", {}).get("detail") or {}).get(
+                    "workers_total"
+                ),
+                "connected": (inputs.beats.get("bot", {}).get("detail") or {}).get(
+                    "workers_connected"
+                ),
             },
         ),
     }
@@ -404,10 +452,16 @@ def build_snapshot(inputs: SnapshotInputs) -> dict[str, Any]:
     match: Optional[bool] = None
     if deployed and live_sha and live_sha != "unknown":
         match = live_sha[:12].lower() == deployed[:12].lower()
-    components["version"] = _component(OK, inputs.now, {**release, "deployed_sha": deployed or "unknown", "match": match})
+    components["version"] = _component(
+        OK,
+        inputs.now,
+        {**release, "deployed_sha": deployed or "unknown", "match": match},
+    )
 
     overall = _worst_overall(components)
-    beats_seen = [v.get("updated_at") for v in inputs.beats.values() if v.get("updated_at")]
+    beats_seen = [
+        v.get("updated_at") for v in inputs.beats.values() if v.get("updated_at")
+    ]
     last_tick = max(beats_seen) if beats_seen else None
     snapshot = {
         "checked_at": inputs.now.replace(tzinfo=None).isoformat(),
@@ -432,12 +486,6 @@ def parser_task_status(task: Any) -> Optional[str]:
 # None/zero, never an exception. Used by the fleet CLI (external coverage)
 # and by the in-CP watchdog (full coverage).
 # ---------------------------------------------------------------------------
-
-import os as _os
-import re as _re
-import shutil as _shutil
-from dataclasses import dataclass as _dataclass
-from pathlib import Path as _Path
 
 _LOG_TS_RE = _re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
@@ -467,7 +515,9 @@ def _parse_log_ts(line: str) -> Optional[datetime]:
         return None
 
 
-def count_log_events(lines: list[str], markers: tuple[str, ...], since: datetime) -> int:
+def count_log_events(
+    lines: list[str], markers: tuple[str, ...], since: datetime
+) -> int:
     """Count recent lines containing any marker (all markers for 401-tuples).
 
     Only lines with a parseable timestamp ``>= since`` count; unparseable
@@ -529,7 +579,11 @@ def _newest_backup_age_h(dirs: list[_Path], now: datetime) -> Optional[float]:
                 if not path.is_file():
                     continue
                 name = path.name.lower()
-                if not (name.endswith(".tar.gz") or name.endswith(".db") or name.endswith(".tgz")):
+                if not (
+                    name.endswith(".tar.gz")
+                    or name.endswith(".db")
+                    or name.endswith(".tgz")
+                ):
                     continue
                 try:
                     mtime = path.stat().st_mtime
@@ -549,9 +603,9 @@ def _newest_backup_age_h(dirs: list[_Path], now: datetime) -> Optional[float]:
 def _resolve_corebot_db_path(app_dir: _Path) -> _Path:
     url = (_os.getenv("BOT_DATABASE_URL", "") or "").strip()
     if url.startswith("sqlite:////"):
-        return _Path(url[len("sqlite:///"):])
+        return _Path(url[len("sqlite:///") :])
     if url.startswith("sqlite:///"):
-        return app_dir / url[len("sqlite:///"):]
+        return app_dir / url[len("sqlite:///") :]
     return app_dir / "data" / "corebot.db"
 
 
@@ -604,7 +658,9 @@ def collect_live_inputs(opts: CollectOptions) -> SnapshotInputs:
             try:
                 outbound_pending = int(
                     session.execute(
-                        _text("SELECT COUNT(*) FROM outbound_queue WHERE status='pending'")
+                        _text(
+                            "SELECT COUNT(*) FROM outbound_queue WHERE status='pending'"
+                        )
                     ).scalar()
                     or 0
                 )
@@ -613,7 +669,9 @@ def collect_live_inputs(opts: CollectOptions) -> SnapshotInputs:
             try:
                 botcmd_pending = int(
                     session.execute(
-                        _text("SELECT COUNT(*) FROM bot_commands WHERE status='pending'")
+                        _text(
+                            "SELECT COUNT(*) FROM bot_commands WHERE status='pending'"
+                        )
                     ).scalar()
                     or 0
                 )
@@ -722,7 +780,9 @@ def collect_live_inputs(opts: CollectOptions) -> SnapshotInputs:
         for path in log_files:
             lines.extend(read_log_tail(_Path(path)))
         if lines:
-            floodwait_1h = count_log_events(lines, FLOODWAIT_MARKERS, now - timedelta(hours=1))
+            floodwait_1h = count_log_events(
+                lines, FLOODWAIT_MARKERS, now - timedelta(hours=1)
+            )
             ingest401_10m = count_log_events(
                 lines, INGEST_401_MARKERS, now - timedelta(seconds=600)
             )

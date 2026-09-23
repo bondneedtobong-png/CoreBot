@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import random
-from datetime import datetime
 from typing import Optional
 
 from database.crm_repositories import ClientInteractionRepository

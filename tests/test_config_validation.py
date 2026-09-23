@@ -9,10 +9,8 @@ All fixtures use synthetic values only (``TEST-...``); no real secrets.
 
 from __future__ import annotations
 
-import os
 import sys
 import types
-from pathlib import Path
 
 import pytest
 from fastapi import APIRouter
@@ -196,7 +194,14 @@ def test_short_jwt_production_fails_local_warns():
 
 @pytest.mark.parametrize(
     "bad_password",
-    ["admin123", "admin", "password", "change-me-please", "change-me-later", "ADMIN123"],
+    [
+        "admin123",
+        "admin",
+        "password",
+        "change-me-please",
+        "change-me-later",
+        "ADMIN123",
+    ],
 )
 def test_weak_admin_passwords_rejected_in_production(bad_password):
     env = dict(VALID_ENV, CP_BOOTSTRAP_ADMIN_PASSWORD=bad_password)
@@ -249,7 +254,10 @@ def test_public_ingest_url_rejected_in_production():
 
 
 def test_loopback_ingest_url_ok():
-    for url in ("http://127.0.0.1:8081/ingest/batch", "http://localhost:8081/ingest/batch"):
+    for url in (
+        "http://127.0.0.1:8081/ingest/batch",
+        "http://localhost:8081/ingest/batch",
+    ):
         result = vc.validate("production", dict(VALID_ENV, CP_INGEST_URL=url))
         assert result.ok, url
 
@@ -301,7 +309,12 @@ def test_cli_exit_codes(clean_env, capsys):
     assert _run_cli(clean_env, UNSAFE_ENV, "--mode", "production") == 2
     assert _run_cli(clean_env, MALFORMED_ENV, "--mode", "production") == 2
     assert _run_cli(clean_env, VALID_ENV, "--mode", "bogus") == 1
-    assert _run_cli(clean_env, VALID_ENV, "--mode", "production", "--env-file", "no-such.env") == 1
+    assert (
+        _run_cli(
+            clean_env, VALID_ENV, "--mode", "production", "--env-file", "no-such.env"
+        )
+        == 1
+    )
 
 
 def test_cli_mode_defaults_to_local(clean_env, capsys):
@@ -330,7 +343,10 @@ def test_cli_env_file_overrides_process_env(clean_env, tmp_path, capsys):
         "CP_BOOTSTRAP_ADMIN_PASSWORD=TEST-strong-password-01\n",
         encoding="utf-8",
     )
-    assert _run_cli(clean_env, {}, "--mode", "production", "--env-file", str(env_file)) == 0
+    assert (
+        _run_cli(clean_env, {}, "--mode", "production", "--env-file", str(env_file))
+        == 0
+    )
 
 
 def test_cli_env_file_unsafe_reports_error(clean_env, tmp_path, capsys):
@@ -339,7 +355,10 @@ def test_cli_env_file_unsafe_reports_error(clean_env, tmp_path, capsys):
         "CP_JWT_SECRET=change-me-in-production\nCP_BOOTSTRAP_ADMIN_PASSWORD=admin123\n",
         encoding="utf-8",
     )
-    assert _run_cli(clean_env, {}, "--mode", "production", "--env-file", str(env_file)) == 2
+    assert (
+        _run_cli(clean_env, {}, "--mode", "production", "--env-file", str(env_file))
+        == 2
+    )
 
 
 # --- secret masking ------------------------------------------------------
@@ -357,7 +376,9 @@ def _env_with_markers() -> dict[str, str]:
 
 
 def test_secrets_never_in_stdout_stderr(clean_env, capsys):
-    code = _run_cli(clean_env, dict(_env_with_markers(), CP_JWT_SECRET="x"), "--mode", "production")
+    code = _run_cli(
+        clean_env, dict(_env_with_markers(), CP_JWT_SECRET="x"), "--mode", "production"
+    )
     assert code == 2
     captured = capsys.readouterr()
     combined = captured.out + captured.err
@@ -462,7 +483,9 @@ def test_lifespan_rejects_production_defaults_before_db(clean_env, _stub_tdata):
     main = _fresh_main()
     clean_env.setenv("COREBOT_ENV", "production")
     clean_env.setenv("PARSER_EMBEDDED", "1")
-    monkeypatch_bootstrap = mock.Mock(side_effect=AssertionError("bootstrap must not run"))
+    monkeypatch_bootstrap = mock.Mock(
+        side_effect=AssertionError("bootstrap must not run")
+    )
     main.bootstrap_defaults = monkeypatch_bootstrap
     fake_db = mock.Mock()
     fake_db.connect = mock.AsyncMock()

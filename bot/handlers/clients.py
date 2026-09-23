@@ -4,7 +4,6 @@
 """
 import re
 import json
-from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
@@ -16,7 +15,6 @@ from sqlalchemy import update
 from bot.config import OWNER_ID, FILES_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import get_clients_keyboard, get_cancel_with_back_keyboard, get_context_back_keyboard
-from database.repository import db
 from database.session import session_scope
 from database.models import Client, ClientStatus
 from database.repositories import ClientRepository

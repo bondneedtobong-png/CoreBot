@@ -15,14 +15,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import sqlalchemy
-from sqlalchemy import select
 from telethon import TelegramClient, errors
 from telethon.tl.functions.messages import SetTypingRequest
 from telethon.tl.types import PeerUser, SendMessageTypingAction
 from telethon.errors import FloodWaitError, PeerFloodError
 from telethon.network.connection.tcpabridged import ConnectionTcpAbridged
 
-from database.models import Account, AccountStatus, ClientStatus, Proxy, ProxyType, Mailing, MailingStatus
+from database.models import Account, ClientStatus, Proxy, ProxyType, MailingStatus
 from bot.config import (
     BANDWIDTH_SKIP_PROFILE_ENRICH,
     BANDWIDTH_SKIP_SPAMBOT_CHECK,
@@ -337,7 +336,7 @@ class Worker:
                     log.warning(f"   📁 Session path: {self.session_path}")
                     log.warning(f"   📁 Session exists: {self.session_path.exists()}")
                     log.warning(
-                        f"   ⚠️ Нужно заново загрузить Tdata или авторизовать аккаунт."
+                        "   ⚠️ Нужно заново загрузить Tdata или авторизовать аккаунт."
                     )
 
                 await self.client.disconnect()

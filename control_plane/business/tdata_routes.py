@@ -1,7 +1,6 @@
 ﻿"""TData ZIP import endpoint for the web panel."""
 from __future__ import annotations
 
-import asyncio
 import io
 import shutil
 import tempfile

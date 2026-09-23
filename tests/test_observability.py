@@ -18,6 +18,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+from control_plane.services.snapshot import SnapshotInputs
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 NOW = datetime(2026, 9, 22, 12, 0, 0)  # naive UTC, fixed
@@ -30,7 +32,7 @@ def _beat(minutes_ago: float = 0.0, detail: dict | None = None) -> dict:
     }
 
 
-def _base_inputs(**overrides) -> "SnapshotInputs":
+def _base_inputs(**overrides) -> SnapshotInputs:
     from control_plane.services.snapshot import SnapshotInputs
 
     fresh = {
@@ -68,7 +70,10 @@ def test_stale_bot_heartbeat_is_down():
     assert snap["overall"] == "down"
     assert snap["readiness"] == {"ok": False, "http": 503}
     # WHEN last alive is preserved.
-    assert snap["components"]["bot"]["last_seen"] == (NOW - timedelta(minutes=5)).isoformat()
+    assert (
+        snap["components"]["bot"]["last_seen"]
+        == (NOW - timedelta(minutes=5)).isoformat()
+    )
 
 
 def test_fresh_heartbeat_is_ok_with_readiness_200():
@@ -81,8 +86,12 @@ def test_fresh_heartbeat_is_ok_with_readiness_200():
 
 def test_failed_background_task_is_down():
     snap = _snapshot(
-        background={"active": 0, "active_names": [], "failed": 1,
-                    "failures": [{"name": "mailing-1", "error_type": "RuntimeError"}]}
+        background={
+            "active": 0,
+            "active_names": [],
+            "failed": 1,
+            "failures": [{"name": "mailing-1", "error_type": "RuntimeError"}],
+        }
     )
     assert snap["components"]["background_tasks"]["state"] == "down"
     assert snap["overall"] == "down"
@@ -90,7 +99,7 @@ def test_failed_background_task_is_down():
 
 
 def test_transient_signals_are_degraded_not_down():
-    from control_plane.services.snapshot import SnapshotInputs, build_snapshot
+    from control_plane.services.snapshot import build_snapshot
 
     inputs = _base_inputs(
         floodwait_1h=15,
@@ -116,9 +125,11 @@ def test_exhausted_db_lock_is_degraded_with_reasons():
 
 def test_worker_pool_offline_is_degraded():
     snap = _snapshot(
-        beats={"bot": _beat(0.5, {"workers_total": 3, "workers_connected": 0}),
-               "consumer:outbound": _beat(0.1),
-               "consumer:bot_command": _beat(0.1)}
+        beats={
+            "bot": _beat(0.5, {"workers_total": 3, "workers_connected": 0}),
+            "consumer:outbound": _beat(0.1),
+            "consumer:bot_command": _beat(0.1),
+        }
     )
     assert snap["components"]["bot"]["state"] == "degraded"
     assert snap["overall"] == "degraded"
@@ -139,8 +150,11 @@ def test_consumer_missing_row_with_fresh_bot_is_degraded_not_down():
 
 
 def test_stale_consumer_tick_is_down():
-    beats = {"bot": _beat(0.2), "consumer:outbound": _beat(5.0),
-             "consumer:bot_command": _beat(0.1)}
+    beats = {
+        "bot": _beat(0.2),
+        "consumer:outbound": _beat(5.0),
+        "consumer:bot_command": _beat(0.1),
+    }
     snap = _snapshot(beats=beats)
     assert snap["components"]["consumer:outbound"]["state"] == "down"
     assert snap["overall"] == "down"
@@ -194,9 +208,15 @@ def test_parser_disabled_ready_200_contract():
     health.probe_control_plane_db = lambda: True  # noqa: E731
     health.probe_bot_db = bot_ok  # type: ignore
     health.background_tasks.snapshot = lambda: {  # noqa: E731
-        "active": 0, "active_names": [], "failed": 0, "failures": []}
+        "active": 0,
+        "active_names": [],
+        "failed": 0,
+        "failures": [],
+    }
     try:
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(parser_task=None)))
+        request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(parser_task=None))
+        )
         response = asyncio.run(health.readiness(request))
     finally:
         health.probe_control_plane_db = health_probe_cp
@@ -256,15 +276,38 @@ def test_alert_dedup_cooldown_single_send():
     db = _memory_db()
     try:
         state = WatchdogState()
-        spec = AlertSpec(kind="consumer_death", severity="critical",
-                         title="t", details="d", fingerprint="consumer:consumer:outbound")
-        res1 = _asyncio.run(dispatch(state, [spec], db=db, tenant_id=1, sender=fake_sender, now=NOW))
-        res2 = _asyncio.run(dispatch(state, [spec], db=db, tenant_id=1,
-                                     sender=fake_sender, now=NOW + timedelta(seconds=60)))
+        spec = AlertSpec(
+            kind="consumer_death",
+            severity="critical",
+            title="t",
+            details="d",
+            fingerprint="consumer:consumer:outbound",
+        )
+        res1 = _asyncio.run(
+            dispatch(state, [spec], db=db, tenant_id=1, sender=fake_sender, now=NOW)
+        )
+        res2 = _asyncio.run(
+            dispatch(
+                state,
+                [spec],
+                db=db,
+                tenant_id=1,
+                sender=fake_sender,
+                now=NOW + timedelta(seconds=60),
+            )
+        )
         assert res1 == {"journaled": 1, "sent": 1}
         assert res2["sent"] == 0 and len(sent) == 1  # cooldown: 1 send total
-        res3 = _asyncio.run(dispatch(state, [spec], db=db, tenant_id=1,
-                                     sender=fake_sender, now=NOW + timedelta(seconds=901)))
+        res3 = _asyncio.run(
+            dispatch(
+                state,
+                [spec],
+                db=db,
+                tenant_id=1,
+                sender=fake_sender,
+                now=NOW + timedelta(seconds=901),
+            )
+        )
         assert res3["sent"] == 1 and len(sent) == 2  # cooldown expired
     finally:
         db.close()
@@ -287,11 +330,13 @@ def test_version_mismatch_spec():
 
     inputs = _base_inputs()
     snap = _snapshot()
-    ok_specs = evaluate(WatchdogState(), snap, inputs, NOW,
-                        live_sha="a" * 40, deployed_sha="a" * 40)
+    ok_specs = evaluate(
+        WatchdogState(), snap, inputs, NOW, live_sha="a" * 40, deployed_sha="a" * 40
+    )
     assert "release:version-mismatch" not in {s.fingerprint for s in ok_specs}
-    bad_specs = evaluate(WatchdogState(), snap, inputs, NOW,
-                         live_sha="b" * 40, deployed_sha="a" * 40)
+    bad_specs = evaluate(
+        WatchdogState(), snap, inputs, NOW, live_sha="b" * 40, deployed_sha="a" * 40
+    )
     mismatch = [s for s in bad_specs if s.fingerprint == "release:version-mismatch"]
     assert len(mismatch) == 1 and mismatch[0].severity == "critical"
 
@@ -301,10 +346,22 @@ def test_note_update_result_codes():
 
     assert note_update_result(exit_code=0) is None
     assert note_update_result(exit_code=2) is None
-    spec3 = note_update_result(exit_code=3, target_sha="c" * 40, backup_path="/b.tar.gz")
-    assert spec3 is not None and spec3.severity == "warning" and spec3.kind == "update_failed"
-    spec4 = note_update_result(exit_code=4, target_sha="c" * 40, backup_path="/b.tar.gz")
-    assert spec4 is not None and spec4.severity == "critical" and spec4.kind == "update_rollback_incomplete"
+    spec3 = note_update_result(
+        exit_code=3, target_sha="c" * 40, backup_path="/b.tar.gz"
+    )
+    assert (
+        spec3 is not None
+        and spec3.severity == "warning"
+        and spec3.kind == "update_failed"
+    )
+    spec4 = note_update_result(
+        exit_code=4, target_sha="c" * 40, backup_path="/b.tar.gz"
+    )
+    assert (
+        spec4 is not None
+        and spec4.severity == "critical"
+        and spec4.kind == "update_rollback_incomplete"
+    )
 
 
 # --- heartbeat store ----------------------------------------------------------
@@ -355,20 +412,34 @@ def test_consumer_kill_thread_reflected_in_status():
             time.sleep(0.01)
         alive_inputs = SnapshotInputs(
             now=datetime.now().replace(microsecond=0),
-            beats={"bot": {"updated_at": datetime.now().replace(microsecond=0), "detail": {}},
-                   **{k: dict(v) for k, v in beats.items()}},
-            cp_db_ok=True, bot_db_ok=True, parser_embedded=False,
+            beats={
+                "bot": {
+                    "updated_at": datetime.now().replace(microsecond=0),
+                    "detail": {},
+                },
+                **{k: dict(v) for k, v in beats.items()},
+            },
+            cp_db_ok=True,
+            bot_db_ok=True,
+            parser_embedded=False,
         )
-        assert build_snapshot(alive_inputs)["components"]["consumer:outbound"]["state"] == "ok"
+        assert (
+            build_snapshot(alive_inputs)["components"]["consumer:outbound"]["state"]
+            == "ok"
+        )
     finally:
         stop.set()  # manual kill of the test consumer
         thread.join(timeout=5)
     frozen = {k: dict(v) for k, v in beats.items()}
     dead_inputs = SnapshotInputs(
         now=max(v["updated_at"] for v in frozen.values()) + timedelta(seconds=180),
-        beats={"bot": {"updated_at": datetime.now().replace(microsecond=0), "detail": {}},
-               **frozen},
-        cp_db_ok=True, bot_db_ok=True, parser_embedded=False,
+        beats={
+            "bot": {"updated_at": datetime.now().replace(microsecond=0), "detail": {}},
+            **frozen,
+        },
+        cp_db_ok=True,
+        bot_db_ok=True,
+        parser_embedded=False,
     )
     dead = build_snapshot(dead_inputs)
     assert dead["components"]["consumer:outbound"]["state"] == "down"
@@ -389,22 +460,38 @@ def test_snapshot_json_has_no_secrets_or_message_bodies():
     from control_plane.services.snapshot import SnapshotInputs, build_snapshot
 
     beats = {
-        "bot": _beat(0.5, {
-            "workers_total": 1,
-            "note": f"token={HOSTILE_TOKEN} phone={HOSTILE_PHONE}",
-            "proxy": HOSTILE_PROXY,
-            "stolen_text": HOSTILE_BODY,
-            "api_hash": "a" * 32,
-        }),
+        "bot": _beat(
+            0.5,
+            {
+                "workers_total": 1,
+                "note": f"token={HOSTILE_TOKEN} phone={HOSTILE_PHONE}",
+                "proxy": HOSTILE_PROXY,
+                "stolen_text": HOSTILE_BODY,
+                "api_hash": "a" * 32,
+            },
+        ),
         "consumer:outbound": _beat(0.1),
         "consumer:bot_command": _beat(0.1),
     }
-    snap = build_snapshot(SnapshotInputs(now=NOW, beats=beats, cp_db_ok=True,
-                                         bot_db_ok=True, parser_embedded=False))
+    snap = build_snapshot(
+        SnapshotInputs(
+            now=NOW, beats=beats, cp_db_ok=True, bot_db_ok=True, parser_embedded=False
+        )
+    )
     text = json.dumps(snap, ensure_ascii=False)
-    leaks = find_leaks(snap, [HOSTILE_TOKEN, "s3cr3t-proxy-pass", HOSTILE_PHONE,
-                              HOSTILE_BODY, "a" * 32,
-                              "stolen_text", "note", "proxy"])
+    leaks = find_leaks(
+        snap,
+        [
+            HOSTILE_TOKEN,
+            "s3cr3t-proxy-pass",
+            HOSTILE_PHONE,
+            HOSTILE_BODY,
+            "a" * 32,
+            "stolen_text",
+            "note",
+            "proxy",
+        ],
+    )
     assert leaks == [], f"secret/PII leak: {leaks}"
     # Diagnostics survive: version + counts + states still present.
     assert '"overall": "ok"' in text
@@ -414,13 +501,15 @@ def test_snapshot_json_has_no_secrets_or_message_bodies():
 def test_sanitize_deny_keys_but_keeps_numbers_and_timestamps():
     from control_plane.services.sanitize import MASK, sanitize
 
-    out = sanitize({
-        "api_hash": "f" * 32,
-        "session_count": 5,
-        "checked_at": "2026-09-22T12:00:00",
-        "version": "0.1.0",
-        "sha": "a" * 40,
-    })
+    out = sanitize(
+        {
+            "api_hash": "f" * 32,
+            "session_count": 5,
+            "checked_at": "2026-09-22T12:00:00",
+            "version": "0.1.0",
+            "sha": "a" * 40,
+        }
+    )
     assert out["api_hash"] == MASK
     assert out["session_count"] == 5
     assert out["checked_at"] == "2026-09-22T12:00:00"
@@ -440,11 +529,18 @@ def test_alert_text_is_sanitized_before_send():
 
     db = _memory_db()
     try:
-        spec = AlertSpec(kind="k", severity="warning",
-                         title=f"stuck {HOSTILE_TOKEN}",
-                         details=f"call {HOSTILE_PHONE}", fingerprint="fp-test-scrub")
-        _asyncio.run(dispatch(WatchdogState(), [spec], db=db, tenant_id=1,
-                              sender=fake_sender, now=NOW))
+        spec = AlertSpec(
+            kind="k",
+            severity="warning",
+            title=f"stuck {HOSTILE_TOKEN}",
+            details=f"call {HOSTILE_PHONE}",
+            fingerprint="fp-test-scrub",
+        )
+        _asyncio.run(
+            dispatch(
+                WatchdogState(), [spec], db=db, tenant_id=1, sender=fake_sender, now=NOW
+            )
+        )
     finally:
         db.close()
     assert len(sent) == 1
@@ -473,8 +569,19 @@ def test_cli_json_runs_without_secrets(tmp_path):
     env["PYTHONPATH"] = str(REPO_ROOT)
     env["BOT_TOKEN"] = "999999:CLI-LEAK-PROBE-TOKEN-VALUE"
     proc = subprocess.run(
-        [sys.executable, "-m", "tools.instance_status", "--json", "--app-dir", str(tmp_path)],
-        capture_output=True, text=True, cwd=str(REPO_ROOT), env=env, timeout=120,
+        [
+            sys.executable,
+            "-m",
+            "tools.instance_status",
+            "--json",
+            "--app-dir",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env=env,
+        timeout=120,
     )
     assert proc.returncode in (0, 2)
     payload = json.loads(proc.stdout)
@@ -490,7 +597,11 @@ def test_cli_human_readable_empty_dir_is_down(tmp_path):
     env["PYTHONPATH"] = str(REPO_ROOT)
     proc = subprocess.run(
         [sys.executable, "-m", "tools.instance_status", "--app-dir", str(tmp_path)],
-        capture_output=True, text=True, cwd=str(REPO_ROOT), env=env, timeout=120,
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env=env,
+        timeout=120,
     )
     assert proc.returncode == 2  # no DBs visible from an empty dir
     assert "overall: down" in proc.stdout

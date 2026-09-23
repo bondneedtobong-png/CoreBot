@@ -1,6 +1,5 @@
 """Смена membership и удаление аккаунта (подтверждение + фактическое удаление)."""
 import os
-from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
@@ -9,7 +8,6 @@ from bot.config import OWNER_ID, SESSIONS_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import get_account_card_keyboard, get_accounts_keyboard, get_confirm_delete_keyboard
 from database.models import Membership
-from database.repository import db
 from database.session import session_scope
 from database.repositories import AccountRepository
 from utils.logger import log

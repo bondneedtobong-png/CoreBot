@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
 from utils.time import utcnow_aware
 from typing import AsyncGenerator, Optional
 

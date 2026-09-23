@@ -29,7 +29,6 @@ tests inject a fresh instance while production uses the module singleton.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Optional
@@ -37,7 +36,6 @@ from typing import Any, Awaitable, Callable, Optional
 from utils.time import utcnow_naive
 
 from control_plane.services.snapshot import (
-    BOTCMD_BACKLOG_WARN,
     DEGRADED,
     DOWN,
     FLOODWAIT_SPIKE_PER_HOUR,
@@ -225,7 +223,7 @@ def evaluate(
     queues = comp("queues")
     if queues.get("state") == DEGRADED:
         detail = queues.get("detail") or {}
-        crit = (detail.get("reason") == "backlog-critical")
+        crit = detail.get("reason") == "backlog-critical"
         specs.append(
             AlertSpec(
                 kind="outbound_backlog",
@@ -241,7 +239,8 @@ def evaluate(
         )
 
     # --- signals (inputs are the source of truth) -------------------------
-    if (inputs.floodwait_1h or 0) >= FLOODWAIT_SPIKE_PER_HOUR:        specs.append(
+    if (inputs.floodwait_1h or 0) >= FLOODWAIT_SPIKE_PER_HOUR:
+        specs.append(
             AlertSpec(
                 kind="floodwait_spike",
                 severity="warning",
@@ -375,7 +374,10 @@ def evaluate(
             state.components[name] = cur
     if overall in (OK, DEGRADED, DOWN):
         state.components["__overall__"] = overall
-    state.busy_baseline = {k: int(inputs.busy.get(k, 0)) for k in ("attempts", "retries", "exhausted", "failed_fast")}
+    state.busy_baseline = {
+        k: int(inputs.busy.get(k, 0))
+        for k in ("attempts", "retries", "exhausted", "failed_fast")
+    }
 
     return specs
 

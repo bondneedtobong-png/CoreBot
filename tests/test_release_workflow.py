@@ -238,7 +238,8 @@ def test_update_backup_before_code_change():
 
 def test_update_never_resets_persistent_checkout():
     code_lines = [
-        line for line in _script_text().splitlines()
+        line
+        for line in _script_text().splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
     code = "\n".join(code_lines)
@@ -293,7 +294,11 @@ def _to_wsl(path: Path) -> str:
 def _snapshot(root: Path) -> dict:
     state = {}
     for path in sorted(root.rglob("*")):
-        if path.is_file() and ".git/" not in path.as_posix() and "/.git" not in path.as_posix():
+        if (
+            path.is_file()
+            and ".git/" not in path.as_posix()
+            and "/.git" not in path.as_posix()
+        ):
             state[path.relative_to(root).as_posix()] = path.read_bytes()
     return state
 
@@ -332,14 +337,19 @@ class ShellRig:
         _git(["commit", "-qam", "v2"], self.repo)
         sha_v2 = _git(["rev-parse", "HEAD"], self.repo)
         subprocess.run(
-            ["git", "clone", "-q", str(self.repo), str(self.app)], check=True,
+            ["git", "clone", "-q", str(self.repo), str(self.app)],
+            check=True,
             capture_output=True,
         )
         _git(["checkout", "-q", sha_v1], self.app)
-        (self.app / ".env").write_text("BOT_TOKEN=111:AAA\nOWNER_ID=1\n", encoding="utf-8")
+        (self.app / ".env").write_text(
+            "BOT_TOKEN=111:AAA\nOWNER_ID=1\n", encoding="utf-8"
+        )
         (self.app / "data" / "sessions").mkdir(parents=True)
         (self.app / "data" / "corebot.db").write_text("db-v1", encoding="utf-8")
-        (self.app / "data" / "sessions" / "a.session").write_text("sess", encoding="utf-8")
+        (self.app / "data" / "sessions" / "a.session").write_text(
+            "sess", encoding="utf-8"
+        )
         (self.app / "logs").mkdir()
         (self.app / "logs" / "corebot.log").write_text("log\n", encoding="utf-8")
         self._write_mock_bins()
@@ -351,67 +361,78 @@ class ShellRig:
         return path
 
     def _write_mock_bins(self):
-        self._write("mock_systemctl.sh", (
-            "#!/usr/bin/env bash\n"
-            "echo \"$*\" >> \"$MOCK_LOG\"\n"
-            "if [[ \"$1\" == \"is-active\" ]]; then echo \"active\"; fi\n"
-            "exit 0\n"
-        ))
+        self._write(
+            "mock_systemctl.sh",
+            (
+                "#!/usr/bin/env bash\n"
+                'echo "$*" >> "$MOCK_LOG"\n'
+                'if [[ "$1" == "is-active" ]]; then echo "active"; fi\n'
+                "exit 0\n"
+            ),
+        )
         # Health calls fail while counter <= FAIL_FIRST_HEALTH, then succeed.
         # /version always serves $VERSION_JSON_FILE (may be absent -> fail).
-        self._write("mock_curl.sh", (
-            "#!/usr/bin/env bash\n"
-            "url=\"${@: -1}\"\n"
-            "echo \"$url\" >> \"$MOCK_LOG\"\n"
-            "if [[ \"$url\" == *\"/version\"* ]]; then\n"
-            "  [[ -f \"${VERSION_JSON_FILE:-}\" ]] || exit 22\n"
-            "  cat \"$VERSION_JSON_FILE\"\n"
-            "  exit 0\n"
-            "fi\n"
-            "n=$(cat \"$CURL_COUNTER\" 2>/dev/null || echo 0)\n"
-            "n=$((n + 1))\n"
-            "echo \"$n\" > \"$CURL_COUNTER\"\n"
-            "limit=${FAIL_FIRST_HEALTH:-0}\n"
-            "if [[ \"$n\" -le \"$limit\" ]]; then exit 22; fi\n"
-            "echo '{\"ok\":true}'\n"
-            "exit 0\n"
-        ))
-        self._write("mock_backup.sh", (
-            "#!/usr/bin/env bash\n"
-            "set -euo pipefail\n"
-            "echo \"backup-called $APP_DIR\" >> \"$MOCK_LOG\"\n"
-            "archive=\"$BACKUP_DIR/corebot-test.tar.gz\"\n"
-            "tar -czf \"$archive\" -C \"$APP_DIR\" .env data\n"
-            "chmod 600 \"$archive\"\n"
-            "echo \"$archive\"\n"
-        ))
+        self._write(
+            "mock_curl.sh",
+            (
+                "#!/usr/bin/env bash\n"
+                'url="${@: -1}"\n'
+                'echo "$url" >> "$MOCK_LOG"\n'
+                'if [[ "$url" == *"/version"* ]]; then\n'
+                '  [[ -f "${VERSION_JSON_FILE:-}" ]] || exit 22\n'
+                '  cat "$VERSION_JSON_FILE"\n'
+                "  exit 0\n"
+                "fi\n"
+                'n=$(cat "$CURL_COUNTER" 2>/dev/null || echo 0)\n'
+                "n=$((n + 1))\n"
+                'echo "$n" > "$CURL_COUNTER"\n'
+                "limit=${FAIL_FIRST_HEALTH:-0}\n"
+                'if [[ "$n" -le "$limit" ]]; then exit 22; fi\n'
+                "echo '{\"ok\":true}'\n"
+                "exit 0\n"
+            ),
+        )
+        self._write(
+            "mock_backup.sh",
+            (
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                'echo "backup-called $APP_DIR" >> "$MOCK_LOG"\n'
+                'archive="$BACKUP_DIR/corebot-test.tar.gz"\n'
+                'tar -czf "$archive" -C "$APP_DIR" .env data\n'
+                'chmod 600 "$archive"\n'
+                'echo "$archive"\n'
+            ),
+        )
 
     def base_env(self) -> dict:
         wsl_app = _to_wsl(self.app)
         env = dict(os.environ)
-        env.update({
-            "APP_DIR": wsl_app,
-            "VENV_PY": "/nonexistent/python",
-            "PYTHON_BIN": "python3",
-            "BACKUP_SCRIPT": _to_wsl(self.bindir / "mock_backup.sh"),
-            "BACKUP_DIR": _to_wsl(self.backups),
-            "SYSTEMCTL": _to_wsl(self.bindir / "mock_systemctl.sh"),
-            "CURL": _to_wsl(self.bindir / "mock_curl.sh"),
-            "HEALTH_BASE": "http://127.0.0.1:8081",
-            "READY_ATTEMPTS": "2",
-            "READY_INTERVAL": "0",
-            "CURL_TIMEOUT": "2",
-            "SKIP_VALIDATOR": "1",
-            "SKIP_PIP": "1",
-            "MIN_FREE_MB": "1",
-            "MOCK_LOG": _to_wsl(self.root / "mock.log"),
-            "CURL_COUNTER": _to_wsl(self.root / "curl.count"),
-            "FAIL_FIRST_HEALTH": "0",
-            "VERSION_JSON_FILE": _to_wsl(self.root / "version.json"),
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "safe.directory",
-            "GIT_CONFIG_VALUE_0": "*",
-        })
+        env.update(
+            {
+                "APP_DIR": wsl_app,
+                "VENV_PY": "/nonexistent/python",
+                "PYTHON_BIN": "python3",
+                "BACKUP_SCRIPT": _to_wsl(self.bindir / "mock_backup.sh"),
+                "BACKUP_DIR": _to_wsl(self.backups),
+                "SYSTEMCTL": _to_wsl(self.bindir / "mock_systemctl.sh"),
+                "CURL": _to_wsl(self.bindir / "mock_curl.sh"),
+                "HEALTH_BASE": "http://127.0.0.1:8081",
+                "READY_ATTEMPTS": "2",
+                "READY_INTERVAL": "0",
+                "CURL_TIMEOUT": "2",
+                "SKIP_VALIDATOR": "1",
+                "SKIP_PIP": "1",
+                "MIN_FREE_MB": "1",
+                "MOCK_LOG": _to_wsl(self.root / "mock.log"),
+                "CURL_COUNTER": _to_wsl(self.root / "curl.count"),
+                "FAIL_FIRST_HEALTH": "0",
+                "VERSION_JSON_FILE": _to_wsl(self.root / "version.json"),
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "safe.directory",
+                "GIT_CONFIG_VALUE_0": "*",
+            }
+        )
         return env
 
     def run_update(self, *args: str, extra_env: dict | None = None):
@@ -422,7 +443,10 @@ class ShellRig:
         env["WSLENV"] = ":".join(sorted(set(forwarded) | {"WSLENV"}))
         return subprocess.run(
             [str(BASH_EXE), _to_wsl(UPDATE_SH), *args],
-            capture_output=True, text=True, env=env, timeout=180,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=180,
         )
 
     def mock_log(self) -> str:
@@ -432,13 +456,21 @@ class ShellRig:
     def chmod_mocks(self):
         script = self.root / "mkexec.sh"
         script.write_bytes(
-            ("#!/usr/bin/env bash\nchmod +x "
-             + " ".join(_to_wsl(self.bindir / n) for n in
-                        ("mock_systemctl.sh", "mock_curl.sh", "mock_backup.sh"))
-             + "\n").encode("utf-8")
+            (
+                "#!/usr/bin/env bash\nchmod +x "
+                + " ".join(
+                    _to_wsl(self.bindir / n)
+                    for n in ("mock_systemctl.sh", "mock_curl.sh", "mock_backup.sh")
+                )
+                + "\n"
+            ).encode("utf-8")
         )
-        subprocess.run([str(BASH_EXE), _to_wsl(script)], check=True,
-                       capture_output=True, timeout=60)
+        subprocess.run(
+            [str(BASH_EXE), _to_wsl(script)],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
 
 
 def test_dry_run_changes_nothing(tmp_path):
@@ -484,19 +516,34 @@ def test_broken_health_triggers_auto_rollback(tmp_path):
     assert "ROLLED BACK" in proc.stdout
     # previous code restored, persistent paths intact
     assert (rig.app / "app_code.txt").read_text(encoding="utf-8") == "v1\n"
-    assert (rig.app / ".env").read_text(encoding="utf-8") == "BOT_TOKEN=111:AAA\nOWNER_ID=1\n"
+    assert (rig.app / ".env").read_text(
+        encoding="utf-8"
+    ) == "BOT_TOKEN=111:AAA\nOWNER_ID=1\n"
     assert (rig.app / "data" / "corebot.db").read_text(encoding="utf-8") == "db-v1"
-    assert (rig.app / "data" / "sessions" / "a.session").read_text(encoding="utf-8") == "sess"
+    assert (rig.app / "data" / "sessions" / "a.session").read_text(
+        encoding="utf-8"
+    ) == "sess"
     assert (rig.app / ".deployed_sha").read_text(encoding="utf-8") == sha_v1
     log = rig.mock_log()
     # stop order cp -> bot, start order cp -> bot, twice (update + rollback)
-    seq = [line for line in log.splitlines()
-           if line in ("stop corebot-cp.service", "stop corebot.service",
-                       "restart corebot-cp.service", "restart corebot.service")]
+    seq = [
+        line
+        for line in log.splitlines()
+        if line
+        in (
+            "stop corebot-cp.service",
+            "stop corebot.service",
+            "restart corebot-cp.service",
+            "restart corebot.service",
+        )
+    ]
     assert seq == [
-        "stop corebot-cp.service", "stop corebot.service",
-        "restart corebot-cp.service", "restart corebot.service",
-        "restart corebot-cp.service", "restart corebot.service",
+        "stop corebot-cp.service",
+        "stop corebot.service",
+        "restart corebot-cp.service",
+        "restart corebot.service",
+        "restart corebot-cp.service",
+        "restart corebot.service",
     ]
     assert "is-active" in log  # both services re-checked active after rollback
 
@@ -515,8 +562,12 @@ def test_success_path_records_deployed_sha(tmp_path):
     assert (rig.app / "app_code.txt").read_text(encoding="utf-8") == "v2\n"
     assert (rig.app / ".deployed_sha").read_text(encoding="utf-8") == sha_v2
     # persistent paths not overwritten by the swap
-    assert (rig.app / ".env").read_text(encoding="utf-8") == "BOT_TOKEN=111:AAA\nOWNER_ID=1\n"
-    assert (rig.app / "data" / "sessions" / "a.session").read_text(encoding="utf-8") == "sess"
+    assert (rig.app / ".env").read_text(
+        encoding="utf-8"
+    ) == "BOT_TOKEN=111:AAA\nOWNER_ID=1\n"
+    assert (rig.app / "data" / "sessions" / "a.session").read_text(
+        encoding="utf-8"
+    ) == "sess"
     assert (rig.app / "RELEASE.json").exists()
     manifest = json.loads((rig.app / "RELEASE.json").read_text(encoding="utf-8"))
     assert manifest["sha"] == sha_v2
@@ -537,9 +588,10 @@ def test_release_status_hides_secrets(tmp_path):
     path = tmp_path / "RELEASE.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     proc = subprocess.run(
-        [str(BASH_EXE), _to_wsl(STATUS_SH),
-         "--manifest", _to_wsl(path), "--no-live"],
-        capture_output=True, text=True, timeout=60,
+        [str(BASH_EXE), _to_wsl(STATUS_SH), "--manifest", _to_wsl(path), "--no-live"],
+        capture_output=True,
+        text=True,
+        timeout=60,
         env={**os.environ, "APP_DIR": _to_wsl(tmp_path)},
     )
     assert proc.returncode == 0, proc.stderr

@@ -16,7 +16,7 @@ from utils.time import utcnow_naive
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, asc, delete, desc, func, insert, select
+from sqlalchemy import and_, asc, delete, desc, func, select
 from sqlalchemy.orm import Session
 
 from control_plane.business.db import get_bot_db

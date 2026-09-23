@@ -1,7 +1,6 @@
 """
 SQLAlchemy модели базы данных.
 """
-from datetime import datetime
 from utils.time import utcnow_naive
 from sqlalchemy import (
     Column,

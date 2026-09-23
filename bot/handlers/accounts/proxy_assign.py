@@ -5,13 +5,12 @@ from aiogram.types import CallbackQuery
 from bot.config import OWNER_ID
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import get_context_back_keyboard, get_proxy_group_assign_keyboard
-from database.models import AccountStatus, MailingStatus
+from database.models import AccountStatus
 from database.repository import db
 from database.session import session_scope
 from database.repositories import (
     AccountRepository,
     MailingRepository,
-    ProxyRepository,
     ProxyGroupRepository,
 )
 from utils.logger import log

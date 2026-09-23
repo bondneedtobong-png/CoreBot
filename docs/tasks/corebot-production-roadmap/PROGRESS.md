@@ -249,3 +249,35 @@
 - Риски следующим задачам: watchdog читает backup_age по mtime архивов, не по
   маркеру (согласовано, не менялось); timer-юниты проверены статически — на VPS
   ручной enable + drill; flock-занятость → пустой stdout (update это отвергает).
+
+## 10 — CI, линтинг и интеграционные тесты ✅ принята 2026-09-23
+
+- Commit: (см. git log, `chore: task 10 CI gates, ruff, integration tests`).
+- База исполнения: `5988705` (задача 09).
+- Создано: `.github/workflows/ci.yml` (matrix windows-3.11 + ubuntu-3.11/3.12;
+  14 шагов: clean-checkout, pytest, compileall, ruff check, ruff format curated,
+  node --check, bash -n, skill validator, config-validator contract, BAT --check
+  на Windows с synthetic env), `pyproject.toml` (ruff E4/E7/E9/F, target py311,
+  без I; E711/E712 глобально — SQL `col == None/True`; per-file baseline только
+  legacy с причинами; новых файлов без исключений), `requirements-dev.txt`
+  (pytest/ruff/python-multipart>=0.0.18/httpx/pyyaml/jinja2),
+  `tools/validate_skill.py` (stdlib skill-валидатор; quick_validate.py
+  подтверждён отсутствующим), `tests/test_integration_flows.py` (queue→consumer
+  →supervised task реально; pause/unknown; duplicate TData без multipart).
+- Изменено: `README.md` (Quality gate 1:1 с CI), ~40 legacy-файлов
+  (`ruff check --fix`, в основном F401; проверено style-only),
+  23 файла задач 02–10 (`ruff format`), `tests/test_lifespan_bootstrap.py`
+  (только NOTE-докстринг).
+- Проверки (оркестратор, независимо): `ruff check` — All checks passed;
+  `ruff format --check` curated-23 — already formatted (весь репо — 129 legacy
+  ждут формата, осознанно вне скоупа); `node --check` ok; `bash -n` 7/7 ok
+  (WSL-пути /mnt/c); `validate_skill` OK; `pytest` — **215 passed, 0 failed**
+  (впервые полностью зелёный: python-multipart 0.0.32 чинит 2 tdata-теста);
+  `BAT --check` → CHECK OK; CI-ямал: matrix и шаги чтением — совпадают с README;
+  `git diff --check` чист; контракты, `.env`, `data/*` не тронуты.
+- Решения: pytest-конфиг только в pytest.ini; без isort (пересмотр после 11);
+  curated format-список дублирован pyproject/CI/README (риск рассинхрона — ревью).
+- Осталось вручную: первый прогон Actions на GitHub + branch protection `main`
+  (required-check `gate`).
+- Риски задаче 11: локально Python 3.14.3 vs CI 3.11/3.12 (синтаксис 3.12+ не
+  используется); медленные джобы (форки CLI, BAT-venv, PyQt5-установка с кэшем).

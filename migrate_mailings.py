@@ -48,7 +48,7 @@ async def migrate():
                 try:
                     # Проверяем, существует ли колонка
                     result = await conn.execute(text(
-                        f"PRAGMA table_info(mailings)"
+                        "PRAGMA table_info(mailings)"
                     ))
                     existing_cols = [row[1] for row in result.fetchall()]
                     

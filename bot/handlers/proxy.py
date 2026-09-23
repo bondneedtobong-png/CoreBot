@@ -25,9 +25,8 @@ from bot.keyboards.main import (
     get_proxy_group_delete_confirm_keyboard,
     PROXY_LIST_PAGE_SIZE,
 )
-from database.repository import db
 from database.session import session_scope
-from database.models import Proxy, ProxyType
+from database.models import ProxyType
 from database.repositories import ProxyRepository, AccountRepository, ProxyGroupRepository
 from utils.logger import log
 from utils.time import utcnow_naive
@@ -826,7 +825,6 @@ async def cb_proxy_check(callback: CallbackQuery):
 
         # Обновляем статус в БД
         async with session_scope() as session:
-            from datetime import datetime
             await ProxyRepository.update_status(
                 session, proxy_id,
                 is_working=is_working,
@@ -907,7 +905,7 @@ async def cb_delete_confirm(callback: CallbackQuery):
 
     await callback.message.edit_text(
         "⚠️ <b>Подтверждение удаления</b>\n\n"
-        f"Вы уверены, что хотите удалить прокси?\n\n"
+        "Вы уверены, что хотите удалить прокси?\n\n"
         "Это действие нельзя отменить.",
         reply_markup=get_confirm_delete_proxy_keyboard(proxy_id),
         parse_mode=ParseMode.HTML,

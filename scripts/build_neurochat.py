@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 chunk = Path("bot/handlers/_neuro_chunk.txt").read_text(encoding="utf-8")
 rep = [
