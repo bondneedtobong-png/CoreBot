@@ -2623,6 +2623,7 @@ async function renderClients(idStr) {
   setHeader("Клиенты", id ? `Клиент #${id}` : "База контактов и фильтр по классам");
   const root = $("#pageRoot");
   if (!id) {
+    const cliReadOnly = isReadOnlyRole();
     root.innerHTML = `
       <div class="p-6 cb-scroll overflow-y-auto h-full space-y-4">
         <div class="flex items-center gap-3 text-sm flex-wrap">
@@ -2641,6 +2642,29 @@ async function renderClients(idStr) {
           <button id="clApply" class="px-3 py-1.5 rounded bg-accent-600 hover:bg-accent-500 text-white">Применить</button>
           <span class="text-slate-500 text-xs ml-auto" id="clCount"></span>
         </div>
+        <div class="card">
+          <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+            <h3 class="font-semibold">Загрузка клиентов из файла</h3>
+            <span class="text-xs text-slate-500">один запрос на весь список</span>
+          </div>
+          ${cliReadOnly
+            ? `<p class="text-xs text-amber-300">ⓘ Импорт недоступен для роли read-only.</p>`
+            : `<p class="text-xs text-slate-500 mb-2">По одному @username в строке, с @ или без (как txt в боте). Дубликаты пропускаются, мусорные строки — в отчёте.</p>
+          <div class="flex items-end gap-2 flex-wrap text-sm">
+            <label class="block">
+              <span class="text-slate-400 text-xs">Файл .txt</span>
+              <input id="clImportFile" type="file" accept=".txt,text/plain"
+                     class="mt-1 block bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 text-xs" />
+            </label>
+            <button id="clImportBtn" class="px-3 py-2 rounded-lg bg-ink-700 hover:bg-ink-600 text-slate-200 text-sm">Импортировать</button>
+            <span id="clImportMsg" class="text-xs text-slate-400"></span>
+          </div>
+          <label class="block text-sm mt-2">
+            <span class="text-slate-400 text-xs">Или вставьте строки вручную</span>
+            <textarea id="clImportText" rows="3" placeholder="@username1&#10;username2"
+                      class="mt-1 w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-2 text-slate-100 font-mono text-xs"></textarea>
+          </label>`}
+        </div>
         <div class="card p-0 overflow-hidden">
           <table class="cb-table">
             <thead><tr>
@@ -2654,6 +2678,46 @@ async function renderClients(idStr) {
     `;
     $("#clApply").addEventListener("click", loadClientsList);
     $("#clQ").addEventListener("keydown", (e) => { if (e.key === "Enter") loadClientsList(); });
+    $("#clImportFile")?.addEventListener("change", (ev) => {
+      const f = ev.currentTarget.files?.[0];
+      if (!f) return;
+      if (f.size > 15 * 1024 * 1024) {
+        toast("Файл слишком большой (макс. 15 МБ)", "error");
+        ev.currentTarget.value = "";
+        return;
+      }
+      const rd = new FileReader();
+      rd.onload = () => { $("#clImportText").value = String(rd.result || ""); };
+      rd.onerror = () => toast("Не удалось прочитать файл", "error");
+      rd.readAsText(f);
+    });
+    $("#clImportBtn")?.addEventListener("click", async () => {
+      const out = $("#clImportMsg");
+      const btn = $("#clImportBtn");
+      const usernames = ($("#clImportText")?.value || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (!usernames.length) {
+        out.textContent = "Выберите .txt файл или вставьте хотя бы одну строку.";
+        out.className = "text-xs text-rose-400";
+        return;
+      }
+      setBusy(btn, true, "Импорт…");
+      try {
+        const r = await api("/business/clients/import", { method: "POST", body: { usernames } });
+        const summary = `Добавлено ${r.added}, дубликатов ${r.skipped_duplicates}, мусорных ${r.invalid}`;
+        out.textContent = summary;
+        out.className = "text-xs " + (r.added ? "text-emerald-300" : "text-amber-300");
+        toast(summary, r.added ? "success" : "info");
+        $("#clImportText").value = "";
+        const fi = $("#clImportFile");
+        if (fi) fi.value = "";
+        await loadClientsList();
+      } catch (e) {
+        out.textContent = e.message;
+        out.className = "text-xs text-rose-400";
+      } finally {
+        setBusy(btn, false);
+      }
+    });
     await loadClientsList();
     return;
   }

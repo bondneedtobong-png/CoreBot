@@ -341,6 +341,17 @@ class ClientClassUpdateResult(BaseModel):
     new_count: int
 
 
+class ClientImportRequest(BaseModel):
+    usernames: list[str] = Field(min_length=1, max_length=20000)
+
+
+class ClientImportResult(BaseModel):
+    total_lines: int
+    added: int
+    skipped_duplicates: int
+    invalid: int
+
+
 # ===== Instance settings =====
 
 

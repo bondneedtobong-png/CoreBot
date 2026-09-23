@@ -172,6 +172,13 @@ def test_mailing_full_settings_wired():
         assert name in js, f"в форме рассылки нет {name}"
 
 
+def test_client_import_wired():
+    """Загрузка клиентов из .txt через bulk-import."""
+    js = _read("main.js")
+    assert 'id="clImportFile"' in js
+    assert "/business/clients/import" in js
+
+
 def test_panel_served_with_no_store():
     """Статика /panel отдаётся с Cache-Control: no-store (без застревания в кэше)."""
     os.environ.setdefault("PARSER_EMBEDDED", "0")

@@ -17,6 +17,8 @@ from control_plane.business.schemas import (
     ClientClassUpdate,
     ClientClassUpdateResult,
     ClientDetail,
+    ClientImportRequest,
+    ClientImportResult,
     ClientInteractionItem,
     ClientListItem,
 )
@@ -28,6 +30,7 @@ from database.models import (
     ClientInteraction,
     ClientTag,
 )
+from utils.username_list_tool import extract_usernames
 
 
 router = APIRouter(prefix="/business/clients", tags=["business-clients"])
@@ -243,3 +246,65 @@ def delete_client(
         raise HTTPException(status_code=404, detail="client not found")
     db.execute(delete(Client).where(Client.id == client_id))
     db.commit()
+
+
+@router.post("/import", response_model=ClientImportResult)
+def import_clients(
+    payload: ClientImportRequest,
+    db: Session = Depends(get_bot_db),
+    _user: User = Depends(require_operator_write),
+):
+    """Bulk-импорт клиентов из строк (файл .txt читается в браузере).
+
+    Парсинг как в боте (`clients_upload`): @username с @ или без,
+    пропускаются мусорные `telegram*`/`bot*`. Дедуп по username на всю
+    таблицу, существующие не трогаются.
+    """
+    total = len(payload.usernames)
+    seen: set[str] = set()
+    candidates: list[str] = []
+    invalid = 0
+    dup_lines = 0
+    for raw in payload.usernames:
+        found = extract_usernames(raw or "")
+        if not found:
+            invalid += 1
+            continue
+        for uname in found:
+            if uname.startswith("telegram") or uname.startswith("bot"):
+                invalid += 1
+                continue
+            if uname not in seen:
+                seen.add(uname)
+                candidates.append(uname)
+            else:
+                dup_lines += 1
+    existing: set[str] = set()
+    # SQLite держит ≤999 переменных в запросе — чанкуем IN.
+    for i in range(0, len(candidates), 500):
+        chunk = candidates[i:i + 500]
+        rows = db.execute(
+            select(Client.username).where(Client.username.in_(chunk))
+        ).all()
+        existing.update(row[0] for row in rows if row[0])
+    added = 0
+    skipped = 0
+    for uname in candidates:
+        if uname in existing:
+            skipped += 1
+            continue
+        db.add(Client(username=uname))  # status по умолчанию NEW
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            skipped += 1
+            continue
+        existing.add(uname)
+        added += 1
+    return ClientImportResult(
+        total_lines=total,
+        added=added,
+        skipped_duplicates=skipped + dup_lines,
+        invalid=invalid,
+    )
