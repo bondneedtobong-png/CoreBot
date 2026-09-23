@@ -281,3 +281,17 @@
   (required-check `gate`).
 - Риски задаче 11: локально Python 3.14.3 vs CI 3.11/3.12 (синтаксис 3.12+ не
   используется); медленные джобы (форки CLI, BAT-venv, PyQt5-установка с кэшем).
+
+### Gate-hardening по REVIEW-01-09 (2026-09-23, поверх задачи 10)
+
+- Внешнее ревью (detached worktree на `5988705`) дало 3 FAIL: CRLF-shebang в .sh
+  на clean Windows checkout (задачи 06/09) и fixture-зависимый UTC DB-тест
+  (задача 02); плюс требования dev-зависимостей и CI (закрыты задачей 10).
+- Fixup-commit `chore: gate hardening from REVIEW-01-09`: добавлен
+  `.gitattributes` (`*.sh/*.yml/*.j2/systemd/toml/ini` → LF; `*.bat/*.cmd/*.ps1`
+  → CRLF) — будущие клоны immune к core.autocrlf; тест
+  `test_existing_sqlite_opens_without_migration` стал fixture-independent
+  (без data/corebot.db строит tmp legacy-схему с naive TIMESTAMP, гоняет
+  create_all + naive-сравнение без TypeError).
+- Проверки: `test_utc_time_model` 9/9, `ruff check` + `format --check` чистые,
+  `git ls-files --eol` — индекс и дерево уже LF (переписываний нет).

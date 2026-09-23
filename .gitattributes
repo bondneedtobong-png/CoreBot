@@ -1,0 +1,21 @@
+# Enforce Unix line endings for shell/Ansible/packaging files.
+# Without this, a Windows clone with core.autocrlf=true converts them to
+# CRLF, which breaks `#!/usr/bin/env bash` shebangs and `set -o pipefail`
+# (REVIEW-01-09: release/backup shell tests failed on clean Windows checkout).
+*.sh text eol=lf
+*.bash text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.j2 text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+*.cfg text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+*.env text eol=lf
+.env.example text eol=lf
+Dockerfile* text eol=lf
+# Windows-native files keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

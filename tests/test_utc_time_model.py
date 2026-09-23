@@ -161,19 +161,60 @@ def test_serialization_no_double_offset():
     assert legacy_iso == "2026-01-01T12:00:00"
 
 
-def test_existing_sqlite_opens_without_migration():
+def test_existing_sqlite_opens_without_migration(tmp_path):
+    """Legacy naive-UTC база открывается без миграции и ошибок типов.
+
+    REVIEW-01-09: тест обязан быть fixture-independent — на clean checkout
+    без data/corebot.db он строит временную legacy-схему сам, а не падает
+    и не пропускается молча.
+    """
     import sqlite3
 
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+
+    from database.models import Base
+    from utils.time import utcnow_naive
+
     base = pathlib.Path(__file__).resolve().parents[1]
-    db_path = base / "data" / "corebot.db"
-    if not db_path.exists():
-        return  # в CI без data/ — нечего проверять
-    con = sqlite3.connect(str(db_path))
+    repo_db = base / "data" / "corebot.db"
+    if repo_db.exists():
+        con = sqlite3.connect(str(repo_db))
+        try:
+            tables = {
+                r[0]
+                for r in con.execute(
+                    "select name from sqlite_master where type='table'"
+                )
+            }
+            assert "accounts" in tables
+        finally:
+            con.close()
+        return
+
+    # Clean checkout: legacy-наивная схема во временном файле.
+    legacy_db = tmp_path / "legacy_corebot.db"
+    con = sqlite3.connect(str(legacy_db))
     try:
-        tables = {
-            r[0]
-            for r in con.execute("select name from sqlite_master where type='table'")
-        }
-        assert "accounts" in tables
+        con.execute(
+            "CREATE TABLE legacy_probe (id INTEGER PRIMARY KEY, created_at TIMESTAMP)"
+        )
+        con.execute(
+            "INSERT INTO legacy_probe (created_at) VALUES (?)",
+            ("2026-01-01 12:00:00",),
+        )
+        con.commit()
     finally:
         con.close()
+
+    # ORM-модели создаются поверх без миграций; naive-значения сравниваются
+    # с helper без TypeError (naive/aware).
+    engine = create_engine(f"sqlite:///{legacy_db}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        row = session.execute(text("select created_at from legacy_probe")).scalar_one()
+        assert "2026-01-01" in str(row)
+    now = utcnow_naive()
+    assert now.tzinfo is None
+    assert datetime(2026, 1, 1, 12, 0, 0) < now  # сравнения без TypeError
+    engine.dispose()
