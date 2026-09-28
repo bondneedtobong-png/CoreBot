@@ -18,7 +18,7 @@ from bot.handlers.accounts.profile_templates import _save_photo
 from database.profile_templates import add_pool_batch
 from database.session import session_scope
 from services.comfyui.identity import (
-    ComfyIdentityError, ComfyIdentityModelMissingError, create_identity,
+    ComfyIdentityError, ComfyIdentityModelMissingError, ComfyIdentityQualityError, create_identity,
     generate_identity_photo, get_identity, list_identities,
 )
 from services.comfyui.person_mask import PersonMaskError, generate_person_mask
@@ -251,6 +251,12 @@ async def _generate(message: Message, state: FSMContext, *, template: Path | Non
         )
     except ComfyIdentityModelMissingError:
         await status.edit_text("❌ Модель сохранения внешности PhotoMaker не найдена в локальном ComfyUI.")
+        return
+    except ComfyIdentityQualityError:
+        await status.edit_text(
+            "❌ Кадр не прошёл проверку пропорций лица. Попробуйте другой фото-шаблон "
+            "или повторите генерацию. Испорченный результат не сохранён."
+        )
         return
     except ComfyIdentityError:
         await status.edit_text("❌ Не удалось создать сцену. Проверьте шаблон и маску или повторите без них.")

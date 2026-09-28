@@ -8,6 +8,7 @@ is a weak reference; visual identity consistency is best-effort, not guaranteed.
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 import json
 import os
 import re
@@ -16,10 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import aiohttp
+from PIL import Image
 
 from bot.config import DATA_DIR
 from services.comfyui import preview
 from services.comfyui import lifecycle
+from services.comfyui import scene_quality
 from services.comfyui.lifecycle import DEFAULT_INSTALL_DIR
 
 
@@ -35,6 +38,10 @@ class ComfyIdentityError(RuntimeError):
 
 class ComfyIdentityModelMissingError(ComfyIdentityError):
     """The local PhotoMaker model must be installed before scene generation."""
+
+
+class ComfyIdentityQualityError(ComfyIdentityError):
+    """The scene was generated but failed a conservative composition check."""
 
 
 @dataclass(frozen=True)
@@ -149,6 +156,24 @@ def _read_scene_png(path: Path) -> bytes:
     return image
 
 
+def _composite_scene(template_png: bytes, mask_png: bytes, generated_png: bytes) -> bytes:
+    """Keep unmasked scene pixels exactly as uploaded by the user."""
+    for data in (template_png, mask_png, generated_png):
+        preview._validate_png(data, width=1024, height=1024)
+    with (Image.open(BytesIO(template_png)) as template_file,
+          Image.open(BytesIO(mask_png)) as mask_file,
+          Image.open(BytesIO(generated_png)) as generated_file):
+        combined = Image.composite(
+            generated_file.convert("RGB"), template_file.convert("RGB"),
+            mask_file.convert("L"),
+        )
+        output = BytesIO()
+        combined.save(output, format="PNG")
+        data = output.getvalue()
+    preview._validate_png(data, width=1024, height=1024)
+    return data
+
+
 def build_identity_workflow(
     *, scene_prompt: str, model: str, seed: int, upload_name: str,
     filename_prefix: str, width: int = 1024, height: int = 1024,
@@ -181,7 +206,7 @@ def build_identity_workflow(
         "3": {"class_type": "KSampler", "inputs": {
             "seed": seed, "steps": 28, "cfg": 7.0,
             "sampler_name": "dpmpp_2m", "scheduler": "karras",
-            "denoise": 1.0 if template_name is not None else 0.7,
+            "denoise": 0.55 if template_name is not None else 0.7,
             "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0],
             "latent_image": ["5", 0],
         }},
@@ -207,13 +232,18 @@ def build_identity_workflow(
         "11": {"class_type": "LoadImage", "inputs": {"image": upload_name}},
     }
     if template_name is not None and mask_name is not None:
-        graph["3"]["inputs"]["latent_image"] = ["14", 0]
+        graph["3"]["inputs"].update({
+            "positive": ["14", 0], "negative": ["14", 1],
+            "latent_image": ["14", 2],
+        })
         graph["12"] = {"class_type": "LoadImage", "inputs": {"image": template_name}}
         graph["13"] = {"class_type": "LoadImageMask", "inputs": {
             "image": mask_name, "channel": "red",
         }}
-        graph["14"] = {"class_type": "VAEEncodeForInpaint", "inputs": {
-            "pixels": ["12", 0], "vae": ["4", 2], "mask": ["13", 0], "grow_mask_by": 8,
+        graph["14"] = {"class_type": "InpaintModelConditioning", "inputs": {
+            "positive": ["6", 0], "negative": ["7", 0],
+            "pixels": ["12", 0], "vae": ["4", 2], "mask": ["13", 0],
+            "noise_mask": True,
         }}
         del graph["5"]
     return graph
@@ -320,6 +350,10 @@ class ComfyIdentityClient:
                         "filename": image["filename"], "subfolder": "", "type": "output",
                     })
                     preview._validate_png(data, width=1024, height=1024)
+                    if template_png is not None and mask_png is not None:
+                        data = await asyncio.to_thread(
+                            _composite_scene, template_png, mask_png, data,
+                        )
                     path = _identity_dir(identity_id) / f"{uuid.uuid4().hex}.png"
                     temporary = path.with_suffix(".tmp")
                     try:
@@ -328,6 +362,13 @@ class ComfyIdentityClient:
                         os.replace(temporary, path)
                     finally:
                         temporary.unlink(missing_ok=True)
+                    if scene_template_path is not None and await scene_quality.has_oversized_face(
+                        scene_template_path, path,
+                    ):
+                        path.unlink(missing_ok=True)
+                        raise ComfyIdentityQualityError(
+                            "Generated face is much larger than in the template"
+                        )
                     return IdentityPhotoResult(identity_id, path, prompt_id, actual_seed)
         except TimeoutError as exc:
             raise ComfyIdentityError("PhotoMaker generation timed out") from exc

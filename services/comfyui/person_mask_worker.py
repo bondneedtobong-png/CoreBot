@@ -1,7 +1,7 @@
-"""Isolated Ultralytics inference process used by person_mask.py.
+"""Isolated YOLO detection and cached SAM contour refinement for person_mask.py.
 
-Runs under the existing local ComfyUI venv. The official small segmentation
-weight is downloaded to ComfyUI/models/ultralytics/segm on first use.
+Runs under the existing local ComfyUI venv. The segmentation weights and the
+SAM model must be present locally; a missing model leaves the manual-mask path.
 """
 
 from __future__ import annotations
@@ -11,7 +11,9 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import torch
 from PIL import Image, ImageFilter, ImageOps
+from transformers import SamModel, SamProcessor
 from ultralytics import YOLO
 
 
@@ -28,9 +30,37 @@ def make_mask(source: Path, destination: Path, model_path: Path) -> None:
     )[0]
     if result.masks is None or len(result.boxes) != 1:
         raise ValueError("exactly one person is required")
-    pixels = (result.masks.data[0].cpu().numpy() > 0.5).astype(np.uint8)
-    if pixels.shape != (photo.height, photo.width):
-        pixels = cv2.resize(pixels, photo.size, interpolation=cv2.INTER_NEAREST)
+    yolo_mask = (result.masks.data[0].cpu().numpy() > 0.5)
+    if yolo_mask.shape != (photo.height, photo.width):
+        yolo_mask = cv2.resize(
+            yolo_mask.astype(np.uint8), photo.size, interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
+    person_box = result.boxes.xyxy[0].cpu().tolist()
+
+    # SAM separates foreground props from the person inside YOLO's box.
+    processor = SamProcessor.from_pretrained("facebook/sam-vit-base", local_files_only=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    segmenter = SamModel.from_pretrained(
+        "facebook/sam-vit-base", local_files_only=True,
+    ).to(device).eval()
+    inputs = processor(images=photo, input_boxes=[[person_box]], return_tensors="pt")
+    with torch.inference_mode():
+        prediction = segmenter(**{key: value.to(device) for key, value in inputs.items()})
+    candidates = processor.image_processor.post_process_masks(
+        prediction.pred_masks.cpu(), inputs["original_sizes"].cpu(),
+        inputs["reshaped_input_sizes"].cpu(),
+    )[0][0].numpy().astype(bool)
+    scores = prediction.iou_scores.cpu().flatten().tolist()
+    ranked = sorted(zip(scores, candidates), key=lambda item: item[0], reverse=True)
+    pixels = None
+    for _score, candidate in ranked:
+        intersection = np.count_nonzero(candidate & yolo_mask)
+        union = np.count_nonzero(candidate | yolo_mask)
+        if union and intersection / union >= 0.45:
+            pixels = candidate.astype(np.uint8)
+            break
+    if pixels is None:
+        raise ValueError("segmentation disagrees with person detection")
 
     # Ignore tiny detached false positives while preserving the person's body.
     count, components, stats, _ = cv2.connectedComponentsWithStats(pixels, 8)
@@ -46,7 +76,7 @@ def make_mask(source: Path, destination: Path, model_path: Path) -> None:
         raise ValueError("person mask coverage is implausible")
 
     # Include a narrow halo around hair and clothing; the inpaint path softens it.
-    mask = Image.fromarray(keep, "L").filter(ImageFilter.MaxFilter(9))
+    mask = Image.fromarray(keep, "L").filter(ImageFilter.MaxFilter(5))
     mask.save(destination, format="PNG")
 
 

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 import json
 import struct
 import uuid
 import zlib
 
 import pytest
+from PIL import Image, ImageDraw
 
 from services.comfyui import identity
 from services.comfyui.preview import PreviewResult
@@ -110,11 +112,32 @@ def test_graph_is_fixed_and_template_requires_mask():
     masked = identity.build_identity_workflow(
         **args, template_name=args["upload_name"], mask_name=args["upload_name"],
     )
-    assert masked["3"]["inputs"]["latent_image"] == ["14", 0]
-    assert masked["3"]["inputs"]["denoise"] == 1.0
+    assert masked["3"]["inputs"]["positive"] == ["14", 0]
+    assert masked["3"]["inputs"]["negative"] == ["14", 1]
+    assert masked["3"]["inputs"]["latent_image"] == ["14", 2]
+    assert masked["3"]["inputs"]["denoise"] == 0.55
     assert masked["13"]["inputs"]["channel"] == "red"
-    assert masked["14"]["class_type"] == "VAEEncodeForInpaint"
+    assert masked["14"]["class_type"] == "InpaintModelConditioning"
+    assert masked["14"]["inputs"]["pixels"] == ["12", 0]
+    assert masked["14"]["inputs"]["mask"] == ["13", 0]
     assert "5" not in masked
+
+
+def test_template_background_is_preserved_pixel_for_pixel():
+    source = Image.new("RGB", (1024, 1024), "red")
+    generated = Image.new("RGB", (1024, 1024), "blue")
+    mask = Image.new("L", (1024, 1024), 0)
+    ImageDraw.Draw(mask).rectangle((0, 0, 511, 1023), fill=255)
+
+    def png(image):
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
+
+    combined = identity._composite_scene(png(source), png(mask), png(generated))
+    with Image.open(BytesIO(combined)) as result:
+        assert result.getpixel((100, 500)) == (0, 0, 255)
+        assert result.getpixel((900, 500)) == (255, 0, 0)
 
 
 def test_model_absence_and_template_pair_rejected_before_network(monkeypatch, tmp_path):
@@ -128,13 +151,21 @@ def test_model_absence_and_template_pair_rejected_before_network(monkeypatch, tm
         asyncio.run(identity.generate_identity_photo(record.identity_id, "garden"))
 
 
-def test_generate_uploads_identity_and_masked_scene(monkeypatch, tmp_path):
+@pytest.mark.parametrize("oversized", [False, True])
+def test_generate_uploads_identity_and_masked_scene(monkeypatch, tmp_path, oversized):
     record = _create_record(monkeypatch, tmp_path)
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     (model_dir / identity.PHOTOMAKER_MODEL_NAME).write_bytes(b"mock")
     monkeypatch.setattr(identity, "PHOTOMAKER_MODEL_DIR", model_dir)
     starts = []
+    checked = []
+
+    async def no_oversized_face(source, generated):
+        checked.append((source, generated))
+        return oversized
+
+    monkeypatch.setattr(identity.scene_quality, "has_oversized_face", no_oversized_face)
 
     async def ready(url):
         starts.append(url)
@@ -153,7 +184,7 @@ def test_generate_uploads_identity_and_masked_scene(monkeypatch, tmp_path):
 
     def accept(calls):
         graph = calls[-1][2]["json"]["prompt"]
-        assert graph["14"]["class_type"] == "VAEEncodeForInpaint"
+        assert graph["14"]["class_type"] == "InpaintModelConditioning"
         assert graph["6"]["inputs"]["text"].startswith("a photograph of an adult person photomaker")
         assert "freckles, dark hair" in graph["6"]["inputs"]["text"]
         return _Response({"prompt_id": prompt_id, "node_errors": {}})
@@ -167,14 +198,23 @@ def test_generate_uploads_identity_and_masked_scene(monkeypatch, tmp_path):
     fake = _Session([upload, upload, upload, accept, history,
                      _Response(_png(), content_type="image/png")])
     monkeypatch.setattr(identity.aiohttp, "ClientSession", lambda **_kwargs: fake)
-    result = asyncio.run(identity.generate_identity_photo(
+    request = identity.generate_identity_photo(
         record.identity_id, "standing in a garden", seed=9,
         scene_template_path=template, person_mask_path=mask,
-    ))
+    )
+    if oversized:
+        with pytest.raises(identity.ComfyIdentityQualityError, match="larger"):
+            asyncio.run(request)
+        assert [path.name for path in record.reference_path.parent.glob("*.png")] == ["reference.png"]
+        return
+    result = asyncio.run(request)
     assert result.seed == 9
     assert starts == ["http://127.0.0.1:8188"]
-    assert result.path.read_bytes() == _png()
+    with Image.open(result.path) as generated:
+        assert generated.size == (1024, 1024)
+        assert generated.getpixel((900, 500)) == (0, 0, 0)
     assert result.path.parent == record.reference_path.parent
+    assert checked == [(template, result.path)]
     assert [call[1].rsplit("/", 1)[-1] for call in fake.calls[:4]] == [
         "image", "image", "image", "prompt",
     ]
