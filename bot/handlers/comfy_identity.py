@@ -1,6 +1,7 @@
 """Bot flow for fictional ComfyUI characters and reviewed scene photos."""
 from __future__ import annotations
 
+import asyncio
 from html import escape
 from pathlib import Path
 from time import time
@@ -20,6 +21,7 @@ from services.comfyui.identity import (
     ComfyIdentityError, ComfyIdentityModelMissingError, create_identity,
     generate_identity_photo, get_identity, list_identities,
 )
+from services.comfyui.person_mask import PersonMaskError, generate_person_mask
 
 
 router = Router()
@@ -94,6 +96,36 @@ def _prepare_template(image_path: Path, mask_path: Path) -> tuple[Path, Path]:
     return prepared_image, prepared_mask
 
 
+def _mask_preview(image_path: Path, mask_path: Path, output_path: Path) -> None:
+    """Show the replacement area in red over the original photo."""
+    with Image.open(image_path) as photo_file, Image.open(mask_path) as mask_file:
+        photo = ImageOps.exif_transpose(photo_file).convert("RGB")
+        mask = ImageOps.exif_transpose(mask_file).convert("L")
+        if photo.size != mask.size:
+            raise ValueError("person mask dimensions do not match the template")
+        marked = Image.composite(Image.new("RGB", photo.size, (255, 55, 55)), photo, mask)
+        preview = Image.blend(photo, marked, 0.48)
+        preview.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        preview.save(output_path, format="PNG")
+
+
+def _temp_file(raw: str) -> Path | None:
+    try:
+        path = Path(raw).resolve(strict=True)
+        if path.is_file() and path.is_relative_to(_TEMP_DIR.resolve()):
+            return path
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _clear_template_files(data: dict) -> None:
+    for key in ("template_path", "auto_mask_path", "mask_preview_path"):
+        path = _temp_file(data.get(key, ""))
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+
 @router.callback_query(F.data == "ai_comfy_identities")
 async def show_identities(callback: CallbackQuery, state: FSMContext) -> None:
     if not is_authorized_user(callback.from_user.id):
@@ -113,7 +145,7 @@ async def show_identities(callback: CallbackQuery, state: FSMContext) -> None:
         "🧑 <b>Вымышленные персонажи</b>\n\n"
         "Сначала создайте внешность, затем снимайте того же персонажа в новых сценах. "
         "Проверяйте лицо на каждом результате: генеративная модель может немного менять черты. "
-        "Для фото-шаблона понадобится маска человека (белым — заменить, чёрным — сохранить).",
+        "Для фото-шаблона бот предложит автоматическую маску человека с предварительным просмотром.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML",
     )
     await callback.answer()
@@ -196,7 +228,7 @@ async def receive_scene(message: Message, state: FSMContext) -> None:
     await state.update_data(scene_prompt=scene)
     await message.answer(
         "Выберите источник сцены. Фото-шаблон загружайте только если вправе его использовать; "
-        "человека на нём нужно полностью выделить маской для замены.",
+        "бот автоматически выделит человека и покажет область замены перед генерацией.",
         reply_markup=_buttons(
             ("🎨 Сцена по описанию", "ai_person_generate"),
             ("🖼 По фото-шаблону", "ai_person_template"),
@@ -261,8 +293,8 @@ async def start_template(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(PersonFlow.waiting_template)
     await callback.message.answer(
         "Пришлите фото-шаблон как изображение или JPEG/PNG-документ до 10 МБ. "
-        "Затем пришлите маску PNG <b>документом</b>: белым закрасьте всего человека, "
-        "чёрным оставьте фон. Размер маски должен совпадать с фото.",
+        "Я автоматически выделю человека и покажу маску для проверки. "
+        "Если граница окажется неточной, можно прислать свою маску PNG.",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -290,9 +322,68 @@ async def receive_template(message: Message, state: FSMContext) -> None:
         target.unlink(missing_ok=True)
         await message.answer("Не удалось загрузить фото-шаблон.")
         return
-    await state.update_data(template_path=str(target))
+    await state.update_data(template_path=str(target), auto_mask_path="", mask_preview_path="")
     await state.set_state(PersonFlow.waiting_mask)
-    await message.answer("Теперь пришлите маску PNG документом: белый человек, чёрный фон, те же размеры.")
+    status = await message.answer("⏳ Выделяю человека на фото. Первый запуск может занять немного больше времени.")
+    mask = _TEMP_DIR / f"{uuid4().hex}.png"
+    preview_path = _TEMP_DIR / f"{uuid4().hex}.png"
+    try:
+        await generate_person_mask(target, mask)
+        await asyncio.to_thread(_mask_preview, target, mask, preview_path)
+        await state.update_data(auto_mask_path=str(mask), mask_preview_path=str(preview_path))
+        await status.edit_text("Проверьте красную область: она будет заменена, остальное фото сохранится.")
+        await message.answer_photo(
+            FSInputFile(preview_path),
+            caption="Если волосы, руки или одежда выделены неверно, пришлите свою маску PNG документом.",
+            reply_markup=_buttons(
+                ("✅ Использовать маску", "ai_person_mask_accept"),
+                ("✏️ Загрузить свою", "ai_person_mask_manual"),
+            ),
+        )
+    except (PersonMaskError, OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
+        mask.unlink(missing_ok=True)
+        preview_path.unlink(missing_ok=True)
+        await status.edit_text(
+            "Автоматически выделить одного человека не удалось. Пришлите маску PNG документом: "
+            "белым — весь человек, чёрным — фон; размер должен совпадать с фото."
+        )
+
+
+@router.callback_query(F.data == "ai_person_mask_manual", PersonFlow.waiting_mask)
+async def choose_manual_mask(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await callback.message.answer(
+        "Пришлите маску PNG документом: белым закрасьте всего человека, чёрным оставьте фон. "
+        "Размер должен совпадать с фото."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ai_person_mask_accept", PersonFlow.waiting_mask)
+async def accept_auto_mask(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    data = await state.get_data()
+    template = _temp_file(data.get("template_path", ""))
+    mask = _temp_file(data.get("auto_mask_path", ""))
+    if template is None or mask is None:
+        await callback.answer("Фото или маска уже недоступны. Загрузите шаблон заново.", show_alert=True)
+        return
+    await callback.answer()
+    prepared: tuple[Path, Path] | None = None
+    try:
+        prepared = await asyncio.to_thread(_prepare_template, template, mask)
+        await _generate(callback.message, state, template=prepared[0], mask=prepared[1])
+    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
+        await callback.message.answer("Автоматическая маска некорректна. Пришлите свою маску PNG документом.")
+    finally:
+        _clear_template_files(data)
+        if prepared:
+            prepared[0].unlink(missing_ok=True)
+            prepared[1].unlink(missing_ok=True)
 
 
 @router.message(PersonFlow.waiting_mask)
@@ -305,20 +396,19 @@ async def receive_mask(message: Message, state: FSMContext) -> None:
         return
     target = _TEMP_DIR / f"{uuid4().hex}.png"
     data = await state.get_data()
-    template = Path(data.get("template_path", ""))
+    template = _temp_file(data.get("template_path", ""))
     prepared: tuple[Path, Path] | None = None
     try:
         await message.bot.download(source, destination=target)
-        if target.stat().st_size > _MAX_UPLOAD or not template.is_file():
+        if target.stat().st_size > _MAX_UPLOAD or template is None:
             raise ValueError("file missing or too large")
-        prepared = _prepare_template(template, target)
+        prepared = await asyncio.to_thread(_prepare_template, template, target)
         await _generate(message, state, template=prepared[0], mask=prepared[1])
     except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
         await message.answer("Фото и маска должны быть корректными изображениями одинакового размера (не меньше 512 пикселей).")
     finally:
         target.unlink(missing_ok=True)
-        if template.is_relative_to(_TEMP_DIR):
-            template.unlink(missing_ok=True)
+        _clear_template_files(data)
         if prepared:
             prepared[0].unlink(missing_ok=True)
             prepared[1].unlink(missing_ok=True)

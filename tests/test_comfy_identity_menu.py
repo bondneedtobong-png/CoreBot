@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 from PIL import Image, ImageDraw
@@ -45,6 +46,9 @@ class Message:
         self.status = Status()
         self.answers = []
         self.photos = []
+        self.photo = None
+        self.document = None
+        self.bot = None
 
     async def answer(self, text, **kwargs):
         self.answers.append((text, kwargs))
@@ -165,3 +169,72 @@ def test_empty_person_mask_is_rejected(tmp_path, monkeypatch):
         assert "person mask" in str(exc)
     else:
         raise AssertionError("empty mask must not reach ComfyUI")
+
+
+def test_template_auto_mask_is_reviewed_before_generation(tmp_path, monkeypatch):
+    monkeypatch.setattr(menu, "_TEMP_DIR", tmp_path)
+    monkeypatch.setattr(menu, "is_authorized_user", lambda uid: uid == 1)
+    source = tmp_path / "fixture.jpg"
+    Image.new("RGB", (1024, 1024), "blue").save(source)
+
+    async def download(_source, destination):
+        destination.write_bytes(source.read_bytes())
+
+    async def detect(_source, output):
+        marking = Image.new("L", (1024, 1024), 0)
+        ImageDraw.Draw(marking).rectangle((300, 100, 700, 900), fill=255)
+        marking.save(output)
+
+    generated = []
+
+    async def generate(_message, _state, *, template, mask):
+        generated.append((template, mask))
+        assert template.is_file() and mask.is_file()
+
+    monkeypatch.setattr(menu, "generate_person_mask", detect)
+    monkeypatch.setattr(menu, "_generate", generate)
+    state = State()
+    state.data = {"identity_id": "a" * 32, "scene_prompt": "cafe scene"}
+    message = Message()
+    message.photo = [SimpleNamespace(file_size=source.stat().st_size)]
+    message.bot = SimpleNamespace(download=download)
+
+    asyncio.run(menu.receive_template(message, state))
+    assert state.current == menu.PersonFlow.waiting_mask
+    assert len(message.photos) == 1
+    assert "ai_person_mask_accept" in str(message.photos[0][1]["reply_markup"])
+    assert generated == []
+    assert state.data["auto_mask_path"]
+    assert state.data["mask_preview_path"]
+
+    callback = Callback("ai_person_mask_accept")
+    asyncio.run(menu.accept_auto_mask(callback, state))
+    assert len(generated) == 1
+    assert not (tmp_path / Path(state.data["template_path"]).name).exists()
+    assert not Path(state.data["auto_mask_path"]).exists()
+
+
+def test_auto_detection_failure_offers_manual_mask(tmp_path, monkeypatch):
+    monkeypatch.setattr(menu, "_TEMP_DIR", tmp_path)
+    monkeypatch.setattr(menu, "is_authorized_user", lambda uid: uid == 1)
+    source = tmp_path / "fixture.jpg"
+    Image.new("RGB", (1024, 1024), "blue").save(source)
+
+    async def download(_source, destination):
+        destination.write_bytes(source.read_bytes())
+
+    async def detect(_source, _output):
+        raise menu.PersonMaskError("no person")
+
+    monkeypatch.setattr(menu, "generate_person_mask", detect)
+    state = State()
+    state.data = {"identity_id": "a" * 32, "scene_prompt": "cafe scene"}
+    message = Message()
+    message.photo = [SimpleNamespace(file_size=source.stat().st_size)]
+    message.bot = SimpleNamespace(download=download)
+
+    asyncio.run(menu.receive_template(message, state))
+    assert state.current == menu.PersonFlow.waiting_mask
+    assert not message.photos
+    assert "Пришлите маску PNG" in message.status.edits[-1]
+    assert Path(state.data["template_path"]).exists()
