@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -278,9 +279,22 @@ def test_update_restart_order_cp_then_bot():
 BASH_EXE = Path(r"C:\Windows\system32\bash.exe")
 
 
-def _need_shell():
+@lru_cache(maxsize=1)
+def _wsl_available() -> bool:
     if not BASH_EXE.exists():
-        pytest.skip("bash.exe unavailable")
+        return False
+    try:
+        probe = subprocess.run(
+            [str(BASH_EXE), "-lc", "true"], capture_output=True, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
+def _need_shell():
+    if not _wsl_available():
+        pytest.skip("WSL bash distribution unavailable")
     if shutil.which("git") is None:
         pytest.skip("git unavailable")
 

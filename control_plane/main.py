@@ -155,6 +155,11 @@ class NoStoreStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope: Scope):
         response = await super().get_response(path, scope)
         response.headers["Cache-Control"] = "no-store"
+        content_type = response.headers.get("Content-Type", "")
+        if content_type.startswith(
+            ("text/html", "text/css", "application/javascript", "text/javascript")
+        ) and "charset=" not in content_type.lower():
+            response.headers["Content-Type"] = f"{content_type}; charset=utf-8"
         return response
 
 

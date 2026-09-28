@@ -22,6 +22,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -310,9 +311,22 @@ WRITER_PY = (
 )
 
 
-def _need_shell():
+@lru_cache(maxsize=1)
+def _wsl_available() -> bool:
     if not BASH_EXE.exists():
-        pytest.skip("bash.exe unavailable")
+        return False
+    try:
+        probe = subprocess.run(
+            [str(BASH_EXE), "-lc", "true"], capture_output=True, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
+def _need_shell():
+    if not _wsl_available():
+        pytest.skip("WSL bash distribution unavailable")
 
 
 def _to_wsl(path: Path) -> str:
