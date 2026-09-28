@@ -484,19 +484,25 @@ def test_session_check_validates_proxy_and_cleans_temp(tmp_path, monkeypatch):
         seen.append(session_path)
         return FakeClient(session_path, proxy)
 
-    run = asyncio.run(run_check_session(
-        data, proxies=[_check_proxy()], client_factory=factory, tmp_parent=tmp_path
-    ))
+    run = asyncio.run(
+        run_check_session(
+            data, proxies=[_check_proxy()], client_factory=factory, tmp_parent=tmp_path
+        )
+    )
     assert run.total == run.ok_count == 1
     assert run.items[0].status == "ok"
     assert run.items[0].relpath == "uploaded.session"
     assert len(seen) == 1 and not Path(seen[0]).exists()
     assert not list(tmp_path.glob("tdata-check-*"))
 
-    too_large = asyncio.run(run_check_session(
-        data + b"x", proxies=[_check_proxy()], client_factory=factory,
-        tmp_parent=tmp_path,
-    ))
+    too_large = asyncio.run(
+        run_check_session(
+            data + b"x",
+            proxies=[_check_proxy()],
+            client_factory=factory,
+            tmp_parent=tmp_path,
+        )
+    )
     assert too_large.items[0].error_code == "session_too_large"
     assert len(seen) == 1
     assert not list(tmp_path.glob("tdata-check-*"))
@@ -511,25 +517,33 @@ def test_session_check_rejects_invalid_schema_before_client_or_temp(tmp_path):
         raise AssertionError("must not create client")
 
     for invalid in (b"not sqlite", b"SQLite format 3\x00broken", b""):
-        run = asyncio.run(run_check_session(
-            invalid, proxies=[_check_proxy()], client_factory=factory,
-            tmp_parent=tmp_path,
-        ))
+        run = asyncio.run(
+            run_check_session(
+                invalid,
+                proxies=[_check_proxy()],
+                client_factory=factory,
+                tmp_parent=tmp_path,
+            )
+        )
         assert run.items[0].status == "structure_invalid"
     missing = tmp_path / "missing.session"
     conn = sqlite3.connect(missing)
     conn.execute("CREATE TABLE unrelated (id INTEGER)")
     conn.close()
-    run = asyncio.run(run_check_session(
-        missing.read_bytes(), proxies=[_check_proxy()], client_factory=factory,
-        tmp_parent=tmp_path,
-    ))
+    run = asyncio.run(
+        run_check_session(
+            missing.read_bytes(),
+            proxies=[_check_proxy()],
+            client_factory=factory,
+            tmp_parent=tmp_path,
+        )
+    )
     assert run.items[0].error_code == "invalid_session"
     assert calls == [] and not list(tmp_path.glob("tdata-check-*"))
 
-    no_pool = asyncio.run(run_check_session(
-        data, proxies=[], client_factory=factory, tmp_parent=tmp_path
-    ))
+    no_pool = asyncio.run(
+        run_check_session(data, proxies=[], client_factory=factory, tmp_parent=tmp_path)
+    )
     assert no_pool.items[0].status == "proxy_required"
     assert calls == [] and not list(tmp_path.glob("tdata-check-*"))
 
@@ -540,11 +554,14 @@ def test_session_auth_failure_and_exception_do_not_leak_secrets(tmp_path):
     async def unauthorized(client):
         return False
 
-    run = asyncio.run(run_check_session(
-        data, proxies=[_check_proxy()],
-        client_factory=_factory(hooks={"on_auth": unauthorized}),
-        tmp_parent=tmp_path,
-    ))
+    run = asyncio.run(
+        run_check_session(
+            data,
+            proxies=[_check_proxy()],
+            client_factory=_factory(hooks={"on_auth": unauthorized}),
+            tmp_parent=tmp_path,
+        )
+    )
     assert run.items[0].status == "unauthorized"
 
     async def leaky(client):
@@ -552,11 +569,14 @@ def test_session_auth_failure_and_exception_do_not_leak_secrets(tmp_path):
             f"auth_key={bytes(range(256)).hex()} sekret-pw {client.session_path}"
         )
 
-    run = asyncio.run(run_check_session(
-        data, proxies=[_check_proxy()],
-        client_factory=_factory(hooks={"on_connect": leaky}),
-        tmp_parent=tmp_path,
-    ))
+    run = asyncio.run(
+        run_check_session(
+            data,
+            proxies=[_check_proxy()],
+            client_factory=_factory(hooks={"on_connect": leaky}),
+            tmp_parent=tmp_path,
+        )
+    )
     assert run.items[0].status == "unknown"
     payload = str(run.to_dict())
     assert "sekret-pw" not in payload
@@ -790,35 +810,46 @@ def test_session_api_history_and_pool_scope(tmp_path, monkeypatch):
         assert uploaded == data and proxies[0].host == "3.3.3.3"
         calls.append(run_id)
         return await run_check_session(
-            uploaded, proxies=proxies, run_id=run_id,
-            client_factory=_factory(), tmp_parent=tmp_path,
+            uploaded,
+            proxies=proxies,
+            run_id=run_id,
+            client_factory=_factory(),
+            tmp_parent=tmp_path,
         )
 
     monkeypatch.setattr(routes, "run_check_session", fake_run)
     for gid in (runtime.id, 99999):
         try:
-            asyncio.run(routes.execute_session_check_run(
-                db, group_id=gid, data=data, requested_by="operator-a"
-            ))
+            asyncio.run(
+                routes.execute_session_check_run(
+                    db, group_id=gid, data=data, requested_by="operator-a"
+                )
+            )
             raise AssertionError("must reject pool")
         except HTTPException as exc:
             assert exc.status_code == 400
     assert calls == []
-    payload = asyncio.run(routes.execute_session_check_run(
-        db, group_id=check.id, data=data, requested_by="operator-a"
-    ))
+    payload = asyncio.run(
+        routes.execute_session_check_run(
+            db, group_id=check.id, data=data, requested_by="operator-a"
+        )
+    )
     assert payload["items"][0]["status"] == "ok"
     assert db.execute(select(func.count(Account.id))).scalar() == 0
     routes.clear_check_runs()
-    loaded = asyncio.run(routes.get_check_result(
-        payload["run_id"], db, SimpleNamespace(username="operator-a")
-    ))
+    loaded = asyncio.run(
+        routes.get_check_result(
+            payload["run_id"], db, SimpleNamespace(username="operator-a")
+        )
+    )
     assert loaded["items"][0]["status"] == "ok"
     assert loaded["check_group_id"] == check.id
     try:
-        asyncio.run(routes.get_check_result(
-            payload["run_id"], db, SimpleNamespace(username="operator-b")
-        ))
+        asyncio.run(
+            routes.get_check_result(
+                payload["run_id"], db, SimpleNamespace(username="operator-b")
+            )
+        )
         raise AssertionError("must scope history")
     except HTTPException as exc:
         assert exc.status_code == 404
@@ -843,10 +874,14 @@ def test_upload_routes_bound_reads_before_check(monkeypatch):
     for handler in (routes.check_session, routes.check_tdata):
         file = UploadFile(file=BoundedFile(b"123456789"), filename="upload.session")
         try:
-            asyncio.run(handler(
-                file, group_id=1, db=None,
-                user=SimpleNamespace(username="operator"),
-            ))
+            asyncio.run(
+                handler(
+                    file,
+                    group_id=1,
+                    db=None,
+                    user=SimpleNamespace(username="operator"),
+                )
+            )
             raise AssertionError("oversize upload must reject")
         except HTTPException as exc:
             assert exc.status_code == 413
@@ -862,7 +897,9 @@ def test_check_history_survives_cache_clear_and_scopes_operator(tmp_path, monkey
     db.add(group)
     db.commit()
     db.refresh(group)
-    db.add(Proxy(name="secret-proxy-label", host="3.3.3.3", port=1080, group_id=group.id))
+    db.add(
+        Proxy(name="secret-proxy-label", host="3.3.3.3", port=1080, group_id=group.id)
+    )
     db.commit()
 
     counter = iter((1, 2))
@@ -874,42 +911,52 @@ def test_check_history_survives_cache_clear_and_scopes_operator(tmp_path, monkey
             created_at=f"2026-01-0{number}T00:00:00",
             total=1,
             ok_count=1,
-            items=[TDataCheckItem(
-                item_id="item-01", relpath="secret/archive/tdata", status="ok",
-                username="alice", phone="123", proxy_label="secret-proxy-label",
-                error_detail="secret exception text /tmp/session.session",
-            )],
+            items=[
+                TDataCheckItem(
+                    item_id="item-01",
+                    relpath="secret/archive/tdata",
+                    status="ok",
+                    username="alice",
+                    phone="123",
+                    proxy_label="secret-proxy-label",
+                    error_detail="secret exception text /tmp/session.session",
+                )
+            ],
         )
 
     monkeypatch.setattr(routes, "run_check_archive", fake_run)
     for _ in range(2):
-        asyncio.run(routes.execute_check_run(
-            db, group_id=group.id, data=b"zip", requested_by="operator-a"
-        ))
+        asyncio.run(
+            routes.execute_check_run(
+                db, group_id=group.id, data=b"zip", requested_by="operator-a"
+            )
+        )
     routes.clear_check_runs()
     db.close()
     reopened_engine = create_engine(f"sqlite:///{tmp_path}/bot.db", future=True)
     db = sessionmaker(bind=reopened_engine, future=True)()
-    result = asyncio.run(routes.get_check_result(
-        "history-1", db, SimpleNamespace(username="operator-a")
-    ))
+    result = asyncio.run(
+        routes.get_check_result("history-1", db, SimpleNamespace(username="operator-a"))
+    )
     assert result["items"][0]["username"] == "alice"
     assert result["items"][0]["phone"] == "123"
     assert "secret" not in str(result)
-    listing = asyncio.run(routes.get_check_history(
-        10, db, SimpleNamespace(username="operator-a")
-    ))
+    listing = asyncio.run(
+        routes.get_check_history(10, db, SimpleNamespace(username="operator-a"))
+    )
     assert [r["run_id"] for r in listing["runs"]] == ["history-2", "history-1"]
     assert "items" not in listing["runs"][0]
-    assert asyncio.run(routes.get_check_history(
-        10, db, SimpleNamespace(username="operator-b")
-    )) == {"runs": []}
+    assert asyncio.run(
+        routes.get_check_history(10, db, SimpleNamespace(username="operator-b"))
+    ) == {"runs": []}
     from fastapi import HTTPException
 
     try:
-        asyncio.run(routes.get_check_result(
-            "history-1", db, SimpleNamespace(username="operator-b")
-        ))
+        asyncio.run(
+            routes.get_check_result(
+                "history-1", db, SimpleNamespace(username="operator-b")
+            )
+        )
         raise AssertionError("must be scoped")
     except HTTPException as exc:
         assert exc.status_code == 404
@@ -917,7 +964,9 @@ def test_check_history_survives_cache_clear_and_scopes_operator(tmp_path, monkey
     reopened_engine.dispose()
 
 
-def test_check_history_records_failed_and_interrupted_without_exception_text(tmp_path, monkeypatch):
+def test_check_history_records_failed_and_interrupted_without_exception_text(
+    tmp_path, monkeypatch
+):
     import control_plane.business.tdata_check_routes as routes
     from services.tdata_check.models import TDataCheckRun
 
@@ -936,9 +985,11 @@ def test_check_history_records_failed_and_interrupted_without_exception_text(tmp
     from fastapi import HTTPException
 
     try:
-        asyncio.run(routes.execute_check_run(
-            db, group_id=group.id, data=b"zip", requested_by="operator"
-        ))
+        asyncio.run(
+            routes.execute_check_run(
+                db, group_id=group.id, data=b"zip", requested_by="operator"
+            )
+        )
         raise AssertionError("must fail")
     except HTTPException as exc:
         assert exc.status_code == 500 and exc.detail == "check_failed"
@@ -948,36 +999,43 @@ def test_check_history_records_failed_and_interrupted_without_exception_text(tmp
 
     monkeypatch.setattr(routes, "run_check_archive", interrupted)
     try:
-        asyncio.run(routes.execute_check_run(
-            db, group_id=group.id, data=b"zip", requested_by="operator"
-        ))
+        asyncio.run(
+            routes.execute_check_run(
+                db, group_id=group.id, data=b"zip", requested_by="operator"
+            )
+        )
         raise AssertionError("must cancel")
     except asyncio.CancelledError:
         pass
-    runs = asyncio.run(routes.get_check_history(
-        10, db, SimpleNamespace(username="operator")
-    ))["runs"]
+    runs = asyncio.run(
+        routes.get_check_history(10, db, SimpleNamespace(username="operator"))
+    )["runs"]
     assert {r["status"] for r in runs} == {"failed", "interrupted"}
     assert "secret" not in str(runs)
 
     async def invalid_archive(data, *, proxies):
         return TDataCheckRun(
-            run_id="invalid-archive", created_at="2026-01-01T00:00:00",
+            run_id="invalid-archive",
+            created_at="2026-01-01T00:00:00",
             error_code="archive_invalid:path_traversal",
             error_detail="secret/archive/path",
         )
 
     monkeypatch.setattr(routes, "run_check_archive", invalid_archive)
     try:
-        asyncio.run(routes.execute_check_run(
-            db, group_id=group.id, data=b"zip", requested_by="operator"
-        ))
+        asyncio.run(
+            routes.execute_check_run(
+                db, group_id=group.id, data=b"zip", requested_by="operator"
+            )
+        )
         raise AssertionError("must reject archive")
     except HTTPException as exc:
         assert exc.status_code == 400
-    archive = asyncio.run(routes.get_check_result(
-        "invalid-archive", db, SimpleNamespace(username="operator")
-    ))
+    archive = asyncio.run(
+        routes.get_check_result(
+            "invalid-archive", db, SimpleNamespace(username="operator")
+        )
+    )
     assert archive["status"] == "failed"
     assert archive["error_code"] == "archive_invalid:path_traversal"
     assert "secret" not in str(archive)
@@ -992,7 +1050,9 @@ def test_check_history_migration_idempotent(tmp_path):
         async with engine.begin() as conn:
             await migrate_tdata_check_history(conn)
             await migrate_tdata_check_history(conn)
-            columns = await conn.exec_driver_sql("PRAGMA table_info(tdata_check_history)")
+            columns = await conn.exec_driver_sql(
+                "PRAGMA table_info(tdata_check_history)"
+            )
             assert "items_json" in {row[1] for row in columns.fetchall()}
         await engine.dispose()
 
@@ -1023,7 +1083,9 @@ def test_import_still_works_after_check_feature(tmp_path, monkeypatch):
 
     created: list[dict] = []
     monkeypatch.setattr(tr, "convert_tdata_to_session", fake_convert)
-    monkeypatch.setattr(tr, "_select_import_proxy", lambda db, group_id: type("Proxy", (), {"id": 1})())
+    monkeypatch.setattr(
+        tr, "_select_import_proxy", lambda db, group_id: type("Proxy", (), {"id": 1})()
+    )
     monkeypatch.setattr(
         tr,
         "_create_account_from_tdata",
@@ -1035,7 +1097,11 @@ def test_import_still_works_after_check_feature(tmp_path, monkeypatch):
 
     result = asyncio.run(
         tr.run_tdata_import(
-            _zip(_tdata_entries("one/tdata")), FakeDB(), "admin", tmp_path / "sessions", 1
+            _zip(_tdata_entries("one/tdata")),
+            FakeDB(),
+            "admin",
+            tmp_path / "sessions",
+            1,
         )
     )
     assert result["ok"] is True

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 import warnings
 from datetime import datetime
 
@@ -57,14 +58,15 @@ def test_helpers_emit_no_deprecation_warning():
 
 
 def test_legacy_utcnow_emits_deprecation_warning():
-    """Фиксирует исходную проблему: datetime.utcnow() deprecated в 3.14."""
+    """datetime.utcnow() emits a deprecation warning from Python 3.12."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", DeprecationWarning)
         datetime.utcnow()
-    assert any(
+    warned = any(
         "utcnow" in str(w.message).lower() or "deprecat" in str(w.message).lower()
         for w in caught
-    ), "expected DeprecationWarning from datetime.utcnow()"
+    )
+    assert warned == (sys.version_info >= (3, 12))
 
 
 def test_no_utcnow_in_own_code():

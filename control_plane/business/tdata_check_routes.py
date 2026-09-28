@@ -114,22 +114,30 @@ async def execute_check_run(
     try:
         run = await run_check_archive(data, proxies=check_proxies)
     except asyncio.CancelledError:
-        save_check_history(db, {
-            "run_id": run_id or uuid4().hex[:12],
-            "requested_by": requested_by,
-            "check_group_id": int(group_id),
-            "created_at": utcnow_naive().isoformat(),
-            "error_code": "check_interrupted",
-        }, status="interrupted")
+        save_check_history(
+            db,
+            {
+                "run_id": run_id or uuid4().hex[:12],
+                "requested_by": requested_by,
+                "check_group_id": int(group_id),
+                "created_at": utcnow_naive().isoformat(),
+                "error_code": "check_interrupted",
+            },
+            status="interrupted",
+        )
         raise
     except Exception:
-        save_check_history(db, {
-            "run_id": run_id or uuid4().hex[:12],
-            "requested_by": requested_by,
-            "check_group_id": int(group_id),
-            "created_at": utcnow_naive().isoformat(),
-            "error_code": "check_failed",
-        }, status="failed")
+        save_check_history(
+            db,
+            {
+                "run_id": run_id or uuid4().hex[:12],
+                "requested_by": requested_by,
+                "check_group_id": int(group_id),
+                "created_at": utcnow_naive().isoformat(),
+                "error_code": "check_failed",
+            },
+            status="failed",
+        )
         raise HTTPException(status_code=500, detail="check_failed") from None
     payload = run.to_dict()
     payload["check_group_id"] = int(group_id)
@@ -179,20 +187,30 @@ async def execute_session_check_run(
     try:
         run = await run_check_session(data, proxies=check_proxies, run_id=rid)
     except asyncio.CancelledError:
-        save_check_history(db, {
-            "run_id": rid, "requested_by": requested_by,
-            "check_group_id": int(group_id),
-            "created_at": utcnow_naive().isoformat(),
-            "error_code": "check_interrupted",
-        }, status="interrupted")
+        save_check_history(
+            db,
+            {
+                "run_id": rid,
+                "requested_by": requested_by,
+                "check_group_id": int(group_id),
+                "created_at": utcnow_naive().isoformat(),
+                "error_code": "check_interrupted",
+            },
+            status="interrupted",
+        )
         raise
     except Exception:
-        save_check_history(db, {
-            "run_id": rid, "requested_by": requested_by,
-            "check_group_id": int(group_id),
-            "created_at": utcnow_naive().isoformat(),
-            "error_code": "check_failed",
-        }, status="failed")
+        save_check_history(
+            db,
+            {
+                "run_id": rid,
+                "requested_by": requested_by,
+                "check_group_id": int(group_id),
+                "created_at": utcnow_naive().isoformat(),
+                "error_code": "check_failed",
+            },
+            status="failed",
+        )
         raise HTTPException(status_code=500, detail="check_failed") from None
     payload = run.to_dict()
     payload["check_group_id"] = int(group_id)

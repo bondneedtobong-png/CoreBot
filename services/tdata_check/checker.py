@@ -279,9 +279,7 @@ def _valid_telethon_session(data: bytes) -> bool:
             "SELECT type FROM sqlite_master WHERE name='sessions'"
         ).fetchone() != ("table",):
             return False
-        columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(sessions)")
-        }
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
         if not {"dc_id", "server_address", "port", "auth_key", "takeout_id"} <= columns:
             return False
         row = conn.execute(
@@ -319,19 +317,31 @@ async def run_check_session(
 
     def failed(status: str, code: str, detail: str) -> TDataCheckRun:
         return TDataCheckRun(
-            run_id=rid, created_at=created, total=1, failed_count=1,
-            items=[TDataCheckItem(
-                item_id="item-01", relpath="uploaded.session", status=status,
-                error_code=code, error_detail=detail,
-            )],
+            run_id=rid,
+            created_at=created,
+            total=1,
+            failed_count=1,
+            items=[
+                TDataCheckItem(
+                    item_id="item-01",
+                    relpath="uploaded.session",
+                    status=status,
+                    error_code=code,
+                    error_detail=detail,
+                )
+            ],
         )
 
     if len(data) > check_limits.MAX_SESSION_BYTES:
-        return failed("structure_invalid", "session_too_large", "session exceeds size limit")
+        return failed(
+            "structure_invalid", "session_too_large", "session exceeds size limit"
+        )
     if not data:
         return failed("structure_invalid", "session_empty", "session is empty")
     if not _valid_telethon_session(data):
-        return failed("structure_invalid", "invalid_session", "invalid Telethon session")
+        return failed(
+            "structure_invalid", "invalid_session", "invalid Telethon session"
+        )
     if not proxies:
         return failed("proxy_required", "no_check_proxy", "TDATA_CHECK pool is empty")
 
@@ -348,51 +358,79 @@ async def run_check_session(
     work_dir: Optional[Path] = None
     try:
         # The directory is private and independent of production SESSIONS_DIR.
-        work_dir = Path(tempfile.mkdtemp(
-            prefix=check_limits.TMP_PREFIX,
-            dir=str(tmp_parent) if tmp_parent else None,
-        ))
+        work_dir = Path(
+            tempfile.mkdtemp(
+                prefix=check_limits.TMP_PREFIX,
+                dir=str(tmp_parent) if tmp_parent else None,
+            )
+        )
         session_path = work_dir / "check.session"
         with session_path.open("xb") as session_file:
             session_file.write(data)
         assert proxy_dict, "direct connect forbidden"
-        client = (client_factory or default_client_factory)(str(session_path), proxy_dict)
+        client = (client_factory or default_client_factory)(
+            str(session_path), proxy_dict
+        )
         await asyncio.wait_for(client.connect(), timeout=timeout)
-        authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=timeout)
+        authorized = await asyncio.wait_for(
+            client.is_user_authorized(), timeout=timeout
+        )
         if not authorized:
             item = TDataCheckItem(
-                item_id="item-01", relpath="uploaded.session", status="unauthorized",
-                proxy_id=int(proxy.id), proxy_label=proxy.label,
-                error_code="session_unauthorized", error_detail="session is not authorized",
+                item_id="item-01",
+                relpath="uploaded.session",
+                status="unauthorized",
+                proxy_id=int(proxy.id),
+                proxy_label=proxy.label,
+                error_code="session_unauthorized",
+                error_detail="session is not authorized",
             )
         else:
             me = await asyncio.wait_for(client.get_me(), timeout=timeout)
             if me is None:
                 item = TDataCheckItem(
-                    item_id="item-01", relpath="uploaded.session", status="unauthorized",
-                    proxy_id=int(proxy.id), proxy_label=proxy.label,
-                    error_code="empty_profile", error_detail="empty Telegram profile",
+                    item_id="item-01",
+                    relpath="uploaded.session",
+                    status="unauthorized",
+                    proxy_id=int(proxy.id),
+                    proxy_label=proxy.label,
+                    error_code="empty_profile",
+                    error_detail="empty Telegram profile",
                 )
             else:
                 phone = getattr(me, "phone", None) or None
                 item = TDataCheckItem(
-                    item_id="item-01", relpath="uploaded.session", status="ok",
-                    phone=phone, username=getattr(me, "username", None) or None,
+                    item_id="item-01",
+                    relpath="uploaded.session",
+                    status="ok",
+                    phone=phone,
+                    username=getattr(me, "username", None) or None,
                     first_name=getattr(me, "first_name", None) or None,
                     last_name=getattr(me, "last_name", None) or None,
-                    country=guess_country(phone), user_id=getattr(me, "id", None),
-                    proxy_id=int(proxy.id), proxy_label=proxy.label,
+                    country=guess_country(phone),
+                    user_id=getattr(me, "id", None),
+                    proxy_id=int(proxy.id),
+                    proxy_label=proxy.label,
                 )
     except Exception as exc:
         status, code, detail, retry_after = map_exception(
             exc, tmp_dir=work_dir, secrets=_pool_secrets(proxies)
         )
         if code in {"rpc_error", "proxy_connect_error"}:
-            detail = "session check failed" if code == "rpc_error" else "proxy connection failed"
+            detail = (
+                "session check failed"
+                if code == "rpc_error"
+                else "proxy connection failed"
+            )
         item = TDataCheckItem(
-            item_id="item-01", relpath="uploaded.session", status=status,
-            proxy_id=int(proxy.id), proxy_label=proxy.label,
-            error_code=code, error_detail=detail, retry_after=retry_after,
+            item_id="item-01",
+            relpath="uploaded.session",
+            status=status,
+            proxy_id=int(proxy.id),
+            proxy_label=proxy.label,
+            error_code=code,
+            error_detail=detail,
+            retry_after=retry_after,
         )
     finally:
         try:
@@ -410,8 +448,11 @@ async def run_check_session(
                             raise RuntimeError("session temp cleanup failed") from None
                         time.sleep(0.05)
     return TDataCheckRun(
-        run_id=rid, created_at=created, total=1,
-        ok_count=int(item.status == "ok"), failed_count=int(item.status != "ok"),
+        run_id=rid,
+        created_at=created,
+        total=1,
+        ok_count=int(item.status == "ok"),
+        failed_count=int(item.status != "ok"),
         items=[item],
     )
 

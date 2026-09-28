@@ -16,12 +16,12 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent.parent
 
 # Telegram API
-API_ID = int(os.getenv("API_ID", "0"))
+API_ID = int((os.getenv("API_ID") or "0").strip() or "0")
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 # Владелец бота
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+OWNER_ID = int((os.getenv("OWNER_ID") or "0").strip() or "0")
 _extra_owner_ids = os.getenv("BOT_ADDITIONAL_OWNER_IDS", "").strip()
 try:
     ADDITIONAL_OWNER_IDS = frozenset(

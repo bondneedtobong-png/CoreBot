@@ -268,6 +268,12 @@ def test_duplicate_tdata_import_is_idempotent_without_http(tmp_path):
             assert int(second) == int(first)
             count = db.query(Account).filter(Account.session_name == "sess_dup").count()
             assert count == 1
-            assert db.query(Account).filter(Account.session_name == "sess_dup").one().proxy_id == 1
+            assert (
+                db.query(Account)
+                .filter(Account.session_name == "sess_dup")
+                .one()
+                .proxy_id
+                == 1
+            )
     finally:
         engine.dispose()
