@@ -13,7 +13,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.config import OWNER_ID, FILES_DIR
+from bot.config import is_authorized_user
+from bot.config import FILES_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.handlers.database.sheet_import_common import parse_usernames_from_txt
 from bot.keyboards.database_menu import kb_database_sheets
@@ -45,7 +46,7 @@ def _kb_preview() -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "db_sheet_212")
 async def cb_db_sheet_212(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -65,7 +66,7 @@ async def cb_db_sheet_212(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_db_sheet212")
 async def cb_cancel_db_sheet212(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -79,7 +80,7 @@ async def cb_cancel_db_sheet212(callback: CallbackQuery, state: FSMContext):
 
 @router.message(Sheet212Flow.waiting_file, F.document)
 async def sheet212_got_file(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     document = message.document
     if not document.file_name.lower().endswith(".txt"):
@@ -129,7 +130,7 @@ async def sheet212_got_file(message: Message, state: FSMContext):
 
 @router.callback_query(StateFilter(Sheet212Flow.preview), F.data == "sheet212_cancel")
 async def sheet212_cancel(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     data = await state.get_data()
@@ -149,7 +150,7 @@ async def sheet212_cancel(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(Sheet212Flow.preview), F.data == "sheet212_apply")
 async def sheet212_apply(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     data = await state.get_data()

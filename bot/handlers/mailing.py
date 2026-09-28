@@ -3,6 +3,7 @@
 Новая система: создание, список, настройки по модулям, запуск по клику.
 """
 import html
+import hashlib
 import io
 import json
 import re
@@ -13,11 +14,12 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy import update
+from sqlalchemy import insert, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from bot.config import is_authorized_user
 from bot.config import (
     MAILING_BASE_UTC_OFFSET,
-    OWNER_ID,
     mailing_timezone_label,
 )
 from bot.keyboards.main import (
@@ -38,7 +40,8 @@ from bot.keyboards.main import (
 )
 from database.session import session_scope
 from bot.handlers.database.sheet_import_common import parse_usernames_from_txt
-from database.models import Mailing, MailingStatus
+from database.models import BotCommand, Mailing, MailingRun, MailingRunRecipient, MailingStatus
+from database.sqlite_pragmas import commit_with_busy_retry, execute_with_busy_retry
 from database.repositories import (
     ClientRepository,
     GroupRepository,
@@ -48,7 +51,6 @@ from database.repositories import (
     MailingTestRecipientRepository,
 )
 from services.neurochat.stats_service import count_actions_by_mailing
-from utils.background_tasks import background_tasks
 from utils.logger import log
 
 router = Router()
@@ -225,12 +227,16 @@ async def _render_mailing_screen(callback: CallbackQuery, mailing_id: int) -> No
             account_stats = [s for s in account_stats if s[0] in in_group]
             hidden = before - len(account_stats)
         new_clients_count = await ClientRepository.count_new(session)
+        queued_run = await session.scalar(select(MailingRun).where(
+            MailingRun.mailing_id == mailing_id, MailingRun.status == "queued",
+        ).limit(1))
 
-    show_stop = (
+    sending_here = (
         mailing.status == MailingStatus.RUNNING
         and worker_manager.is_running
         and worker_manager.current_mailing_id == mailing_id
     )
+    show_stop = sending_here or queued_run is not None
     show_neuro_stop = _mailing_show_neuro_stop(mailing, show_stop)
     text = _format_mailing_detail_text(
         mailing,
@@ -238,8 +244,10 @@ async def _render_mailing_screen(callback: CallbackQuery, mailing_id: int) -> No
         neuro_actions,
         accounts_hidden_from_stats=hidden,
         new_clients_count=new_clients_count,
-        mailing_is_running_here=show_stop,
+        mailing_is_running_here=sending_here,
     )
+    if queued_run is not None:
+        text += f"\n⏳ Запуск #{queued_run.id} в очереди: {queued_run.audience_count} получателей."
     kb = get_mailing_view_keyboard(
         mailing, show_stop=show_stop, show_neuro_stop=show_neuro_stop
     )
@@ -314,7 +322,7 @@ def mailing_has_launchable_text(mailing) -> bool:
 @router.callback_query(F.data == "menu_mailing")
 async def cb_mailing_menu(callback: CallbackQuery, state: FSMContext):
     """Главное меню раздела Рассылка."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -331,12 +339,113 @@ async def cb_mailing_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+def _mailing_manage_keyboard(mailings: list[Mailing], default_on: bool, *, page: int = 0) -> InlineKeyboardMarkup:
+    total_pages = max(1, (len(mailings) + 4) // 5)
+    page = max(0, min(page, total_pages - 1))
+    rows = [
+        [InlineKeyboardButton(
+            text=f"{'✅' if default_on else '❌'} Нейрочат по умолчанию",
+            callback_data="mailing_manage_neuro_default",
+        )],
+        [InlineKeyboardButton(text="🔁 Включить/выключить всем", callback_data="mailing_manage_neuro_all")],
+    ]
+    for mailing in mailings[page * 5:(page + 1) * 5]:
+        rows.append([InlineKeyboardButton(
+            text=f"{'✅' if mailing.neurochat_enabled else '❌'} {(mailing.name or f'#{mailing.id}')[:45]}",
+            callback_data=f"mailing_manage_neuro_toggle_{mailing.id}_{page}",
+        )])
+    if total_pages > 1:
+        nav = []
+        if page:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"mailing_manage_p_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="mailing_manage_page_info"))
+        if page + 1 < total_pages:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"mailing_manage_p_{page + 1}"))
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ Рассылки", callback_data="menu_mailing")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_mailing_manage(callback: CallbackQuery, *, page: int = 0) -> None:
+    async with session_scope() as session:
+        mailings = await MailingRepository.get_all(session)
+        default_on = await InstanceSettingsRepository.get_mailing_neurochat_default(session)
+    await callback.message.edit_text(
+        "⚙️ <b>Управление рассылками</b>\n\n"
+        "Переключатель по умолчанию применяется к новым рассылкам. Ниже можно переключить существующие. "
+        "Для ответов нейрочата также требуется включённый глобальный режим в разделе ИИ.",
+        reply_markup=_mailing_manage_keyboard(mailings, default_on, page=page),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing_manage")
+async def cb_mailing_manage(callback: CallbackQuery):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await _render_mailing_manage(callback)
+
+
+@router.callback_query(F.data.startswith("mailing_manage_p_"))
+async def cb_mailing_manage_page(callback: CallbackQuery):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await _render_mailing_manage(callback, page=int(callback.data.rsplit("_", 1)[-1]))
+
+
+@router.callback_query(F.data == "mailing_manage_page_info")
+async def cb_mailing_manage_page_info(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(F.data == "mailing_manage_neuro_default")
+async def cb_mailing_manage_neuro_default(callback: CallbackQuery):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    async with session_scope() as session:
+        current = await InstanceSettingsRepository.get_mailing_neurochat_default(session)
+        await InstanceSettingsRepository.set_mailing_neurochat_default(session, not current)
+    await _render_mailing_manage(callback)
+
+
+@router.callback_query(F.data == "mailing_manage_neuro_all")
+async def cb_mailing_manage_neuro_all(callback: CallbackQuery):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    async with session_scope() as session:
+        mailings = await MailingRepository.get_all(session)
+        enabled = any(not mailing.neurochat_enabled for mailing in mailings)
+        await session.execute(update(Mailing).values(neurochat_enabled=enabled))
+        await session.commit()
+    await _render_mailing_manage(callback)
+
+
+@router.callback_query(F.data.regexp(r"^mailing_manage_neuro_toggle_\d+_\d+$"))
+async def cb_mailing_manage_neuro_toggle(callback: CallbackQuery):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    mailing_id, page = map(int, callback.data.rsplit("_", 2)[-2:])
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if mailing is None:
+            await callback.answer("Рассылка не найдена", show_alert=True)
+            return
+        await MailingRepository.update_neuro(session, mailing_id, neurochat_enabled=not mailing.neurochat_enabled)
+    await _render_mailing_manage(callback, page=page)
+
+
 # ==================== Создание рассылки ====================
 
 @router.callback_query(F.data == "mailing_create")
 async def cb_mailing_create(callback: CallbackQuery, state: FSMContext):
     """Начало создания рассылки."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -356,7 +465,7 @@ async def cb_mailing_create(callback: CallbackQuery, state: FSMContext):
 @router.message(MailingCreateFSM.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
     """Обработка названия рассылки."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     name = message.text.strip()
@@ -377,7 +486,7 @@ async def process_name(message: Message, state: FSMContext):
 @router.message(MailingCreateFSM.waiting_for_suffix)
 async def process_suffix(message: Message, state: FSMContext):
     """Обработка суффикса и создание рассылки."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     suffix = message.text.strip()
@@ -396,6 +505,9 @@ async def process_suffix(message: Message, state: FSMContext):
             delay_between_messages=10.0,
             delay_between_accounts=10.0,
         )
+        if await InstanceSettingsRepository.get_mailing_neurochat_default(session):
+            await MailingRepository.update_neuro(session, mailing.id, neurochat_enabled=True)
+            await session.refresh(mailing)
 
     await state.clear()
 
@@ -425,7 +537,7 @@ def _mailing_list_page_from_data(data: str) -> int:
 
 @router.callback_query(F.data == "mailing_list_page_info")
 async def cb_mailing_list_page_info(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     await callback.answer("Номер страницы · листайте ◀ ▶", show_alert=True)
@@ -437,7 +549,7 @@ async def cb_mailing_list_page_info(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("mailing_list_p_"))
 async def cb_mailing_list(callback: CallbackQuery):
     """Показать список всех рассылок."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -482,7 +594,7 @@ async def cb_mailing_list(callback: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^mailing_view_\d+$"))
 async def cb_mailing_view(callback: CallbackQuery):
     """Открыть карточку рассылки (редактирует текущее сообщение, без дублей)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -494,7 +606,7 @@ async def cb_mailing_view(callback: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^mailing_refresh_\d+$"))
 async def cb_mailing_refresh(callback: CallbackQuery):
     """Обновить статистику и кнопки с карточки рассылки."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -506,7 +618,7 @@ async def cb_mailing_refresh(callback: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^mailing_stop_\d+$"))
 async def cb_mailing_stop(callback: CallbackQuery):
     """Остановить текущую рассылку (воркер в фоне)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -514,7 +626,35 @@ async def cb_mailing_stop(callback: CallbackQuery):
 
     mailing_id = int(callback.data.split("_")[-1])
     if not worker_manager.is_running or worker_manager.current_mailing_id != mailing_id:
-        await callback.answer("Эта рассылка сейчас не выполняется", show_alert=True)
+        cancelled = False
+        async with session_scope() as session:
+            run = await session.scalar(select(MailingRun).where(
+                MailingRun.mailing_id == mailing_id, MailingRun.status == "queued",
+            ).limit(1))
+            if run is not None:
+                pending = list((await session.scalars(select(BotCommand).where(
+                    BotCommand.command == "mailing.start", BotCommand.status == "pending",
+                ))).all())
+                for command in pending:
+                    try:
+                        args = json.loads(command.args_json or "{}")
+                    except (ValueError, TypeError):
+                        continue
+                    if args.get("run_id") != run.id:
+                        continue
+                    changed = await session.execute(update(BotCommand).where(
+                        BotCommand.id == command.id, BotCommand.status == "pending",
+                    ).values(status="cancelled"))
+                    if changed.rowcount == 1:
+                        run.status = "cancelled"
+                        run.finished_at = utcnow_naive()
+                        await commit_with_busy_retry(session, op_name="bot-mailing-cancel-queued")
+                        cancelled = True
+                    break
+        await callback.answer(
+            "Запуск в очереди отменён" if cancelled else "Эта рассылка сейчас не выполняется",
+            show_alert=not cancelled,
+        )
         await _render_mailing_screen(callback, mailing_id)
         return
 
@@ -526,7 +666,7 @@ async def cb_mailing_stop(callback: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^mailing_neuro_stop_view_\d+$"))
 async def cb_mailing_neuro_stop_from_view(callback: CallbackQuery):
     """Выключить нейрочат с карточки рассылки (после завершения кампании и т.п.)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -547,7 +687,7 @@ async def cb_mailing_neuro_stop_from_view(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("mailing_settings_"))
 async def cb_mailing_settings(callback: CallbackQuery, state: FSMContext):
     """Настройки рассылки."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -580,7 +720,7 @@ async def cb_mailing_settings(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_mod_security_"))
 async def cb_mailing_mod_security(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -718,7 +858,7 @@ async def _render_mailing_campaign_screen(callback: CallbackQuery, mailing_id: i
 
 @router.callback_query(F.data.startswith("mailing_campaign_aud_"))
 async def cb_mailing_campaign_aud(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -729,7 +869,7 @@ async def cb_mailing_campaign_aud(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.regexp(MAILING_AUD_MODE_RE))
 async def cb_mailing_aud_mode_set(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     await state.clear()
@@ -751,7 +891,7 @@ async def cb_mailing_aud_mode_set(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_cap_edit_"))
 async def cb_mailing_cap_edit(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -770,7 +910,7 @@ async def cb_mailing_cap_edit(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_cd_edit_"))
 async def cb_mailing_cd_edit(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -791,7 +931,7 @@ async def cb_mailing_cd_edit(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_test_txt_"))
 async def cb_mailing_test_txt(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -811,7 +951,7 @@ async def cb_mailing_test_txt(callback: CallbackQuery, state: FSMContext):
 
 @router.message(MailingCampaignFSM.waiting_max_recipients, F.text)
 async def cb_mailing_cap_save(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     data = await state.get_data()
     mailing_id = data.get("mailing_cap_id")
@@ -847,7 +987,7 @@ async def cb_mailing_cap_save(message: Message, state: FSMContext):
 
 @router.message(MailingCampaignFSM.waiting_cooldown_hours, F.text)
 async def cb_mailing_cd_save(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     data = await state.get_data()
     mailing_id = data.get("mailing_cd_id")
@@ -878,7 +1018,7 @@ async def cb_mailing_cd_save(message: Message, state: FSMContext):
 
 @router.message(MailingCampaignFSM.waiting_test_txt, F.document)
 async def cb_mailing_test_txt_save(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     data = await state.get_data()
     mailing_id = data.get("mailing_test_id")
@@ -909,7 +1049,7 @@ async def cb_mailing_test_txt_save(message: Message, state: FSMContext):
 @router.message(MailingCampaignFSM.waiting_test_txt, F.text)
 async def cb_mailing_test_txt_text(message: Message, state: FSMContext):
     """Ручной ввод тестовых @username текстом (без .txt)."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     data = await state.get_data()
     mailing_id = data.get("mailing_test_id")
@@ -946,7 +1086,7 @@ async def cb_mailing_test_txt_text(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_aud_menu_"))
 async def cb_mailing_aud_menu(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -957,7 +1097,7 @@ async def cb_mailing_aud_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_aud_toggle_"))
 async def cb_mailing_aud_toggle(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -982,7 +1122,7 @@ async def cb_mailing_aud_toggle(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_aud_reset_"))
 async def cb_mailing_aud_reset(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -1001,7 +1141,7 @@ async def cb_mailing_aud_reset(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_aud_inc_"))
 async def cb_mailing_aud_inc_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -1020,7 +1160,7 @@ async def cb_mailing_aud_inc_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_aud_exc_"))
 async def cb_mailing_aud_exc_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -1039,7 +1179,7 @@ async def cb_mailing_aud_exc_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(MailingAudienceFSM.waiting_include, F.text)
 async def cb_mailing_aud_inc_save(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     raw = (message.text or "").strip()
     inc = [x.strip().lower() for x in raw.split(",") if x.strip()] if raw else []
@@ -1072,7 +1212,7 @@ async def cb_mailing_aud_inc_save(message: Message, state: FSMContext):
 
 @router.message(MailingAudienceFSM.waiting_exclude, F.text)
 async def cb_mailing_aud_exc_save(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     raw = (message.text or "").strip()
     exc = [x.strip().lower() for x in raw.split(",") if x.strip()] if raw else []
@@ -1105,7 +1245,7 @@ async def cb_mailing_aud_exc_save(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_mod_first_"))
 async def cb_mailing_mod_first(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1171,7 +1311,7 @@ async def cb_mailing_mod_first(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_tz_menu_"))
 async def cb_mailing_tz_menu(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -1181,7 +1321,7 @@ async def cb_mailing_tz_menu(callback: CallbackQuery):
 
 @router.callback_query(lambda c: bool(c.data and MAILING_TZ_ADJ_RE.match(c.data)))
 async def cb_mailing_tz_adj(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     m = MAILING_TZ_ADJ_RE.match(callback.data or "")
@@ -1199,7 +1339,7 @@ async def cb_mailing_tz_adj(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("mailing_tz_reset_"))
 async def cb_mailing_tz_reset(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -1211,7 +1351,7 @@ async def cb_mailing_tz_reset(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("mailing_pick_group_"))
 async def cb_mailing_pick_group(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1233,7 +1373,7 @@ async def cb_mailing_pick_group(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("mailing_target_set_"))
 async def cb_mailing_target_set(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1259,7 +1399,7 @@ async def cb_mailing_target_set(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("mailing_variant_add_"))
 async def cb_mailing_variant_add(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1283,7 +1423,7 @@ async def cb_mailing_variant_add(callback: CallbackQuery, state: FSMContext):
 
 @router.message(MailingEditFSM.waiting_for_variant_add)
 async def process_variant_add(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     text = (message.text or "").strip()
@@ -1323,7 +1463,7 @@ async def process_variant_add(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_variant_mode_toggle_"))
 async def cb_mailing_variant_mode_toggle(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -1365,7 +1505,7 @@ async def cb_mailing_variant_mode_toggle(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("mailing_variants_"))
 async def cb_mailing_variants(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -1406,7 +1546,7 @@ async def cb_mailing_variant_noop(callback: CallbackQuery):
 
 @router.callback_query(F.data.regexp(r"^mailing_variant_open_\d+_\d+$"))
 async def cb_mailing_variant_open(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     _, _, _, mailing_id_s, idx_s = callback.data.split("_")
@@ -1439,7 +1579,7 @@ async def cb_mailing_variant_open(callback: CallbackQuery):
 
 @router.callback_query(F.data.regexp(r"^mailing_variant_edit_\d+_\d+$"))
 async def cb_mailing_variant_edit(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     _, _, _, mailing_id_s, idx_s = callback.data.split("_")
@@ -1458,7 +1598,7 @@ async def cb_mailing_variant_edit(callback: CallbackQuery, state: FSMContext):
 
 @router.message(MailingEditFSM.waiting_for_variant_edit)
 async def process_variant_edit(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     text = (message.text or "").strip()
     if not text:
@@ -1500,7 +1640,7 @@ async def process_variant_edit(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_variant_rm_"))
 async def cb_mailing_variant_rm(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1533,7 +1673,7 @@ async def cb_mailing_variant_rm(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("mailing_toggle_typing_"))
 async def cb_toggle_typing(callback: CallbackQuery):
     """Переключение имитации набора текста."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1565,7 +1705,7 @@ async def cb_toggle_typing(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("mailing_toggle_smart_"))
 async def cb_toggle_smart(callback: CallbackQuery):
     """Переключение умной задержки."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1599,7 +1739,7 @@ async def cb_toggle_smart(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("mailing_edit_delay_"))
 async def cb_edit_delay(callback: CallbackQuery, state: FSMContext):
     """Редактирование задержки между сообщениями."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1624,7 +1764,7 @@ async def cb_edit_delay(callback: CallbackQuery, state: FSMContext):
 @router.message(MailingEditFSM.waiting_for_delay)
 async def process_delay(message: Message, state: FSMContext):
     """Обработка нового значения задержки."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     try:
@@ -1663,7 +1803,7 @@ async def process_delay(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("mailing_edit_messages_per_batch_"))
 async def cb_edit_batch(callback: CallbackQuery, state: FSMContext):
     """Редактирование лимита успешных сообщений на один аккаунт (и ротация)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1687,7 +1827,7 @@ async def cb_edit_batch(callback: CallbackQuery, state: FSMContext):
 @router.message(MailingEditFSM.waiting_for_batch_size)
 async def process_batch_size(message: Message, state: FSMContext):
     """Обработка нового значения количества сообщений."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     try:
@@ -1726,7 +1866,7 @@ async def process_batch_size(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("mailing_edit_batch_delay_"))
 async def cb_edit_batch_delay(callback: CallbackQuery, state: FSMContext):
     """Редактирование задержки между пакетами."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1751,7 +1891,7 @@ async def cb_edit_batch_delay(callback: CallbackQuery, state: FSMContext):
 @router.message(MailingEditFSM.waiting_for_batch_delay)
 async def process_batch_delay(message: Message, state: FSMContext):
     """Обработка нового значения задержки между пакетами."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     try:
@@ -1790,7 +1930,7 @@ async def process_batch_delay(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("mailing_edit_runtime_"))
 async def cb_edit_runtime(callback: CallbackQuery, state: FSMContext):
     """Редактирование автоостановки рассылки (в часах)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1813,7 +1953,7 @@ async def cb_edit_runtime(callback: CallbackQuery, state: FSMContext):
 
 @router.message(MailingEditFSM.waiting_for_runtime_hours)
 async def process_runtime_hours(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     raw = (message.text or "").strip().lower()
@@ -1861,7 +2001,7 @@ async def process_runtime_hours(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("mailing_edit_text_"))
 async def cb_edit_text(callback: CallbackQuery, state: FSMContext):
     """Редактирование текста сообщения."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1889,7 +2029,7 @@ async def cb_edit_text(callback: CallbackQuery, state: FSMContext):
 @router.message(MailingEditFSM.waiting_for_text)
 async def process_text(message: Message, state: FSMContext):
     """Обработка нового текста сообщения."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     new_text = message.text
@@ -1924,7 +2064,7 @@ async def process_text(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("mailing_delete_confirm_"))
 async def cb_mailing_delete_confirm(callback: CallbackQuery):
     """Подтверждение удаления рассылки."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1955,7 +2095,7 @@ async def cb_mailing_delete_confirm(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("mailing_delete_"))
 async def cb_mailing_delete(callback: CallbackQuery):
     """Удаление рассылки."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1978,7 +2118,7 @@ async def cb_mailing_delete(callback: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^mailing_start_\d+$"))
 async def cb_mailing_start(callback: CallbackQuery):
     """Перед запуском — экран подтверждения (проверка аккаунтов, готовность)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -2011,6 +2151,8 @@ async def cb_mailing_start(callback: CallbackQuery):
         return
 
     from bot.main import safe_edit_message
+    async with session_scope() as session:
+        eligible = await ClientRepository.count_mailing_queue(session, mailing)
 
     safe_name = html.escape((mailing.name or f"#{mailing.id}").strip() or f"#{mailing.id}")
     confirm_kb = InlineKeyboardMarkup(
@@ -2033,9 +2175,10 @@ async def cb_mailing_start(callback: CallbackQuery):
         callback,
         "🚀 <b>Запуск рассылки</b>\n\n"
         f"Рассылка «{safe_name}» (id <code>{mailing_id}</code>).\n\n"
-        "<b>Рекомендуется</b> перед стартом пройти проверку аккаунтов в группе "
-        "(спамблок и прочее) и убедиться, что аккаунты готовы к работе.\n\n"
-        "Запустить сейчас?",
+        f"Разрешённых получателей сейчас: <b>{eligible}</b>. "
+        "После подтверждения состав аудитории сохраняется; отписка и ограничения "
+        "проверяются повторно перед отправкой.\n\n"
+        "Проверьте текст, согласия и аккаунты. Поставить запуск в очередь?",
         reply_markup=confirm_kb,
     )
     await callback.answer()
@@ -2044,7 +2187,7 @@ async def cb_mailing_start(callback: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^mailing_start_confirm_\d+$"))
 async def cb_mailing_start_confirm(callback: CallbackQuery):
     """Подтверждённый запуск рассылки."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -2081,7 +2224,7 @@ async def cb_mailing_start_confirm(callback: CallbackQuery):
 
 
 async def _execute_mailing_start(callback: CallbackQuery, mailing: Mailing) -> bool:
-    """Запуск рассылки. False — уже ответили через callback (ошибка/конфликт)."""
+    """Queue an idempotent run with a frozen opt-in audience."""
     from workers.manager import worker_manager
 
     if worker_manager._mailing_busy:
@@ -2094,15 +2237,52 @@ async def _execute_mailing_start(callback: CallbackQuery, mailing: Mailing) -> b
             )
         return False
 
-    await callback.answer("Подключаю аккаунты…")
-    gid = getattr(mailing, "target_group_id", None)
-    await worker_manager.load_accounts(group_id=gid)
-    await worker_manager.connect_all()
-
-    background_tasks.create(
-        worker_manager.start_mailing(mailing.id),
-        name=f"mailing-{mailing.id}",
-    )
+    async with session_scope() as session:
+        fresh = await MailingRepository.get_by_id(session, mailing.id)
+        if fresh is None or fresh.status == MailingStatus.RUNNING:
+            await callback.answer("Рассылка уже запущена или удалена", show_alert=True)
+            return False
+        existing = await session.scalar(select(MailingRun.id).where(
+            MailingRun.mailing_id == mailing.id, MailingRun.status == "queued",
+        ).limit(1))
+        if existing is not None:
+            await callback.answer("Запуск уже в очереди", show_alert=True)
+            return False
+        recipients = await ClientRepository.get_mailing_queue(session, fresh)
+        if not recipients:
+            await callback.answer("Нет получателей с подтверждённым согласием", show_alert=True)
+            return False
+        config_json = MailingRepository.run_config_json(fresh)
+        inserted = await execute_with_busy_retry(
+            session,
+            sqlite_insert(MailingRun).values(
+                mailing_id=fresh.id,
+                audience_mode=(fresh.audience_mode or "classes").strip().lower(),
+                config_json=config_json,
+                config_sha256=hashlib.sha256(config_json.encode("utf-8")).hexdigest(),
+                audience_count=len(recipients),
+                status="queued",
+            ).on_conflict_do_nothing(
+                index_elements=[MailingRun.mailing_id],
+                index_where=MailingRun.status == "queued",
+            ).returning(MailingRun.id),
+            op_name="bot-mailing-run-queue",
+        )
+        run_id = inserted.scalar_one_or_none()
+        if run_id is None:
+            await callback.answer("Запуск уже в очереди", show_alert=True)
+            return False
+        await session.execute(insert(MailingRunRecipient), [
+            {"run_id": run_id, "client_id": client.id} for client in recipients
+        ])
+        session.add(BotCommand(
+            command="mailing.start",
+            args_json=json.dumps({"mailing_id": fresh.id, "run_id": run_id}),
+            status="pending",
+            requested_by=str(callback.from_user.id),
+        ))
+        await commit_with_busy_retry(session, op_name="bot-mailing-start-enqueue")
+    await callback.answer("Запуск поставлен в очередь")
     await _render_mailing_screen(callback, mailing.id)
     return True
 
@@ -2112,7 +2292,7 @@ async def _execute_mailing_start(callback: CallbackQuery, mailing: Mailing) -> b
 @router.callback_query(F.data == "cancel_mailing")
 async def cb_cancel_mailing(callback: CallbackQuery, state: FSMContext):
     """Отмена сценария рассылки (отдельный callback от аккаунтов/прокси)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 

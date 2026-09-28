@@ -2,6 +2,7 @@
 Нейрочаттинг: настройки OpenRouter по кампании (после рассылки).
 """
 import html
+import io
 import json
 
 from aiogram import F, Router
@@ -12,7 +13,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import update
 
-from bot.config import DEFAULT_NEURO_MODEL, OPENROUTER_API_KEY, OWNER_ID
+from bot.config import is_authorized_user
+from bot.config import DEFAULT_NEURO_MODEL, OPENROUTER_API_KEY
 from bot.keyboards.main import (
     get_context_back_keyboard,
     get_mailing_neuro_keyboard,
@@ -27,14 +29,13 @@ from database.repositories import (
 from database.session import session_scope
 from services.neurochat.admin_service import (
     count_actions_by_mailing,
-    get_prompt_path,
     get_sampling_effective,
     get_sampling_overrides,
-    has_prompt_file,
-    load_prompt_text,
 )
+from services.neurochat.prompt_history import current_version_async, prepared_text, save_version_async
 from services.neurochat.monitor import DENY_REASONS, neuro_monitor
 from utils.crypto_openrouter import mask_api_key
+from services.neurochat.provider_registry import resolve_provider_async
 from utils.links import normalize_public_link
 from utils.neuro_sampling import (
     CODE_TO_KEY,
@@ -108,7 +109,7 @@ async def _render_neurochat_hub(callback: CallbackQuery) -> None:
         [
             InlineKeyboardButton(
                 text="⬅️ В главное меню",
-                callback_data="menu_back",
+                callback_data="menu_ai",
             )
         ]
     )
@@ -128,7 +129,7 @@ async def _render_neurochat_hub(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "menu_neurochat")
 async def cb_menu_neurochat(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -138,7 +139,7 @@ async def cb_menu_neurochat(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "neurochat_global_toggle")
 async def cb_neurochat_global_toggle(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -151,7 +152,7 @@ async def cb_neurochat_global_toggle(callback: CallbackQuery, state: FSMContext)
 
 @router.callback_query(F.data == "neurochat_global_reset")
 async def cb_neurochat_global_reset(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -212,7 +213,7 @@ def _neuro_monitor_kb(hours: float) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data.startswith("neurochat_monitor_"))
 async def cb_neurochat_monitor(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -235,7 +236,7 @@ async def cb_neurochat_monitor(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("neurochat_progress_"))
 async def cb_neurochat_progress(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     await state.clear()
@@ -289,7 +290,7 @@ async def cb_neurochat_progress(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("neurochat_open_"))
 async def cb_neurochat_open(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -300,22 +301,31 @@ async def cb_neurochat_open(callback: CallbackQuery, state: FSMContext):
         if not mailing:
             await callback.answer("Не найдено", show_alert=True)
             return
-        eff = await InstanceSettingsRepository.get_effective_openrouter_key(session)
-        stored = await InstanceSettingsRepository.has_stored_key(session)
+        try:
+            provider = await resolve_provider_async(session, mailing)
+            provider_error = None
+        except ValueError as exc:
+            provider = None
+            provider_error = str(exc)
+        stored = await InstanceSettingsRepository.has_stored_key(session) if provider is None or provider.is_openrouter else False
         global_enabled = await InstanceSettingsRepository.get_effective_neurochat_enabled(session)
+        active_prompt = await current_version_async(session, mailing)
 
-    model = (mailing.neuro_model or "").strip() or DEFAULT_NEURO_MODEL
+    model = provider.model if provider else ((mailing.neuro_model or "").strip() or DEFAULT_NEURO_MODEL)
     link = normalize_public_link((getattr(mailing, "community_link", None) or "").strip())
-    has_prompt = has_prompt_file(mailing_id)
+    has_prompt = bool(active_prompt and active_prompt.raw_text is not None)
     prompt_preview = ""
     if has_prompt:
-        full = load_prompt_text(mailing_id)
+        full = prepared_text(active_prompt)
         prompt_preview = full[:200] + ("…" if len(full) > 200 else "")
-    masked = mask_api_key(eff or "")
-    if stored:
-        key_line = f"активный ключ: <code>{masked}</code> (в базе бота)"
+    if provider_error:
+        key_line = f"<b>ошибка настройки</b>: {html.escape(provider_error)}"
+    elif provider and not provider.is_openrouter:
+        key_line = "ключ профиля сохранён" if provider.api_key else "<b>ключ не задан</b>"
+    elif stored:
+        key_line = f"активный ключ: <code>{mask_api_key(provider.api_key if provider else '')}</code> (в базе бота)"
     elif (OPENROUTER_API_KEY or "").strip():
-        key_line = f"активный ключ: <code>{masked}</code> (из .env)"
+        key_line = f"активный ключ: <code>{mask_api_key(provider.api_key if provider else '')}</code> (из .env)"
     else:
         key_line = "ключ <b>не задан</b> — укажите через «Ключ OpenRouter» или .env"
 
@@ -323,19 +333,20 @@ async def cb_neurochat_open(callback: CallbackQuery, state: FSMContext):
     samp_line = format_sampling_human(effective_samp)
 
     txt = (
-        "🔮 <b>Нейрочат (OpenRouter)</b>\n\n"
+        "🔮 <b>Нейрочат</b>\n\n"
         f"📋 {mailing.name or mailing_id}\n\n"
+        f"• Провайдер: <b>{html.escape(provider.name) if provider else 'ошибка настройки'}</b>\n"
         f"• Глобально: <b>{'да' if global_enabled else 'нет'}</b>\n"
         f"• Включено: <b>{'да' if mailing.neurochat_enabled else 'нет'}</b>\n"
         f"• Модель: <code>{model}</code>\n"
         f"• Ссылка {{link}}: <code>{link or 'не задана'}</code>\n"
-        f"• Файл промпта: <code>data/neuro/mailings/{mailing_id}/system.txt</code>\n"
+        f"• Промпт: версия <code>{active_prompt.id if active_prompt else 'по умолчанию'}</code>\n"
         f"  — {'загружен' if has_prompt else 'нет (используется дефолт из кода)'}\n"
         f"• Ключ API: {key_line}\n"
         f"• Сэмплирование: {html.escape(samp_line)}\n"
     )
     if prompt_preview:
-        txt += f"\n<i>Превью:</i>\n<pre>{prompt_preview}</pre>\n"
+        txt += f"\n<i>Превью:</i>\n<pre>{html.escape(prompt_preview)}</pre>\n"
     if mailing.neurochat_enabled and not global_enabled:
         txt += (
             "\n⚠️ <b>Внимание:</b> у рассылки нейрочат включен, но глобально он выключен. "
@@ -357,7 +368,7 @@ async def cb_neurochat_open(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.regexp(r"^mailing_neuro_sampling_(\d+)$"))
 async def cb_neurochat_sampling_menu(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -370,7 +381,7 @@ async def cb_neurochat_sampling_menu(callback: CallbackQuery, state: FSMContext)
     effective = get_sampling_effective(mailing)
     block = format_sampling_menu_block(effective)
     await callback.message.edit_text(
-        "🎛 <b>Параметры сэмплирования (OpenRouter)</b>\n\n"
+        "🎛 <b>Параметры сэмплирования</b>\n\n"
         f"📋 {html.escape(mailing.name or str(mailing_id))}\n\n"
         "<b>Текущие значения</b> (дефолты из config + переопределения рассылки):\n"
         f"{block}\n\n"
@@ -385,7 +396,7 @@ async def cb_neurochat_sampling_menu(callback: CallbackQuery, state: FSMContext)
 
 @router.callback_query(F.data.regexp(r"^mailing_nsp_(\d+)_(mt|te|tp|tk|fp|pp|rp|mp|ta)$"))
 async def cb_neurochat_sampling_param(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     parts = callback.data.split("_")
@@ -424,7 +435,7 @@ async def cb_neurochat_sampling_param(callback: CallbackQuery, state: FSMContext
 
 @router.callback_query(F.data.regexp(r"^mailing_neuro_sampling_reset_(\d+)$"))
 async def cb_neurochat_sampling_reset(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -439,7 +450,7 @@ async def cb_neurochat_sampling_reset(callback: CallbackQuery, state: FSMContext
 
 @router.callback_query(F.data.startswith("mailing_neuro_toggle_"))
 async def cb_neurochat_toggle(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -459,7 +470,7 @@ async def cb_neurochat_toggle(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_neuro_model_"))
 async def cb_neurochat_model(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -468,9 +479,9 @@ async def cb_neurochat_model(callback: CallbackQuery, state: FSMContext):
     await state.update_data(mailing_neuro_id=mailing_id)
 
     await callback.message.edit_text(
-        "🧠 <b>Модель OpenRouter</b>\n\n"
+        "🧠 <b>Модель провайдера</b>\n\n"
         "Отправьте одним сообщением идентификатор модели "
-        "(как на openrouter.ai), например:\n"
+        "(как у выбранного поставщика API), например:\n"
         f"<code>{DEFAULT_NEURO_MODEL}</code>\n\n"
         "<i>Назад — кнопка ниже.</i>",
         reply_markup=get_context_back_keyboard(
@@ -484,7 +495,7 @@ async def cb_neurochat_model(callback: CallbackQuery, state: FSMContext):
 
 @router.message(NeuroChatFSM.waiting_for_sampling_value)
 async def process_neuro_sampling_value(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     data = await state.get_data()
     mailing_id = data.get("mailing_neuro_id")
@@ -526,7 +537,7 @@ async def process_neuro_sampling_value(message: Message, state: FSMContext):
 
 @router.message(NeuroChatFSM.waiting_for_model)
 async def process_neuro_model(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     model = (message.text or "").strip()
@@ -562,7 +573,7 @@ async def process_neuro_model(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_neuro_prompt_"))
 async def cb_neurochat_prompt(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -593,7 +604,7 @@ async def cb_neurochat_prompt(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mailing_neuro_link_"))
 async def cb_neurochat_link(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -618,7 +629,7 @@ async def cb_neurochat_link(callback: CallbackQuery, state: FSMContext):
 
 @router.message(NeuroChatFSM.waiting_for_prompt_file, F.document)
 async def process_neuro_prompt_doc(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     data = await state.get_data()
@@ -633,20 +644,37 @@ async def process_neuro_prompt_doc(message: Message, state: FSMContext):
         await message.answer("Нужен файл с расширением .txt")
         return
 
-    from bot.config import BASE_DIR
-
-    dest = get_prompt_path(mailing_id)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-
-    await message.bot.download(message.document, destination=dest)
+    async with session_scope() as session:
+        mailing = await MailingRepository.get_by_id(session, mailing_id)
+        if mailing is None:
+            await state.clear()
+            await message.answer("Рассылка не найдена.")
+            return
+        if (message.document.file_size or 0) > 80000:
+            await message.answer("Промпт слишком большой (лимит 80 КБ).")
+            return
+        destination = io.BytesIO()
+        await message.bot.download(message.document, destination=destination)
+        content = destination.getvalue()
+        if len(content) > 80000:
+            await message.answer("Промпт слишком большой (лимит 80 КБ).")
+            return
+        try:
+            raw_text = content.decode("utf-8-sig").strip()
+        except UnicodeDecodeError:
+            await message.answer("Файл должен быть в UTF-8.")
+            return
+        if not raw_text or len(raw_text) > 20000:
+            await message.answer("Текст промпта должен содержать от 1 до 20000 символов.")
+            return
+        version = await save_version_async(
+            session, mailing, raw_text=raw_text, actor=f"telegram:{message.from_user.id}",
+        )
 
     await state.clear()
 
-    async with session_scope() as session:
-        mailing = await MailingRepository.get_by_id(session, mailing_id)
-
     await message.answer(
-        f"✅ Промпт сохранён: <code>{dest.relative_to(BASE_DIR)}</code>",
+        f"✅ Промпт сохранён, версия <code>{version.id}</code>",
         parse_mode=ParseMode.HTML,
     )
     if mailing:
@@ -659,7 +687,7 @@ async def process_neuro_prompt_doc(message: Message, state: FSMContext):
 
 @router.message(NeuroChatFSM.waiting_for_link)
 async def process_neuro_link(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     raw = (message.text or "").strip()

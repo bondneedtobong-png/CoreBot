@@ -7,7 +7,8 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.config import AVATARS_TEMP_DIR, OWNER_ID, SESSIONS_DIR
+from bot.config import is_authorized_user
+from bot.config import AVATARS_TEMP_DIR, SESSIONS_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.handlers.accounts.states import AccountPhotoManagement
 from bot.keyboards.main import (
@@ -56,7 +57,7 @@ async def show_photo_management_screen(
     reply_markup=None,
     send_new: bool = False,
 ) -> None:
-    from workers.manager import Worker
+    from workers.manager import account_worker_for_action
 
     kb = reply_markup or get_photo_management_keyboard(account_id)
     temp_worker = None
@@ -82,7 +83,7 @@ async def show_photo_management_screen(
                 await safe_edit_message(message, text, reply_markup=get_context_back_keyboard("accounts_list"))
             return
 
-        temp_worker = Worker(account, session_path, account.proxy)
+        temp_worker = account_worker_for_action(account, session_path, account.proxy)
         connected = await temp_worker.connect()
 
         if not connected or not temp_worker.client:
@@ -120,13 +121,13 @@ async def show_photo_management_screen(
         if temp_worker:
             try:
                 await temp_worker.disconnect()
-            except Exception:
-                pass
+            except Exception as e2:
+                log.debug(f"temp_worker disconnect: {e2}")
 
 
 @router.callback_query(F.data.startswith("account_manage_photos_"))
 async def cb_account_manage_photos(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -138,7 +139,7 @@ async def cb_account_manage_photos(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("account_photo_add_"))
 async def cb_account_photo_add(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -159,7 +160,7 @@ async def cb_account_photo_add(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("account_photo_del_prompt_"))
 async def cb_account_photo_del_prompt(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -222,7 +223,7 @@ async def _download_telegram_image_to_avatars_temp(message: Message, account_id:
 @router.message(StateFilter(AccountPhotoManagement.waiting_for_new_photo), F.photo)
 @router.message(StateFilter(AccountPhotoManagement.waiting_for_new_photo), F.document)
 async def process_account_new_profile_photo(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     if message.document and not _is_image_document(message):
@@ -254,7 +255,7 @@ async def process_account_new_profile_photo(message: Message, state: FSMContext)
             await state.clear()
             return
 
-        from workers.manager import Worker
+        from workers.manager import account_worker_for_action
         from telethon.errors import FloodWaitError, PhotoInvalidDimensionsError
 
         session_path = SESSIONS_DIR / f"{account.session_name}.session"
@@ -263,7 +264,7 @@ async def process_account_new_profile_photo(message: Message, state: FSMContext)
             await state.clear()
             return
 
-        temp_worker = Worker(account, session_path, account.proxy)
+        temp_worker = account_worker_for_action(account, session_path, account.proxy)
         connected = await temp_worker.connect()
         if not connected or not temp_worker.client:
             await safe_edit_message(status_msg, "❌ Не удалось подключить аккаунт.")
@@ -320,7 +321,7 @@ async def process_account_new_profile_photo(message: Message, state: FSMContext)
 
 @router.message(StateFilter(AccountPhotoManagement.waiting_for_new_photo), F.text)
 async def process_account_photo_waiting_text(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     t = (message.text or "").strip().lower()
@@ -343,7 +344,7 @@ async def process_account_photo_waiting_text(message: Message, state: FSMContext
 
 @router.message(StateFilter(AccountPhotoManagement.waiting_for_photo_number_to_delete), F.text)
 async def process_account_photo_delete_by_number(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     raw = (message.text or "").strip()
@@ -378,7 +379,7 @@ async def process_account_photo_delete_by_number(message: Message, state: FSMCon
         await message.answer("❌ Номер должен быть не меньше 1.")
         return
 
-    from workers.manager import Worker
+    from workers.manager import account_worker_for_action
 
     temp_worker = None
     status_msg = await message.answer("⏳ Удаление фото...")
@@ -398,7 +399,7 @@ async def process_account_photo_delete_by_number(message: Message, state: FSMCon
             await state.clear()
             return
 
-        temp_worker = Worker(account, session_path, account.proxy)
+        temp_worker = account_worker_for_action(account, session_path, account.proxy)
         connected = await temp_worker.connect()
         if not connected or not temp_worker.client:
             await safe_edit_message(status_msg, "❌ Не удалось подключить аккаунт.")

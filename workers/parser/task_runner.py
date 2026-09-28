@@ -57,7 +57,7 @@ async def _append_log(
     await session.commit()
 
 
-async def process_task(task_id: int) -> None:
+async def process_task(task_id: int, *, runtime_workers: bool = False) -> None:
     pool: Optional[RotatingClients] = None
     try:
         async with session_scope() as session:
@@ -93,7 +93,7 @@ async def process_task(task_id: int) -> None:
                 )
                 return
 
-            pool = RotatingClients(snaps)
+            pool = RotatingClients(snaps, runtime_workers=runtime_workers)
 
             async def logfn(
                 account_id: Optional[int],
@@ -161,7 +161,7 @@ async def process_task(task_id: int) -> None:
             await pool.disconnect_all()
 
 
-async def run_forever() -> None:
+async def run_forever(*, runtime_workers: bool = False) -> None:
     log.info(
         f"parser-worker poll={POLL_SEC}s (set PARSER_POLL_SEC). "
         "Ожидание pending задач в parsing_tasks…"
@@ -169,6 +169,12 @@ async def run_forever() -> None:
     while True:
         tid: Optional[int] = None
         try:
+            if runtime_workers:
+                from workers.manager import worker_manager
+
+                if worker_manager.is_mailing_busy():
+                    await asyncio.sleep(POLL_SEC)
+                    continue
             async with session_scope() as session:
                 tid = await session.scalar(
                     select(ParsingTask.id)
@@ -185,4 +191,4 @@ async def run_forever() -> None:
             await asyncio.sleep(POLL_SEC)
             continue
 
-        await process_task(int(tid))
+        await process_task(int(tid), runtime_workers=runtime_workers)

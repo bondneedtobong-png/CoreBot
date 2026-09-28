@@ -2,6 +2,7 @@
 Запуск Control Bot (aiogram 3.x).
 """
 import asyncio
+import os
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
@@ -11,11 +12,13 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest
 
-from bot.config import BOT_TOKEN, OWNER_ID
+from bot.config import is_authorized_user
+from bot.config import BOT_TOKEN
 from bot.keyboards.main import (
     get_main_keyboard,
     get_proxy_keyboard,
     get_accounts_keyboard,
+    get_ai_keyboard,
 )
 from bot.handlers.accounts import router as accounts_router
 from bot.handlers.clients import router as clients_router
@@ -23,7 +26,13 @@ from bot.handlers.database import database_router
 from bot.handlers.mailing import router as mailing_router
 from bot.handlers.neurochat import router as neurochat_router
 from bot.handlers.openrouter_key import router as openrouter_key_router
+from bot.handlers.ai_provider_menu import router as ai_provider_menu_router
+from bot.handlers.comfy_photo import router as comfy_photo_router
+from bot.handlers.comfy_identity import router as comfy_identity_router
+from bot.handlers.community_link_check import router as community_link_check_router
+from bot.handlers.chat_campaign import router as chat_campaign_router
 from bot.handlers.fleet_cleanup import router as fleet_cleanup_router
+from bot.handlers.managed_reactions import router as managed_reactions_router
 from bot.handlers.proxy import router as proxy_router
 from bot.handlers.system_status import (
     build_system_status_text,
@@ -42,7 +51,7 @@ legacy_cancel_router = Router()
 @legacy_cancel_router.callback_query(F.data == "cancel")
 async def cb_cancel_legacy(callback: CallbackQuery, state: FSMContext):
     """Обработка устаревшей кнопки «Отмена»; новые клавиатуры шлют cancel_accounts / cancel_mailing / cancel_proxy."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -109,16 +118,33 @@ async def safe_edit_message(
             raise
 
 
+def _mask_proxy_url_for_log(proxy_url: str) -> str:
+    """Маскировать credentials в proxy-URL для логов: user:pass → ***."""
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+
+        parts = urlsplit(proxy_url)
+        if parts.username or parts.password:
+            netloc = parts.hostname or ""
+            if parts.port:
+                netloc = f"{netloc}:{parts.port}"
+            masked = parts._replace(netloc=netloc)
+            return urlunsplit(masked) + " (credentials hidden)"
+        return proxy_url
+    except Exception:
+        return "<proxy url hidden>"
+
+
 async def run_bot():
     """Запуск бота."""
     from bot.config import get_control_bot_proxy
     from aiogram.client.session.aiohttp import AiohttpSession
-    
+
     log.info("Запуск Control Bot...")
 
     # 1. Проверка, что aiohttp-socks установлен
     try:
-        import aiohttp_socks
+        import aiohttp_socks  # noqa: F401
         log.info("✅ aiohttp-socks установлен")
     except ImportError:
         log.critical("❌ Не установлен пакет aiohttp-socks!")
@@ -128,10 +154,12 @@ async def run_bot():
     # 2. Получение конфигурации прокси
     proxy_config = get_control_bot_proxy()
 
-    # 3. Создание сессии — максимально просто
+    # 3. Создание сессии. aiogram сам создаёт aiohttp-socks connector
+    #    для socks5:// через параметр proxy. Никогда не логируем user:pass.
     if proxy_config and proxy_config.get('url'):
-        proxy_url = proxy_config['url']
-        log.info(f"🌐 Создание сессии с прокси: {proxy_url}")
+        proxy_url = str(proxy_config['url'])
+        safe_label = _mask_proxy_url_for_log(proxy_url)
+        log.info(f"🌐 Создание сессии с прокси: {safe_label}")
         session = AiohttpSession(proxy=proxy_url)
     else:
         log.info("🌐 Прокси для Control Bot не настроен — используется прямое подключение")
@@ -166,12 +194,18 @@ async def run_bot():
     dp.include_router(clients_router)
     dp.include_router(mailing_router)
     dp.include_router(openrouter_key_router)
+    dp.include_router(ai_provider_menu_router)
+    dp.include_router(comfy_photo_router)
+    dp.include_router(comfy_identity_router)
+    dp.include_router(community_link_check_router)
+    dp.include_router(chat_campaign_router)
     dp.include_router(neurochat_router)
     dp.include_router(proxy_router)
     dp.include_router(warmup_menu_router)
     dp.include_router(username_list_tool_router)
     dp.include_router(system_status_router)
     dp.include_router(fleet_cleanup_router)
+    dp.include_router(managed_reactions_router)
     dp.include_router(legacy_cancel_router)
 
     # 7. Хендлеры
@@ -181,15 +215,13 @@ async def run_bot():
         user_id = message.from_user.id
 
         # Проверка доступа (только владелец)
-        if user_id != OWNER_ID:
+        if not is_authorized_user(user_id):
             await message.answer("⛔ Доступ запрещён. Этот бот предназначен только для владельца.")
             log.warning(f"Попытка доступа от unauthorized пользователя: {user_id}")
             return
 
         await message.answer(
-            "👋 <b>Добро пожаловать в CoreBot!</b>\n\n"
-            "Это система для массовой рассылки сообщений в Telegram.\n\n"
-            "📋 <b>Главное меню:</b>",
+            "<b>CoreBot V2</b>\n\nВыберите задачу. Статус системы: /status.",
             reply_markup=get_main_keyboard(),
             parse_mode=ParseMode.HTML,
         )
@@ -198,7 +230,7 @@ async def run_bot():
     @dp.message(Command("help"))
     async def cmd_help(message: Message):
         """Обработчик команды /help."""
-        if message.from_user.id != OWNER_ID:
+        if not is_authorized_user(message.from_user.id):
             return
 
         help_text = (
@@ -207,6 +239,7 @@ async def run_bot():
             "🔹 /help - Эта справка\n"
             "🔹 /status - Статус системы\n"
             "🔹 /start_mailing - Запустить рассылку\n\n"
+            "🔹 /chat_campaign - Публикация в своих чатах\n\n"
             "<b>Функционал:</b>\n"
             "• Управление аккаунтами (загрузка Tdata)\n"
             "• Импорт базы клиентов из TXT\n"
@@ -219,7 +252,7 @@ async def run_bot():
     @dp.message(Command("start_mailing"))
     async def cmd_start_mailing(message: Message):
         """Запуск активной рассылки."""
-        if message.from_user.id != OWNER_ID:
+        if not is_authorized_user(message.from_user.id):
             return
 
         from workers.manager import worker_manager
@@ -246,7 +279,7 @@ async def run_bot():
     @dp.message(Command("status"))
     async def cmd_status(message: Message):
         """Обработчик команды /status — статус системы (единый билдер)."""
-        if message.from_user.id != OWNER_ID:
+        if not is_authorized_user(message.from_user.id):
             return
         text = await build_system_status_text()
         await message.answer(
@@ -258,25 +291,35 @@ async def run_bot():
     @dp.callback_query(F.data == "menu_accounts")
     async def cb_accounts(callback: CallbackQuery, state: FSMContext):
         """Кнопка управления аккаунтами."""
-        if callback.from_user.id != OWNER_ID:
+        if not is_authorized_user(callback.from_user.id):
             await callback.answer("⛔ Доступ запрещён", show_alert=True)
             return
 
         await state.clear()
         await safe_edit_message(
             callback,
-            "👥 <b>Управление аккаунтами</b>\n\n"
-            "Здесь вы можете загрузить аккаунты через Tdata.\n\n"
-            "📁 Отправьте ZIP-архив с папкой tdata,\n"
-            "или выберите действие:",
+            "👥 <b>Аккаунты</b>\n\nИмпорт, управление и группы.",
             reply_markup=get_accounts_keyboard(),
+        )
+        await callback.answer()
+
+    @dp.callback_query(F.data == "menu_ai")
+    async def cb_ai(callback: CallbackQuery, state: FSMContext):
+        if not is_authorized_user(callback.from_user.id):
+            await callback.answer("⛔ Доступ запрещён", show_alert=True)
+            return
+        await state.clear()
+        await safe_edit_message(
+            callback,
+            "🧠 <b>ИИ</b>\n\nУправление нейроответами и настройками моделей.",
+            reply_markup=get_ai_keyboard(),
         )
         await callback.answer()
 
     @dp.callback_query(F.data == "menu_proxy")
     async def cb_proxy(callback: CallbackQuery):
         """Кнопка управления прокси."""
-        if callback.from_user.id != OWNER_ID:
+        if not is_authorized_user(callback.from_user.id):
             await callback.answer("⛔ Доступ запрещён", show_alert=True)
             return
 
@@ -284,7 +327,7 @@ async def run_bot():
             callback,
             "🌐 <b>Управление прокси</b>\n\n"
             "Добавляйте прокси и привязывайте их к аккаунтам.\n"
-            "Формат: user:pass@host:port",
+            "Формат листа: host:port@user:pass",
             reply_markup=get_proxy_keyboard(),
         )
         await callback.answer()
@@ -292,15 +335,13 @@ async def run_bot():
     @dp.callback_query(F.data == "menu_back")
     async def cb_back(callback: CallbackQuery):
         """Кнопка назад в главное меню."""
-        if callback.from_user.id != OWNER_ID:
+        if not is_authorized_user(callback.from_user.id):
             await callback.answer("⛔ Доступ запрещён", show_alert=True)
             return
 
         await safe_edit_message(
             callback,
-            "👋 <b>Добро пожаловать в CoreBot!</b>\n\n"
-            "Это система для массовой рассылки сообщений в Telegram.\n\n"
-            "📋 <b>Главное меню:</b>",
+            "<b>CoreBot V2</b>\n\nВыберите задачу. Статус системы: /status.",
             reply_markup=get_main_keyboard(),
         )
         await callback.answer()
@@ -320,9 +361,27 @@ async def run_bot():
     # 9. Запуск polling
     log.info("Бот запущен и ожидает команды...")
 
+    parser_task = None
+    if os.getenv("PARSER_EMBEDDED", "1").strip().lower() in {"0", "false", "off", "no"}:
+        from workers.parser.task_runner import run_forever as run_parser_forever
+
+        parser_task = asyncio.create_task(
+            run_parser_forever(runtime_workers=True), name="bot-parser-loop"
+        )
+        log.info("Парсер запущен с подключёнными аккаунтами бота")
+
+    proxy_health_task = asyncio.create_task(
+        worker_manager.run_proxy_health_loop(), name="bot-proxy-health-loop"
+    )
+
     try:
         await dp.start_polling(bot)
     finally:
+        proxy_health_task.cancel()
+        await asyncio.gather(proxy_health_task, return_exceptions=True)
+        if parser_task is not None:
+            parser_task.cancel()
+            await asyncio.gather(parser_task, return_exceptions=True)
         # Корректное закрытие сессии (в AiohttpSession нет атрибута `closed`).
         if bot.session:
             try:

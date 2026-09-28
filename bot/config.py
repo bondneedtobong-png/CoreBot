@@ -22,6 +22,18 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 # Владелец бота
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+_extra_owner_ids = os.getenv("BOT_ADDITIONAL_OWNER_IDS", "").strip()
+try:
+    ADDITIONAL_OWNER_IDS = frozenset(
+        int(value.strip()) for value in _extra_owner_ids.split(",") if value.strip()
+    )
+except ValueError as exc:
+    raise ValueError("BOT_ADDITIONAL_OWNER_IDS must contain numeric Telegram IDs") from exc
+AUTHORIZED_OWNER_IDS = frozenset({OWNER_ID, *ADDITIONAL_OWNER_IDS}) - {0}
+
+
+def is_authorized_user(user_id: int | None) -> bool:
+    return user_id is not None and int(user_id) in AUTHORIZED_OWNER_IDS
 
 # База данных
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{BASE_DIR}/data/corebot.db")
@@ -41,18 +53,18 @@ BANDWIDTH_SKIP_PROFILE_ENRICH = os.getenv("BANDWIDTH_SKIP_PROFILE_ENRICH", "1").
 # Не трогать SpamBot автоматически в обычных сценариях
 BANDWIDTH_SKIP_SPAMBOT_CHECK = os.getenv("BANDWIDTH_SKIP_SPAMBOT_CHECK", "1").strip().lower() in ("1", "true", "yes", "on")
 
-# Фаза 2: параметры прогрева (каркас)
-WARMUP_ENABLED = os.getenv("WARMUP_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
-WARMUP_BASE_DELAY_SEC = float(os.getenv("WARMUP_BASE_DELAY_SEC", "45"))
-WARMUP_JITTER_SEC = float(os.getenv("WARMUP_JITTER_SEC", "25"))
-WARMUP_DAILY_ACTION_LIMIT = int(os.getenv("WARMUP_DAILY_ACTION_LIMIT", "40"))
+# Планировщик запускается при старте; действия включаются отдельно для каждого аккаунта.
+WARMUP_ENABLED = os.getenv("WARMUP_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
+WARMUP_BASE_DELAY_SEC = float(os.getenv("WARMUP_BASE_DELAY_SEC", "3600"))
+WARMUP_JITTER_SEC = float(os.getenv("WARMUP_JITTER_SEC", "900"))
+WARMUP_DAILY_ACTION_LIMIT = int(os.getenv("WARMUP_DAILY_ACTION_LIMIT", "4"))
 
 # OpenRouter / нейрочат
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 NEUROCHAT_ENABLED = os.getenv("NEUROCHAT_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
 OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "").strip()
-DEFAULT_NEURO_MODEL = os.getenv("DEFAULT_NEURO_MODEL", "openai/gpt-oss-120b:free").strip()
+DEFAULT_NEURO_MODEL = os.getenv("DEFAULT_NEURO_MODEL", "openrouter/free").strip()
 NEURO_FALLBACK_MODELS = [
     x.strip() for x in os.getenv("NEURO_FALLBACK_MODELS", "").split(",") if x.strip()
 ]

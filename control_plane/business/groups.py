@@ -18,7 +18,7 @@ from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from control_plane.business.db import get_bot_db
+from control_plane.business.db import commit_sync, get_bot_db
 from control_plane.business.schemas import (
     GroupAccountsItem,
     GroupAccountsSet,
@@ -79,7 +79,7 @@ def create_group(
     g = Group(name=name)
     db.add(g)
     try:
-        db.commit()
+        commit_sync(db)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="group with this name exists")
@@ -102,7 +102,7 @@ def rename_group(
         raise HTTPException(status_code=400, detail="empty name")
     g.name = name
     try:
-        db.commit()
+        commit_sync(db)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="group with this name exists")
@@ -131,7 +131,7 @@ def delete_group(
         delete(account_groups).where(account_groups.c.group_id == group_id)
     )
     db.delete(g)
-    db.commit()
+    commit_sync(db)
 
 
 @router.get("/{group_id}/accounts", response_model=list[GroupAccountsItem])
@@ -193,7 +193,7 @@ def set_group_accounts(
             insert(account_groups),
             [{"account_id": aid, "group_id": group_id} for aid in desired_ids],
         )
-    db.commit()
+    commit_sync(db)
     return list_group_accounts(group_id, db, _user)  # type: ignore[arg-type]
 
 
@@ -224,7 +224,7 @@ def add_group_account(
     db.execute(
         insert(account_groups).values(account_id=account_id, group_id=group_id)
     )
-    db.commit()
+    commit_sync(db)
 
 
 @router.delete(
@@ -246,4 +246,4 @@ def remove_group_account(
             account_groups.c.account_id == account_id,
         )
     )
-    db.commit()
+    commit_sync(db)

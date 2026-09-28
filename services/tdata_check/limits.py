@@ -27,6 +27,9 @@ def _get_float(name: str, default: float) -> float:
 #: Максимальный размер принимаемого ZIP-архива (байты). Дефолт 200 МБ.
 MAX_ARCHIVE_BYTES = _get_int("TDATA_CHECK_MAX_ARCHIVE_BYTES", 200 * 1024 * 1024)
 
+#: Maximum uploaded Telethon SQLite session size (bytes). Checked before temp files.
+MAX_SESSION_BYTES = 16 * 1024 * 1024
+
 #: Максимальное число TData-папок из одного ZIP. Остаток отбрасывается
 #: (run.truncated=True), run остаётся partial success.
 MAX_FOLDERS = _get_int("TDATA_CHECK_MAX_FOLDERS", 20)
@@ -50,6 +53,7 @@ RUN_STORE_CAP = _get_int("TDATA_CHECK_RUN_STORE_CAP", 100)
 
 __all__ = [
     "MAX_ARCHIVE_BYTES",
+    "MAX_SESSION_BYTES",
     "MAX_FOLDERS",
     "MAX_CONCURRENCY",
     "CONNECT_TIMEOUT_SEC",

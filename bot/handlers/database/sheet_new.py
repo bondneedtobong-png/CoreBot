@@ -7,7 +7,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from bot.config import OWNER_ID, FILES_DIR
+from bot.config import is_authorized_user
+from bot.config import FILES_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.handlers.database.sheet_import_common import parse_usernames_from_txt
 from bot.keyboards.database_menu import kb_database_sheets
@@ -27,7 +28,7 @@ class SheetNewUpload(StatesGroup):
 
 @router.callback_query(F.data == "db_sheet_211")
 async def cb_db_sheet_211(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -46,7 +47,7 @@ async def cb_db_sheet_211(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_db_sheet211")
 async def cb_cancel_db_sheet_211(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -60,7 +61,7 @@ async def cb_cancel_db_sheet_211(callback: CallbackQuery, state: FSMContext):
 
 @router.message(SheetNewUpload.waiting_for_file, F.document)
 async def process_sheet_new_txt(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     document = message.document
     if not document.file_name.lower().endswith(".txt"):

@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from bot.config import DEFAULT_NEURO_SYSTEM_PROMPT, NEURO_MAILING_PROMPTS_DIR
+from sqlalchemy.engine import make_url
+
+from bot.config import DATABASE_URL, DEFAULT_NEURO_SYSTEM_PROMPT, NEURO_MAILING_PROMPTS_DIR
 
 _COMMAND_TAGS = ("[SEND_LINK]", "[STOP]", "[ACCEPT]", "[DECLINE]", "[HATER]")
 _COMMANDS_APPENDIX = (
@@ -84,11 +87,32 @@ def neuro_prompt_file_path(mailing_id: int) -> Path:
     return NEURO_MAILING_PROMPTS_DIR / str(mailing_id) / "system.txt"
 
 
+def archive_orphan_prompt(mailing_id: int, *, database_url: str) -> Path | None:
+    """Keep an old prompt when the real bot database reuses a deleted mailing's ID."""
+    actual = make_url(database_url).database
+    configured = make_url(DATABASE_URL).database
+    if not actual or not configured or Path(actual).resolve() != Path(configured).resolve():
+        return None
+    source = neuro_prompt_file_path(mailing_id)
+    if not source.is_file():
+        return None
+    archive_dir = NEURO_MAILING_PROMPTS_DIR / "_orphaned"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    destination = archive_dir / f"mailing-{mailing_id}-{uuid4().hex}.txt"
+    source.rename(destination)
+    return destination
+
+
 def _ensure_commands_reference(text: str) -> str:
     current = text or ""
     if all(tag in current for tag in _COMMAND_TAGS):
         return current
     return f"{current.rstrip()}{_COMMANDS_APPENDIX}"
+
+
+def prepare_system_prompt_text(text: str) -> str:
+    """Apply the same command reference as the live neurochat prompt loader."""
+    return _ensure_commands_reference(text)
 
 
 def load_system_prompt(mailing_id: int) -> str:

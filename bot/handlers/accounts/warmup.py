@@ -2,7 +2,7 @@
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from bot.handlers.accounts.common import show_account_card
 from database.repository import db
 from database.repositories import AccountRepository
@@ -13,7 +13,7 @@ router = Router()
 
 @router.callback_query(F.data.startswith("account_warmup_toggle_"))
 async def cb_account_warmup_toggle(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 

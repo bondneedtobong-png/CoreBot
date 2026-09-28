@@ -19,7 +19,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from control_plane.business.db import get_bot_db
+from control_plane.business.db import commit_sync, get_bot_db
 from control_plane.business.schemas import LinkCreate, LinkItem
 from control_plane.deps import get_current_user, require_operator_write
 from control_plane.models import User
@@ -103,7 +103,7 @@ def create_link(
         mailing_id=mailing_id,
     )
     db.add(link)
-    db.commit()
+    commit_sync(db)
     db.refresh(link)
     return _serialize(link)
 
@@ -132,7 +132,7 @@ def delete_link(
         raise HTTPException(status_code=404, detail="link not found")
     db.execute(delete(LinkHit).where(LinkHit.link_id == link_id))
     db.delete(link)
-    db.commit()
+    commit_sync(db)
 
 
 @router.get("/r/{code}", include_in_schema=False)
@@ -159,7 +159,7 @@ def redirect_link(
                 ua=ua or None,
             )
         )
-        db.commit()
+        commit_sync(db)
     except Exception:
         db.rollback()
     return RedirectResponse(url=link.target_url, status_code=307)

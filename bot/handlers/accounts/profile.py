@@ -4,7 +4,8 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.config import OWNER_ID, SESSIONS_DIR
+from bot.config import is_authorized_user
+from bot.config import SESSIONS_DIR
 from bot.handlers.accounts.common import build_account_card_text, safe_edit_message
 from bot.handlers.accounts.states import EditProfileFSM
 from bot.keyboards.main import (
@@ -21,7 +22,7 @@ router = Router()
 
 @router.callback_query(F.data.startswith("account_edit_profile_"))
 async def cb_edit_profile(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -39,7 +40,7 @@ async def cb_edit_profile(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("account_edit_name_"))
 async def cb_edit_name(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -66,7 +67,7 @@ async def cb_edit_name(callback: CallbackQuery, state: FSMContext):
 
 @router.message(EditProfileFSM.waiting_for_name)
 async def process_edit_name(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     full_name = (message.text or "").strip()
@@ -96,7 +97,7 @@ async def process_edit_name(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        from workers.manager import Worker
+        from workers.manager import account_worker_for_action
 
         session_path = SESSIONS_DIR / f"{account.session_name}.session"
         if not session_path.exists():
@@ -104,7 +105,7 @@ async def process_edit_name(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        temp_worker = Worker(account, session_path, account.proxy)
+        temp_worker = account_worker_for_action(account, session_path, account.proxy)
         connected = await temp_worker.connect()
         if not connected or not temp_worker.client:
             await message.answer("❌ Не удалось подключить аккаунт.")
@@ -140,7 +141,7 @@ async def process_edit_name(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("account_edit_bio_"))
 async def cb_edit_bio(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -165,7 +166,7 @@ async def cb_edit_bio(callback: CallbackQuery, state: FSMContext):
 
 @router.message(EditProfileFSM.waiting_for_bio)
 async def process_edit_bio(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     new_bio = (message.text or "").strip()
@@ -191,7 +192,7 @@ async def process_edit_bio(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        from workers.manager import Worker
+        from workers.manager import account_worker_for_action
 
         session_path = SESSIONS_DIR / f"{account.session_name}.session"
         if not session_path.exists():
@@ -199,7 +200,7 @@ async def process_edit_bio(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        temp_worker = Worker(account, session_path, account.proxy)
+        temp_worker = account_worker_for_action(account, session_path, account.proxy)
         connected = await temp_worker.connect()
         if not connected or not temp_worker.client:
             await message.answer("❌ Не удалось подключить аккаунт.")
@@ -235,7 +236,7 @@ async def process_edit_bio(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("account_edit_username_"))
 async def cb_edit_username(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -260,7 +261,7 @@ async def cb_edit_username(callback: CallbackQuery, state: FSMContext):
 
 @router.message(EditProfileFSM.waiting_for_username)
 async def process_edit_username(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     new_username = (message.text or "").strip().lstrip("@")
@@ -286,7 +287,7 @@ async def process_edit_username(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        from workers.manager import Worker
+        from workers.manager import account_worker_for_action
         from telethon.errors import FloodWaitError, UsernameInvalidError, UsernameOccupiedError
         from telethon.tl.functions.account import UpdateUsernameRequest
 
@@ -296,7 +297,7 @@ async def process_edit_username(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        temp_worker = Worker(account, session_path, account.proxy)
+        temp_worker = account_worker_for_action(account, session_path, account.proxy)
         connected = await temp_worker.connect()
         if not connected or not temp_worker.client:
             await message.answer("❌ Не удалось подключить аккаунт.")

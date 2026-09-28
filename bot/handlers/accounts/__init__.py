@@ -22,11 +22,13 @@ from . import (
     groups,
     list_card,
     membership_delete,
+    navigation,
     photos,
     profile,
+    profile_templates,
     proxy_assign,
     tags,
-    tdata,
+    tdata_v2,
     tdata_check,
     twofa,
     warmup,
@@ -34,11 +36,13 @@ from . import (
 
 router = Router()
 
-router.include_router(tdata.router)
+router.include_router(tdata_v2.router)
 router.include_router(tdata_check.router)
 router.include_router(list_card.router)
+router.include_router(navigation.router)
 router.include_router(groups.router)
 router.include_router(profile.router)
+router.include_router(profile_templates.router)
 router.include_router(photos.router)
 router.include_router(twofa.router)
 router.include_router(membership_delete.router)

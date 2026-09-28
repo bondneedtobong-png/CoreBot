@@ -25,5 +25,16 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+        try:
+            if db.in_transaction():
+                db.rollback()
+        except Exception:
+            pass
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()

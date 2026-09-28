@@ -16,7 +16,7 @@ models):
   needs no migration of existing tables and therefore does not touch the
   contracts of tasks 02/04–07 (their code is only *called* from here).
 
-Timing numbers (all documented, all derived from ``docs/operations/SLO.md``):
+Timing numbers (documented in ``AGENTS.md`` §2):
 
 * :data:`HEARTBEAT_INTERVAL_SEC` = 30 s — the bot process rewrites its row
   at most every 30 s, i.e. well within the required heartbeat interval
@@ -230,6 +230,15 @@ async def record_consumer_tick(component: str) -> bool:
         component,
         {"last_tick": utcnow_naive().isoformat(), "kind": "consumer-tick"},
     )
+
+
+async def record_tick_best_effort(component: str) -> None:
+    """Shared helper для консьюмеров: heartbeat троттлится внутри beat()
+    и никогда не валит цикл. Убирает дубли heartbeat/start-stop/load+connect."""
+    try:
+        await record_consumer_tick(component)
+    except Exception:
+        pass
 
 
 def default_bot_detail() -> dict[str, Any]:

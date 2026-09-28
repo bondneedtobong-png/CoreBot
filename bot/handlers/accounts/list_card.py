@@ -1,10 +1,13 @@
 """Список аккаунтов, карточка, перепроверка авторизации."""
+from datetime import datetime
+
 from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.config import OWNER_ID, SESSIONS_DIR
+from bot.config import is_authorized_user
+from bot.config import SESSIONS_DIR
 from bot.handlers.accounts.common import build_account_card_text, safe_edit_message, show_account_card
 from bot.handlers.accounts.states import AccountListLabelFSM
 from bot.keyboards.main import (
@@ -14,13 +17,111 @@ from bot.keyboards.main import (
     get_cancel_with_back_keyboard,
     get_context_back_keyboard,
 )
-from database.models import AccountStatus
+from database.models import (
+    AccountHealthCheck,
+    AccountImportEvent,
+    AccountSafetyEvent,
+    AccountStatus,
+    MailingLog,
+)
+from sqlalchemy import select
 from database.repository import db
 from database.session import session_scope
 from database.repositories import AccountRepository
 from utils.logger import log
 
 router = Router()
+
+ACCOUNT_HISTORY_LIMIT = 20
+
+
+def _history_status(value: object) -> str:
+    """Render only known status values; never expose free-form DB details."""
+    statuses = {
+        "success": "успешно", "completed": "завершено", "failed": "ошибка",
+        "pending": "ожидает", "processing": "выполняется", "cancelled": "отменено",
+        "authorized": "авторизован", "unauthorized": "не авторизован",
+        "unknown": "неизвестно", "ok": "норма", "warning": "предупреждение",
+        "blocked": "ограничен", "restricted": "ограничен", "safe": "без ограничений",
+        "limited": "ограничен", "ready": "готов", "failed_auth": "ошибка авторизации",
+        "paused": "приостановлен", "resume_requested": "запрошено возобновление",
+        "verification_failed": "проверка не пройдена", "resumed": "возобновлён",
+        "chat_paused": "чат приостановлен",
+    }
+    return statuses.get(str(value or "").lower(), "—")
+
+
+def _format_history_time(value: object) -> str:
+    if value is None:
+        return "время неизвестно"
+    return value.strftime("%d.%m.%Y %H:%M UTC")
+
+
+async def _load_account_history(session, account_id: int) -> list[tuple[object, str, str]]:
+    """Collect bounded, secret-free metadata rows for one account."""
+    events: list[tuple[object, str, str]] = []
+    health_rows = (await session.scalars(
+        select(AccountHealthCheck).where(AccountHealthCheck.account_id == account_id)
+        .order_by(AccountHealthCheck.requested_at.desc()).limit(ACCOUNT_HISTORY_LIMIT)
+    )).all()
+    events.extend((row.requested_at, "Проверка", _history_status(row.status)) for row in health_rows)
+
+    safety_rows = (await session.scalars(
+        select(AccountSafetyEvent).where(AccountSafetyEvent.account_id == account_id)
+        .order_by(AccountSafetyEvent.created_at.desc()).limit(ACCOUNT_HISTORY_LIMIT)
+    )).all()
+    events.extend((row.created_at, "Безопасность", _history_status(row.event_type)) for row in safety_rows)
+
+    import_rows = (await session.scalars(
+        select(AccountImportEvent).where(AccountImportEvent.account_id == account_id)
+        .order_by(AccountImportEvent.created_at.desc()).limit(ACCOUNT_HISTORY_LIMIT)
+    )).all()
+    events.extend((row.created_at, "Импорт", "аккаунт добавлен") for row in import_rows)
+
+    mailing_rows = (await session.scalars(
+        select(MailingLog).where(MailingLog.account_id == account_id)
+        .order_by(MailingLog.sent_at.desc()).limit(ACCOUNT_HISTORY_LIMIT)
+    )).all()
+    events.extend((row.sent_at, "Рассылка", "отправлено" if row.success else "ошибка") for row in mailing_rows)
+    events.sort(key=lambda event: event[0] or datetime.min, reverse=True)
+    return events[:ACCOUNT_HISTORY_LIMIT]
+
+
+@router.callback_query(F.data.startswith("account_history_"))
+async def cb_account_history(callback: CallbackQuery):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    raw_id = callback.data.removeprefix("account_history_")
+    if not raw_id.isdigit() or len(raw_id) > 10 or int(raw_id) < 1:
+        await callback.answer("Некорректный аккаунт", show_alert=True)
+        return
+    account_id = int(raw_id)
+    await callback.answer()
+    async with session_scope() as session:
+        account = await AccountRepository.get_by_id(session, account_id)
+        if account is None:
+            await safe_edit_message(
+                callback.message, "❌ Аккаунт не найден.",
+                reply_markup=get_context_back_keyboard("accounts_list"),
+            )
+            return
+        events = await _load_account_history(session, account_id)
+
+    lines = [f"🕘 История аккаунта #{account_id}", ""]
+    if events:
+        lines.extend(
+            f"{_format_history_time(timestamp)} · {kind} · {status}"
+            for timestamp, kind, status in events
+        )
+    else:
+        lines.append("Событий пока нет.")
+    await safe_edit_message(
+        callback.message,
+        "\n".join(lines),
+        reply_markup=get_context_back_keyboard(f"account_view_{account_id}"),
+    )
 
 
 def _accounts_list_page_from_data(data: str) -> int:
@@ -33,7 +134,7 @@ def _accounts_list_page_from_data(data: str) -> int:
 
 @router.callback_query(F.data == "accounts_list_page_info")
 async def cb_accounts_list_page_info(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     await callback.answer("Номер страницы · листайте ◀ ▶", show_alert=True)
@@ -42,7 +143,7 @@ async def cb_accounts_list_page_info(callback: CallbackQuery):
 @router.callback_query(F.data == "accounts_list")
 @router.callback_query(F.data.startswith("accounts_list_p_"))
 async def cb_accounts_list(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -91,7 +192,7 @@ async def cb_accounts_list(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("account_view_"))
 async def cb_account_view(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -140,7 +241,7 @@ async def cb_account_view(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("account_list_label_"))
 async def cb_account_list_label_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -172,7 +273,7 @@ async def cb_account_list_label_start(callback: CallbackQuery, state: FSMContext
 
 @router.message(AccountListLabelFSM.waiting_for_label)
 async def process_account_list_label(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     text = (message.text or "").strip()
@@ -218,7 +319,7 @@ async def process_account_list_label(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("account_recheck_auth_"))
 async def cb_account_recheck_auth(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -235,14 +336,14 @@ async def cb_account_recheck_auth(callback: CallbackQuery):
             await safe_edit_message(status_msg, "❌ Аккаунт не найден.", reply_markup=get_context_back_keyboard("accounts_list"))
             return
 
-        from workers.manager import Worker
+        from workers.manager import account_worker_for_action
 
         session_path = SESSIONS_DIR / f"{account.session_name}.session"
         is_authorized = False
         auth_status = "❓ Не проверено"
 
         if session_path.exists():
-            temp_worker = Worker(account, session_path, account.proxy)
+            temp_worker = account_worker_for_action(account, session_path, account.proxy)
             connected = await temp_worker.connect()
 
             if connected and temp_worker.client:

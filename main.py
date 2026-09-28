@@ -4,7 +4,6 @@
 """
 import asyncio
 import os
-import sys
 
 from loguru import logger
 
@@ -14,29 +13,29 @@ from utils.logger import setup_logger
 from utils.telemetry import telemetry_emitter
 
 
-async def main():
-    """Основная функция запуска."""
+async def main() -> int:
+    """Основная функция запуска. Возвращает exit-code, sys.exit только в __main__."""
     # Настройка логгера
     setup_logger(LOG_LEVEL)
-    
+
     log = logger
-    
+
     log.info("=" * 50)
     log.info("CoreBot - Telegram Mass Mailer")
     log.info("=" * 50)
-    
+
     # Валидация конфигурации
     if not validate_config():
         log.error("Конфигурация некорректна. Проверьте .env файл")
         log.error("Заполните API_ID, API_HASH, BOT_TOKEN и OWNER_ID")
-        sys.exit(1)
-    
+        return 1
+
     # Проверка OWNER_ID
     if OWNER_ID == 0:
         log.error("OWNER_ID не установлен. Укажите ваш Telegram ID в .env")
         log.error("Узнать ID можно через бота @userinfobot")
-        sys.exit(1)
-    
+        return 1
+
     log.info(f"Владелец бота: {OWNER_ID}")
 
     # Task 04: production fail-fast до подключения БД/парсера.
@@ -49,7 +48,7 @@ async def main():
         except RuntimeError as exc:
             log.error(str(exc))
             log.error("Проверьте .env: python -m tools.validate_config --mode production")
-            sys.exit(2)
+            return 2
 
     # Инициализация базы данных
     from database.repository import db
@@ -58,7 +57,7 @@ async def main():
         log.info("База данных подключена")
     except Exception as e:
         log.error(f"Ошибка подключения к БД: {e}")
-        sys.exit(1)
+        return 1
     
     # Запуск бота
     from bot.main import run_bot
@@ -77,10 +76,13 @@ async def main():
         bot_command_consumer.start()
         bot_heartbeat.start()
         await run_bot()
-    except KeyboardInterrupt:
-        log.info("Получен сигнал остановки")
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        log.info("Получен сигнал остановки (KeyboardInterrupt/SIGTERM/Cancelled)")
+    except SystemExit:
+        raise
     except Exception as e:
         log.error(f"Критическая ошибка бота: {e}")
+        return 1
     finally:
         try:
             from workers.manager import worker_manager
@@ -108,12 +110,18 @@ async def main():
         except Exception as e:
             log.warning(f"Ошибка остановки BotCommandConsumer: {e}")
         # Закрытие подключения к БД
-        await db.disconnect()
+        try:
+            await db.disconnect()
+        except Exception as e:
+            log.warning(f"Ошибка disconnect БД: {e}")
         log.info("Приложение остановлено")
+    return 0
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        raise SystemExit(asyncio.run(main()))
     except KeyboardInterrupt:
+        pass
+    except asyncio.CancelledError:
         pass

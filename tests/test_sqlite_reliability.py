@@ -339,6 +339,8 @@ def test_no_blanket_integrityerror_around_commits():
         "database/repositories.py",  # Account/Client.create: idempotent-возврат
         "control_plane/business/proxies.py",  # 409 на границе API
         "control_plane/business/groups.py",  # 409 на границе API
+        "control_plane/business/mailings.py",  # 409 only for unique queued-run index
+        "control_plane/business/account_safety.py",  # 409 only for one active health check per account
         "control_plane/business/tdata_routes.py",  # idempotent-возврат дубля
         "bot/handlers/accounts/groups.py",  # сообщение "уже существует"
     }

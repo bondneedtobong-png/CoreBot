@@ -14,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from bot.keyboards.database_menu import kb_database_delete
 from database.models import ClientStatus
 from database.session import session_scope
@@ -25,7 +25,7 @@ router = Router()
 
 
 def _owner(uid: int) -> bool:
-    return uid == OWNER_ID
+    return is_authorized_user(uid)
 
 
 def _send_txt(text: str, filename: str) -> BufferedInputFile:

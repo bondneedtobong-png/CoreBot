@@ -19,7 +19,8 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.config import OWNER_ID, SESSIONS_DIR
+from bot.config import is_authorized_user
+from bot.config import SESSIONS_DIR
 from bot.keyboards.main import get_accounts_keyboard, get_proxy_keyboard
 from database.session import session_scope
 from services.database import fleet_cleanup
@@ -29,7 +30,7 @@ router = Router()
 
 
 def _owner(uid: int) -> bool:
-    return uid == OWNER_ID
+    return is_authorized_user(uid)
 
 
 async def _safe_edit(callback: CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:

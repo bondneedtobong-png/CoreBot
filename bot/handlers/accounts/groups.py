@@ -9,7 +9,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.exc import IntegrityError
 
-from bot.config import AVATARS_TEMP_DIR, OWNER_ID, SESSIONS_DIR
+from bot.config import is_authorized_user
+from bot.config import AVATARS_TEMP_DIR, SESSIONS_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.handlers.accounts.states import GroupBulk2FAFSM, GroupBulkProfileFSM, GroupManageFSM
 from bot.keyboards.main import (
@@ -39,12 +40,19 @@ def _group_bulk_profile_menu_keyboard(gid: int) -> InlineKeyboardMarkup:
     )
 
 
+@router.callback_query(F.data == "accounts_groups_page_info")
+async def cb_account_groups_page_info(callback: CallbackQuery):
+    await callback.answer("Листайте группы кнопками ◀ ▶")
+
+
 @router.callback_query(F.data == "accounts_groups")
+@router.callback_query(F.data.startswith("accounts_groups_p_"))
 async def cb_accounts_groups(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
+    page = int(callback.data.rsplit("_", 1)[-1]) if callback.data.startswith("accounts_groups_p_") else 0
     await state.clear()
     await callback.answer()
     try:
@@ -67,7 +75,7 @@ async def cb_accounts_groups(callback: CallbackQuery, state: FSMContext):
         await safe_edit_message(
             callback.message,
             text,
-            reply_markup=get_account_groups_menu_keyboard(groups),
+            reply_markup=get_account_groups_menu_keyboard(groups, page=page),
             parse_mode=ParseMode.HTML,
         )
     except Exception as e:
@@ -113,7 +121,7 @@ async def _render_group_detail(message, gid: int) -> bool:
 
 @router.callback_query(F.data.startswith("group_view_"))
 async def cb_group_view(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -125,7 +133,7 @@ async def cb_group_view(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "groups_create_start")
 async def cb_groups_create_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -142,7 +150,7 @@ async def cb_groups_create_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(GroupManageFSM.waiting_for_group_name)
 async def process_group_name(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     name = (message.text or "").strip()
@@ -228,7 +236,7 @@ def _format_spam_results(g_name: str, results: dict, id_to_account: dict) -> str
 
 @router.callback_query(F.data.startswith("group_check_proxy_"))
 async def cb_group_check_proxy(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -285,7 +293,7 @@ async def cb_group_check_proxy(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("group_check_spam_"))
 async def cb_group_check_spam(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -375,7 +383,7 @@ async def _render_group_members(message, gid: int) -> None:
 
 @router.callback_query(F.data.startswith("group_members_"))
 async def cb_group_members(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -428,7 +436,7 @@ async def _render_group_add_menu(message, gid: int) -> None:
 
 @router.callback_query(F.data.startswith("group_add_menu_"))
 async def cb_group_add_menu(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -439,7 +447,7 @@ async def cb_group_add_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("group_pick_"))
 async def cb_group_pick_account(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -460,7 +468,7 @@ async def cb_group_pick_account(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("group_rm_"))
 async def cb_group_remove_account(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -481,7 +489,7 @@ async def cb_group_remove_account(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("group_delete_confirm_"))
 async def cb_group_delete_confirm(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -517,7 +525,7 @@ async def cb_group_delete_confirm(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("group_delete_yes_"))
 async def cb_group_delete_yes(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -545,7 +553,7 @@ async def cb_group_delete_yes(callback: CallbackQuery):
 
 @router.callback_query(F.data == "groups_delete_empty")
 async def cb_groups_delete_empty(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -579,7 +587,7 @@ async def cb_groups_delete_empty(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "groups_delete_empty_do")
 async def cb_groups_delete_empty_do(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -613,8 +621,10 @@ async def _safe_disconnect_worker(worker) -> None:
     try:
         if worker.client:
             await worker.disconnect()
-    except Exception:
-        pass
+    except Exception as e:
+        from utils.logger import log as _log
+
+        _log.debug(f"_safe_disconnect_worker: {e}")
 
 
 async def _apply_2fa_single_account(worker, password: str) -> None:
@@ -696,7 +706,7 @@ async def _run_group_bulk_2fa(
 
 @router.callback_query(F.data.startswith("group_bulk_2fa_start_"))
 async def cb_group_bulk_2fa_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -733,7 +743,7 @@ async def cb_group_bulk_2fa_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("group_bulk_2fa_abort_"))
 async def cb_group_bulk_2fa_abort(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -745,7 +755,7 @@ async def cb_group_bulk_2fa_abort(callback: CallbackQuery, state: FSMContext):
 
 @router.message(GroupBulk2FAFSM.waiting_for_password)
 async def process_group_bulk_2fa_password(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     pwd = (message.text or "").strip()
@@ -771,7 +781,7 @@ async def process_group_bulk_2fa_password(message: Message, state: FSMContext):
 
 @router.message(GroupBulk2FAFSM.waiting_for_password_confirm)
 async def process_group_bulk_2fa_confirm(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     confirm = (message.text or "").strip()
@@ -897,7 +907,7 @@ async def _apply_group_profile_updates(
     if not g or not g.accounts:
         raise RuntimeError("Группа пуста или не найдена")
 
-    from workers.manager import Worker
+    from workers.manager import account_worker_for_action
     from telethon.errors import FloodWaitError, UsernameInvalidError, UsernameOccupiedError
     from telethon.tl.functions.account import UpdateProfileRequest, UpdateUsernameRequest
 
@@ -913,7 +923,7 @@ async def _apply_group_profile_updates(
             failures.append((label, "файл .session не найден"))
             continue
 
-        worker = Worker(acc, session_path, acc.proxy)
+        worker = account_worker_for_action(acc, session_path, acc.proxy)
         try:
             connected = await worker.connect(quiet=True)
             if not connected or not worker.client:
@@ -976,7 +986,7 @@ async def _apply_group_profile_updates(
 
 @router.callback_query(F.data.startswith("group_bulk_profile_start_"))
 async def cb_group_bulk_profile_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -1002,7 +1012,7 @@ async def cb_group_bulk_profile_start(callback: CallbackQuery, state: FSMContext
 
 @router.callback_query(F.data.startswith("group_bulk_profile_abort_"))
 async def cb_group_bulk_profile_abort(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     gid = int(callback.data.split("_")[-1])
@@ -1013,7 +1023,7 @@ async def cb_group_bulk_profile_abort(callback: CallbackQuery, state: FSMContext
 
 @router.callback_query(F.data.startswith("group_bulk_profile_edit_name_"))
 async def cb_group_bulk_profile_edit_name(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     gid = int(callback.data.split("_")[-1])
@@ -1038,7 +1048,7 @@ async def cb_group_bulk_profile_edit_name(callback: CallbackQuery, state: FSMCon
 
 @router.callback_query(F.data.startswith("group_bulk_profile_edit_username_"))
 async def cb_group_bulk_profile_edit_username(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     gid = int(callback.data.split("_")[-1])
@@ -1061,7 +1071,7 @@ async def cb_group_bulk_profile_edit_username(callback: CallbackQuery, state: FS
 
 @router.callback_query(F.data.startswith("group_bulk_profile_edit_bio_"))
 async def cb_group_bulk_profile_edit_bio(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     gid = int(callback.data.split("_")[-1])
@@ -1083,7 +1093,7 @@ async def cb_group_bulk_profile_edit_bio(callback: CallbackQuery, state: FSMCont
 
 @router.callback_query(F.data.startswith("group_bulk_profile_edit_photo_"))
 async def cb_group_bulk_profile_edit_photo(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     gid = int(callback.data.split("_")[-1])
@@ -1105,7 +1115,7 @@ async def cb_group_bulk_profile_edit_photo(callback: CallbackQuery, state: FSMCo
 
 @router.message(GroupBulkProfileFSM.waiting_for_name_template)
 async def process_group_bulk_name_template(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     tpl = (message.text or "").strip()
@@ -1133,7 +1143,7 @@ async def process_group_bulk_name_template(message: Message, state: FSMContext):
 
 @router.message(GroupBulkProfileFSM.waiting_for_username_template)
 async def process_group_bulk_username_template(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     tpl = (message.text or "").strip().lstrip("@")
@@ -1161,7 +1171,7 @@ async def process_group_bulk_username_template(message: Message, state: FSMConte
 
 @router.message(GroupBulkProfileFSM.waiting_for_bio_template)
 async def process_group_bulk_bio_template(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     tpl = (message.text or "").strip()
@@ -1218,14 +1228,17 @@ async def _download_group_photo(message: Message, gid: int) -> Path | None:
         fi = await message.bot.get_file(file_id)
         await message.bot.download_file(fi.file_path, destination=dest)
         return dest
-    except Exception:
+    except Exception as e:
+        from utils.logger import log as _log
+
+        _log.warning(f"group photo download failed gid={gid}: {e}")
         return None
 
 
 @router.message(GroupBulkProfileFSM.waiting_for_photo, F.photo)
 @router.message(GroupBulkProfileFSM.waiting_for_photo, F.document)
 async def process_group_bulk_photo(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     if message.document and not _is_image_document(message):
         await message.answer("❌ Пришлите изображение (фото или image-документ).")
@@ -1253,13 +1266,15 @@ async def process_group_bulk_photo(message: Message, state: FSMContext):
     finally:
         try:
             temp_photo.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            from utils.logger import log as _log
+
+            _log.debug(f"temp photo cleanup: {e}")
         await state.clear()
 
 
 @router.message(GroupBulkProfileFSM.waiting_for_photo)
 async def process_group_bulk_photo_invalid(message: Message):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     await message.answer("📎 Отправьте фото или изображение документом.")

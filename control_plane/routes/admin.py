@@ -22,14 +22,24 @@ def _safe_audit(db: Session, **kwargs) -> None:
         db.rollback()
 
 
+def _commit_or_raise(db: Session) -> None:
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.post("/tenants")
 def create_tenant(name: str, db: Session = Depends(get_db), user=Depends(require_super_admin)):
     existing = db.query(Tenant).filter(Tenant.name == name).first()
     if existing:
         raise HTTPException(status_code=400, detail="Tenant already exists")
-    row = Tenant(name=name)
+    row = Tenant(name=(name or "").strip()[:160])
+    if not row.name:
+        raise HTTPException(status_code=400, detail="Bad tenant name")
     db.add(row)
-    db.commit()
+    _commit_or_raise(db)
     db.refresh(row)
     _safe_audit(
         db,
@@ -42,7 +52,11 @@ def create_tenant(name: str, db: Session = Depends(get_db), user=Depends(require
     return {"id": row.id, "name": row.name}
 
 
-@router.post("/users")
+_ALLOWED_ROLES = ("super_admin", "tenant_admin", "tenant_viewer")
+_ALLOWED_ROLES_NON_SUPER = ("tenant_admin", "tenant_viewer")
+
+
+@router.post("/users", deprecated=True)
 def create_user(
     tenant_id: int,
     username: str,
@@ -51,8 +65,19 @@ def create_user(
     db: Session = Depends(get_db),
     actor=Depends(require_admin),
 ):
+    """Legacy query-вариант. Пароль в query светится в логах — используйте POST /admin/users/create с JSON-body."""
     if actor.role != "super_admin" and actor.tenant_id != tenant_id:
         raise HTTPException(status_code=403, detail="Cross-tenant denied")
+    role = (role or "").strip()
+    if actor.role != "super_admin" and role not in _ALLOWED_ROLES_NON_SUPER:
+        raise HTTPException(status_code=403, detail="Role not allowed")
+    if actor.role == "super_admin" and role not in _ALLOWED_ROLES:
+        raise HTTPException(status_code=400, detail="Unknown role")
+    username = (username or "").strip()
+    if len(username) < 3 or len(username) > 120:
+        raise HTTPException(status_code=400, detail="Bad username length")
+    if len(password or "") < 6 or len(password or "") > 200:
+        raise HTTPException(status_code=400, detail="Bad password length")
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(status_code=400, detail="Username exists")
     row = User(
@@ -63,7 +88,11 @@ def create_user(
         is_active=True,
     )
     db.add(row)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(row)
     _safe_audit(
         db,
@@ -133,7 +162,7 @@ def create_user_json(
         is_active=True,
     )
     db.add(row)
-    db.commit()
+    _commit_or_raise(db)
     db.refresh(row)
     _safe_audit(
         db,
@@ -164,7 +193,7 @@ def change_my_password(
     if not verify_password(payload.current_password, actor.password_hash):
         raise HTTPException(status_code=400, detail="Current password is invalid")
     actor.password_hash = hash_password(payload.new_password)
-    db.commit()
+    _commit_or_raise(db)
     _safe_audit(
         db,
         actor_user_id=actor.id,
@@ -191,7 +220,7 @@ def reset_user_password(
     if actor.role != "super_admin" and target.role == "super_admin":
         raise HTTPException(status_code=403, detail="Forbidden")
     target.password_hash = hash_password(payload.new_password)
-    db.commit()
+    _commit_or_raise(db)
     _safe_audit(
         db,
         actor_user_id=actor.id,
@@ -210,11 +239,14 @@ def create_agent(
     db: Session = Depends(get_db),
     actor=Depends(require_admin),
 ):
+    name = (name or "").strip()[:160]
+    if not name:
+        raise HTTPException(status_code=400, detail="Bad agent name")
     if actor.role != "super_admin" and actor.tenant_id != tenant_id:
         raise HTTPException(status_code=403, detail="Cross-tenant denied")
     row = Agent(tenant_id=tenant_id, name=name, is_online=False)
     db.add(row)
-    db.commit()
+    _commit_or_raise(db)
     db.refresh(row)
     _safe_audit(
         db,
@@ -238,7 +270,7 @@ def rotate_agent_token(agent_id: int, db: Session = Depends(get_db), actor=Depen
         t.is_active = False
     raw = secrets.token_urlsafe(32)
     db.add(AgentToken(agent_id=agent.id, token_hash=hash_agent_token(raw), is_active=True))
-    db.commit()
+    _commit_or_raise(db)
     _safe_audit(
         db,
         actor_user_id=actor.id,

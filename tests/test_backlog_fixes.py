@@ -199,6 +199,32 @@ def test_send_text_reply_success_and_failure(monkeypatch):
     assert ok is False
 
 
+def test_failed_neuro_send_does_not_enter_assistant_history(monkeypatch):
+    recorded = []
+    delivered = False
+
+    async def fake_send(*_args, **_kwargs):
+        return delivered
+
+    async def fake_record(account_id, peer_uid, reply):
+        recorded.append((account_id, peer_uid, reply))
+
+    monkeypatch.setattr(neuro_post_actions, "send_text_reply", fake_send)
+    monkeypatch.setattr(neuro_post_actions, "persist_sent_reply", fake_record)
+
+    async def run():
+        return await neuro_post_actions.send_and_record_reply(
+            object(), peer_uid=123, reply="hello", use_typing_neuro=False,
+            account_id=1, client_id=2,
+        )
+
+    assert asyncio.run(run()) is False
+    assert recorded == []
+    delivered = True
+    assert asyncio.run(run()) is True
+    assert recorded == [(1, 123, "hello")]
+
+
 def test_alive_window_key_hour_bucket():
     dt = datetime(2026, 4, 21, 10, 59, 59, tzinfo=timezone.utc)
     dt_next = datetime(2026, 4, 21, 11, 0, 1, tzinfo=timezone.utc)
@@ -377,18 +403,10 @@ def test_prepare_incoming_context_denies_on_stop_class(monkeypatch):
     async def _allowed(*_args, **_kwargs):
         return True, "ok"
 
-    async def _key(*_args, **_kwargs):
-        return "key"
-
     async def _has_stop(*_args, **_kwargs):
         return True
 
     monkeypatch.setattr(neuro_manager, "check_incoming_allowed", _allowed)
-    monkeypatch.setattr(
-        neuro_manager.InstanceSettingsRepository,
-        "get_effective_openrouter_key",
-        _key,
-    )
     monkeypatch.setattr(neuro_manager, "client_has_positive_class", _has_stop)
 
     ctx, reason = asyncio.run(
@@ -456,7 +474,7 @@ def test_retry_queue_item_resets_failed_to_pending():
             self.row.attempts = 0
             self.row.next_attempt_at = None
             self.row.sent_at = None
-            return None
+            return SimpleNamespace(rowcount=1)
 
         def commit(self):
             return None

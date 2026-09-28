@@ -6,7 +6,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from utils.neuro_sampling import NEURO_PARAM_BUTTONS
 
 # Пагинация списков в Telegram
-ACCOUNTS_LIST_PAGE_SIZE = 5
+ACCOUNTS_LIST_PAGE_SIZE = 10
+ACCOUNT_GROUPS_PAGE_SIZE = 5
 PROXY_LIST_PAGE_SIZE = 10
 MAILING_LIST_PAGE_SIZE = 10
 CLIENTS_LIST_PAGE_SIZE = 10
@@ -19,21 +20,56 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton(text="👥 Аккаунты", callback_data="menu_accounts"),
-            InlineKeyboardButton(text="🗄 База данных", callback_data="menu_database"),
-        ],
-        [
-            InlineKeyboardButton(text="📬 Рассылка", callback_data="menu_mailing"),
-            InlineKeyboardButton(text="🧠 Нейрочаттинг", callback_data="menu_neurochat"),
-        ],
-        [
             InlineKeyboardButton(text="🌐 Прокси", callback_data="menu_proxy"),
-            InlineKeyboardButton(text="🔥 Прогрев", callback_data="menu_warmup"),
         ],
         [
-            InlineKeyboardButton(text="📊 Статус системы", callback_data="menu_status"),
+            InlineKeyboardButton(text="📬 Рассылки", callback_data="menu_mailing"),
+            InlineKeyboardButton(text="🗄 БД", callback_data="menu_database"),
+        ],
+        [
+            InlineKeyboardButton(text="🧠 ИИ", callback_data="menu_ai"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_ai_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚙️ Настройка модели", callback_data="ai_model_settings")],
+        [InlineKeyboardButton(text="📄 Настройка промпта", callback_data="ai_prompt_settings")],
+        [InlineKeyboardButton(text="📸 Фото через ComfyUI", callback_data="ai_comfy_photo")],
+        [InlineKeyboardButton(text="🧑 Вымышленные персонажи", callback_data="ai_comfy_identities")],
+        [InlineKeyboardButton(text="💬 Нейрочаттинг", callback_data="menu_neurochat")],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu_back")],
+    ])
+
+
+def get_ai_model_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 API ключи", callback_data="ai_api_keys")],
+        [InlineKeyboardButton(text="🎛 Параметры", callback_data="ai_sampling_intro")],
+        [InlineKeyboardButton(text="🌐 Провайдер по умолчанию", callback_data="ai_default_providers_0")],
+        [InlineKeyboardButton(text="📋 Провайдер для рассылки", callback_data="ai_mailing_select_0")],
+        [InlineKeyboardButton(text="⬅️ К ИИ", callback_data="menu_ai")],
+    ])
+
+
+def get_ai_api_keys_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="OpenRouter", callback_data="ai_builtin_openrouter")],
+        [InlineKeyboardButton(text="OpenAI", callback_data="ai_builtin_openai")],
+        [InlineKeyboardButton(text="DeepSeek", callback_data="ai_builtin_deepseek")],
+        [InlineKeyboardButton(text="Свой провайдер", callback_data="ai_custom_menu")],
+        [InlineKeyboardButton(text="⬅️ К настройке модели", callback_data="ai_model_settings")],
+    ])
+
+
+def get_ai_custom_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Новый провайдер", callback_data="ai_provider_new")],
+        [InlineKeyboardButton(text="📋 Управление", callback_data="ai_provider_list_0")],
+        [InlineKeyboardButton(text="⬅️ К API ключам", callback_data="ai_api_keys")],
+    ])
 
 
 def get_warmup_menu_keyboard() -> InlineKeyboardMarkup:
@@ -48,8 +84,9 @@ def get_warmup_menu_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="📊 Статус прогрева", callback_data="warmup_status_summary"),
         ],
+        [InlineKeyboardButton(text="👍 Одиночная реакция", callback_data="managed_reaction_start")],
         [
-            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back"),
+            InlineKeyboardButton(text="⬅️ Управление аккаунтами", callback_data="accounts_manage"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -138,9 +175,12 @@ def get_warmup_group_profile_keyboard(group_id: int, profiles: list, selected: s
 def get_warmup_settings_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="🧠 Выбрать профиль", callback_data="warmup_settings_pick_profile")],
+            [InlineKeyboardButton(text="🕒 Рабочие часы и часовой пояс", callback_data="warmup_settings_schedule")],
             [InlineKeyboardButton(text="⏱ Задержка и jitter", callback_data="warmup_settings_delay")],
             [InlineKeyboardButton(text="📈 Дневной лимит", callback_data="warmup_settings_limit")],
-            [InlineKeyboardButton(text="💬 Сообщества для активности", callback_data="warmup_settings_chats")],
+            [InlineKeyboardButton(text="💬 Разрешённые чаты для чтения", callback_data="warmup_settings_chats")],
+            [InlineKeyboardButton(text="⚡ Разрешить/запретить реакции", callback_data="warmup_settings_reactions")],
             [InlineKeyboardButton(text="🧩 Копировать профиль по шаблону", callback_data="warmup_copy_profile_start")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_warmup")],
         ]
@@ -246,34 +286,43 @@ def get_cancel_with_back_keyboard(
 # ==================== Аккаунты ====================
 
 def get_accounts_keyboard() -> InlineKeyboardMarkup:
-    """Меню управления аккаунтами."""
+    """Первый уровень: три понятных сценария вместо списка операций."""
     keyboard = [
         [
-            InlineKeyboardButton(text="📥 Загрузить Tdata (ZIP)", callback_data="accounts_upload"),
+            InlineKeyboardButton(text="📥 Импорт", callback_data="accounts_upload"),
         ],
         [
-            InlineKeyboardButton(
-                text="📦 Массовый залив Tdata (ГЕО)",
-                callback_data="accounts_upload_bulk_geo",
-            ),
+            InlineKeyboardButton(text="⚙️ Управление", callback_data="accounts_manage"),
         ],
         [
-            InlineKeyboardButton(
-                text="🔍 Проверить Tdata (без импорта)",
-                callback_data="accounts_check_tdata",
-            ),
+            InlineKeyboardButton(text="📁 Группы", callback_data="accounts_groups"),
         ],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu_back")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_accounts_manage_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton(text="🧩 Редактор профилей", callback_data="accounts_profile_editor")],
         [
             InlineKeyboardButton(text="📋 Список аккаунтов", callback_data="accounts_list"),
         ],
         [
-            InlineKeyboardButton(text="📁 Группы аккаунтов", callback_data="accounts_groups"),
+            InlineKeyboardButton(text="🔐 2FA", callback_data="accounts_twofa"),
+        ],
+        [
+            InlineKeyboardButton(text="🔍 Проверка валидности", callback_data="accounts_validity"),
+        ],
+        [InlineKeyboardButton(text="🔗 Проверить свой канал", callback_data="community_check_start")],
+        [
+            InlineKeyboardButton(text="🔥 Прогрев", callback_data="menu_warmup"),
         ],
         [
             InlineKeyboardButton(text="🧹 Чистка / проверка прокси", callback_data="acc_cleanup_menu"),
         ],
         [
-            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back"),
+            InlineKeyboardButton(text="⬅️ К аккаунтам", callback_data="menu_accounts"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -344,22 +393,30 @@ def get_accounts_list_keyboard(accounts: list, *, page: int = 0) -> InlineKeyboa
         keyboard.append(nav_row)
 
     keyboard.append([
-        InlineKeyboardButton(text="📁 Группы", callback_data="accounts_groups"),
-    ])
-    keyboard.append([
-        InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_accounts"),
+        InlineKeyboardButton(text="⬅️ Управление", callback_data="accounts_manage"),
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_account_groups_menu_keyboard(groups: list) -> InlineKeyboardMarkup:
+def get_account_groups_menu_keyboard(groups: list, *, page: int = 0) -> InlineKeyboardMarkup:
     """Список групп аккаунтов + создать + чистка пустых + назад."""
     rows = []
-    for g in groups:
+    total_pages = max(1, (len(groups) + ACCOUNT_GROUPS_PAGE_SIZE - 1) // ACCOUNT_GROUPS_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    chunk = groups[page * ACCOUNT_GROUPS_PAGE_SIZE:(page + 1) * ACCOUNT_GROUPS_PAGE_SIZE]
+    for g in chunk:
         rows.append([
             InlineKeyboardButton(text=f"📂 {g.name}", callback_data=f"group_view_{g.id}"),
         ])
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀", callback_data=f"accounts_groups_p_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="accounts_groups_page_info"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶", callback_data=f"accounts_groups_p_{page + 1}"))
+        rows.append(nav)
     rows.append([
         InlineKeyboardButton(text="➕ Создать группу", callback_data="groups_create_start"),
     ])
@@ -475,54 +532,46 @@ def get_account_card_keyboard(account: object, is_authorized: bool = None) -> In
         account: Объект Account со всеми полями
         is_authorized: Статус авторизации (None = неизвестно)
     """
-    # Прокси для кнопки
-    if account.proxy:
-        proxy_btn_text = f"🌐 Прокси: {account.proxy.name} → Сменить"
-    else:
-        proxy_btn_text = "🌐 Прокси: не назначен → Назначить"
-    warmup_on = bool(getattr(account, "warmup_enabled", False))
-    warmup_btn_text = f"🔥 Прогрев: {'ВКЛ' if warmup_on else 'ВЫКЛ'}"
-
     keyboard = [
+        [InlineKeyboardButton(text="🕘 История", callback_data=f"account_history_{account.id}")],
         [
-            InlineKeyboardButton(text="🔄 Перепроверить авторизацию", callback_data=f"account_recheck_auth_{account.id}"),
+            InlineKeyboardButton(text="✏️ Профиль", callback_data=f"account_edit_profile_{account.id}"),
         ],
         [
-            InlineKeyboardButton(text=proxy_btn_text, callback_data=f"account_change_proxy_{account.id}"),
+            InlineKeyboardButton(text="🌐 Подключение и проверка", callback_data=f"account_connection_{account.id}"),
         ],
         [
-            InlineKeyboardButton(text=warmup_btn_text, callback_data=f"account_warmup_toggle_{account.id}"),
+            InlineKeyboardButton(text="⚙️ Дополнительно", callback_data=f"account_options_{account.id}"),
         ],
-        [
-            InlineKeyboardButton(
-                text="✏️ Имя / bio / username",
-                callback_data=f"account_edit_profile_{account.id}",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="🏷 Название в списке",
-                callback_data=f"account_list_label_{account.id}",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="🖼 Управление аватарками",
-                callback_data=f"account_manage_photos_{account.id}",
-            ),
-        ],
-        [
-            InlineKeyboardButton(text="🔐 Установить 2FA", callback_data=f"account_set_2fa_{account.id}"),
-        ],
-        [
-            InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"account_delete_confirm_{account.id}"),
-        ],
-        [
-            InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="accounts_list"),
-        ],
+        [InlineKeyboardButton(text="⬅️ К списку", callback_data="accounts_list")],
     ]
-
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_account_connection_keyboard(account: object) -> InlineKeyboardMarkup:
+    proxy_label = f"🌐 Прокси: {account.proxy.name}" if account.proxy else "🌐 Назначить прокси"
+    warmup_label = f"🔥 Прогрев: {'ВКЛ' if getattr(account, 'warmup_enabled', False) else 'ВЫКЛ'}"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Проверить авторизацию", callback_data=f"account_recheck_auth_{account.id}")],
+        [InlineKeyboardButton(text=proxy_label, callback_data=f"account_change_proxy_{account.id}")],
+        [InlineKeyboardButton(text=warmup_label, callback_data=f"account_warmup_toggle_{account.id}")],
+        [InlineKeyboardButton(text="⬅️ К аккаунту", callback_data=f"account_view_{account.id}")],
+    ])
+
+
+def get_account_options_keyboard(account_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🏷 Название в списке", callback_data=f"account_list_label_{account_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🔐 Установить 2FA", callback_data=f"account_set_2fa_{account_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"account_delete_confirm_{account_id}"),
+        ],
+        [InlineKeyboardButton(text="⬅️ К аккаунту", callback_data=f"account_view_{account_id}")],
+    ])
 
 
 def get_edit_profile_keyboard(account_id: int) -> InlineKeyboardMarkup:
@@ -537,6 +586,8 @@ def get_edit_profile_keyboard(account_id: int) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="📝 Bio / Описание", callback_data=f"account_edit_bio_{account_id}"),
         ],
+        [InlineKeyboardButton(text="🖼 Фото", callback_data=f"account_manage_photos_{account_id}")],
+        [InlineKeyboardButton(text="🧩 Шаблон / случайный профиль", callback_data=f"profile_apply_menu_{account_id}")],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data=f"account_view_{account_id}"),
         ],
@@ -677,7 +728,13 @@ def get_mailing_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="➕ Создать рассылку", callback_data="mailing_create"),
         ],
         [
-            InlineKeyboardButton(text="📋 Мои рассылки", callback_data="mailing_list"),
+            InlineKeyboardButton(text="⚙️ Управление", callback_data="mailing_manage"),
+        ],
+        [
+            InlineKeyboardButton(text="📋 Список", callback_data="mailing_list"),
+        ],
+        [
+            InlineKeyboardButton(text="💬 Публикация в своих чатах", callback_data="chat_campaign_open"),
         ],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back"),
@@ -1069,13 +1126,13 @@ def get_mailing_neuro_keyboard(mailing) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🔑 Ключ OpenRouter",
-                    callback_data=f"openrouter_key_menu_neuro_{mid}",
+                    text="🔌 Провайдер и API ключи",
+                    callback_data=f"ai_mailing_providers_{mid}_0",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="🧠 Модель OpenRouter",
+                    text="🧠 Модель",
                     callback_data=f"mailing_neuro_model_{mid}",
                 ),
             ],
@@ -1225,17 +1282,9 @@ def get_mailing_target_group_keyboard(
 def get_proxy_keyboard() -> InlineKeyboardMarkup:
     """Меню управления прокси."""
     keyboard = [
-        [
-            InlineKeyboardButton(text="➕ Добавить прокси", callback_data="proxy_add"),
-            InlineKeyboardButton(text="📥 Массово в группу", callback_data="proxy_bulk_add"),
-        ],
-        [
-            InlineKeyboardButton(text="📋 Список прокси", callback_data="proxy_list"),
-            InlineKeyboardButton(text="📂 Группы прокси", callback_data="proxy_groups"),
-        ],
-        [
-            InlineKeyboardButton(text="🧹 Чистка прокси", callback_data="proxy_cleanup_menu"),
-        ],
+        [InlineKeyboardButton(text="📥 Создать лист", callback_data="proxy_bulk_add")],
+        [InlineKeyboardButton(text="📂 Список листов", callback_data="proxy_groups")],
+        [InlineKeyboardButton(text="⚙️ Дополнительно", callback_data="proxy_options")],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_back"),
         ],
@@ -1243,13 +1292,24 @@ def get_proxy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_proxy_groups_keyboard(groups_usage: list[tuple[object, int, int]]) -> InlineKeyboardMarkup:
+def get_proxy_options_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Один прокси", callback_data="proxy_add")],
+        [InlineKeyboardButton(text="📋 Все прокси", callback_data="proxy_list")],
+        [InlineKeyboardButton(text="🧹 Чистка", callback_data="proxy_cleanup_menu")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_proxy")],
+    ])
+
+
+def get_proxy_groups_keyboard(groups_usage: list[tuple[object, int, int]], *, page: int = 0) -> InlineKeyboardMarkup:
     """Список групп прокси с метрикой used/total/free."""
-    rows = []
+    rows = [[InlineKeyboardButton(text="🔍 Проверить все листы", callback_data="proxy_groups_check_all")]]
+    total_pages = max(1, (len(groups_usage) + 4) // 5)
+    page = max(0, min(page, total_pages - 1))
     if not groups_usage:
         rows.append([InlineKeyboardButton(text="📭 Нет групп", callback_data="proxy_group_empty")])
     else:
-        for group, used, total in groups_usage:
+        for group, used, total in groups_usage[page * 5:(page + 1) * 5]:
             free = max(0, int(total) - int(used))
             rows.append(
                 [
@@ -1259,6 +1319,14 @@ def get_proxy_groups_keyboard(groups_usage: list[tuple[object, int, int]]) -> In
                     )
                 ]
             )
+    if total_pages > 1:
+        nav = []
+        if page:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"proxy_groups_p_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="proxy_groups_page_info"))
+        if page + 1 < total_pages:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"proxy_groups_p_{page + 1}"))
+        rows.append(nav)
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_proxy")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1297,7 +1365,7 @@ def get_proxy_group_delete_confirm_keyboard(group_id: int) -> InlineKeyboardMark
 def get_proxy_group_select_keyboard(
     groups_usage: list[tuple[object, int, int]],
     *,
-    none_callback: str = "proxy_group_select_none",
+    none_callback: str | None = "proxy_group_select_none",
     cancel_callback: str = "accounts_upload",
     back_callback: str | None = "menu_accounts",
 ) -> InlineKeyboardMarkup:
@@ -1316,7 +1384,8 @@ def get_proxy_group_select_keyboard(
                     )
                 ]
             )
-    rows.append([InlineKeyboardButton(text="❌ Без прокси", callback_data=none_callback)])
+    if none_callback:
+        rows.append([InlineKeyboardButton(text="❌ Без прокси", callback_data=none_callback)])
     if back_callback:
         rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data=cancel_callback)])

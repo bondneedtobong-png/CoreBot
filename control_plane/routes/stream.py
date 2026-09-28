@@ -2,8 +2,7 @@
 SSE-эндпоинт для веб-панели: стримим новые сообщения из corebot.db
 (neuro_chat_messages + outbound_queue.sent) клиенту.
 
-Авторизация: либо `Authorization: Bearer <jwt>`, либо `?token=<jwt>` в URL
-(EventSource API не позволяет задать кастомный header).
+Авторизация: `Authorization: Bearer <jwt>` либо HttpOnly cookie `corebot_stream`.
 """
 from __future__ import annotations
 
@@ -13,39 +12,48 @@ from utils.time import utcnow_aware
 from typing import AsyncGenerator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from control_plane.auth import decode_token
 from control_plane.business.db import BotSession
 from control_plane.config import (
     CP_BUSINESS_STREAM_BATCH,
     CP_BUSINESS_STREAM_INTERVAL,
 )
 from control_plane.database import get_db as get_cp_db
+from control_plane.deps import get_current_user
 from control_plane.models import User
+from control_plane.routes.auth import STREAM_COOKIE_NAME
 from database.models import Account, NeuroChatMessage
 
 router = APIRouter(prefix="/business", tags=["business-stream"])
 
 
 def _resolve_user_from_jwt(token: str, cp_db: Session) -> User:
+    """Apply the same access-token and active-user checks as normal CP routes."""
     try:
-        payload = decode_token(token)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=f"invalid token: {e}"
-        ) from e
-    if payload.get("type") != "access":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="wrong token type"
-        )
-    uid = int(payload.get("sub"))
-    user = cp_db.query(User).filter(User.id == uid, User.is_active == True).first()  # noqa: E712
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="user not found")
-    return user
+        return get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=token), cp_db)
+    except HTTPException:
+        raise
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from None
+
+
+def resolve_stream_user(request: Request, cp_db: Session) -> User:
+    if "token" in request.query_params:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="query token is not supported")
+    auth_header = request.headers.get("authorization", "")
+    if auth_header:
+        scheme, _, token = auth_header.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    else:
+        token = request.cookies.get(STREAM_COOKIE_NAME, "")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
+    return _resolve_user_from_jwt(token.strip(), cp_db)
 
 
 def _format_event(event_name: str, data: dict) -> bytes:
@@ -56,19 +64,10 @@ def _format_event(event_name: str, data: dict) -> bytes:
 @router.get("/stream")
 async def stream_messages(
     request: Request,
-    token: Optional[str] = Query(default=None),
     account_id: Optional[int] = Query(default=None),
     cp_db: Session = Depends(get_cp_db),
 ):
-    auth_header = request.headers.get("authorization", "")
-    raw_token = ""
-    if auth_header.lower().startswith("bearer "):
-        raw_token = auth_header.split(" ", 1)[1].strip()
-    if not raw_token and token:
-        raw_token = token.strip()
-    if not raw_token:
-        raise HTTPException(status_code=401, detail="missing token")
-    _ = _resolve_user_from_jwt(raw_token, cp_db)
+    resolve_stream_user(request, cp_db)
 
     account_filter = int(account_id) if account_id else None
 

@@ -12,7 +12,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import update
 
-from bot.config import OWNER_ID, FILES_DIR
+from bot.config import is_authorized_user
+from bot.config import FILES_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import get_clients_keyboard, get_cancel_with_back_keyboard, get_context_back_keyboard
 from database.session import session_scope
@@ -98,7 +99,7 @@ async def render_clients_dashboard(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "clients_upload")
 async def cb_clients_upload(callback: CallbackQuery, state: FSMContext):
     """Начало загрузки базы клиентов."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -123,7 +124,7 @@ async def cb_clients_upload(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_clients_upload")
 async def cb_cancel_clients_upload(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -139,7 +140,7 @@ async def cb_cancel_clients_upload(callback: CallbackQuery, state: FSMContext):
 @router.message(ClientUpload.waiting_for_file, F.document)
 async def process_clients_txt(message: Message, state: FSMContext):
     """Обработка загруженного TXT с клиентами."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     
     await state.set_state(ClientUpload.processing)
@@ -216,7 +217,7 @@ async def process_clients_txt(message: Message, state: FSMContext):
 @router.callback_query(F.data == "clients_list")
 async def cb_clients_list(callback: CallbackQuery):
     """Дашборд клиентов: статистика и действия без длинного списка."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -226,7 +227,7 @@ async def cb_clients_list(callback: CallbackQuery):
 
 @router.callback_query(F.data == "clients_export_new")
 async def cb_clients_export_new(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -258,7 +259,7 @@ async def cb_clients_export_new(callback: CallbackQuery):
 
 @router.callback_query(F.data == "clients_stats_reset_confirm")
 async def cb_clients_stats_reset_confirm(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     kb = InlineKeyboardMarkup(
@@ -279,7 +280,7 @@ async def cb_clients_stats_reset_confirm(callback: CallbackQuery):
 
 @router.callback_query(F.data == "clients_stats_reset_apply")
 async def cb_clients_stats_reset_apply(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -300,7 +301,7 @@ async def cb_clients_stats_reset_apply(callback: CallbackQuery):
 @router.callback_query(F.data == "clients_clear")
 async def cb_clients_clear(callback: CallbackQuery):
     """Очистка базы клиентов."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
@@ -319,7 +320,7 @@ async def cb_clients_clear(callback: CallbackQuery):
 @router.callback_query(F.data == "clients_reset_contacted")
 async def cb_clients_reset_contacted(callback: CallbackQuery):
     """Запрос подтверждения массового сброса CONTACTED -> NEW."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -337,7 +338,7 @@ async def cb_clients_reset_contacted(callback: CallbackQuery):
 @router.callback_query(F.data == "clients_reset_contacted_confirm")
 async def cb_clients_reset_contacted_confirm(callback: CallbackQuery):
     """Подтверждение массового сброса CONTACTED -> NEW."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -361,7 +362,7 @@ async def cb_clients_reset_contacted_confirm(callback: CallbackQuery):
 @router.callback_query(F.data == "clients_clear_confirm")
 async def cb_clients_clear_confirm(callback: CallbackQuery):
     """Подтверждение очистки базы."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     

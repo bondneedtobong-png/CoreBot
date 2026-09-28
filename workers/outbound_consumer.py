@@ -9,7 +9,8 @@ Telethon. После успешной отправки:
     чтобы при возврате аккаунта в AI_ACTIVE LLM видела ручной хвост диалога
   * пишется client_interactions(direction='out', kind='manual_send')
 
-При ошибке — status='failed' + причина.
+После начала отправки ошибка или остановка процесса оставляют исход на ручную
+проверку: автоматически повторять такой запрос небезопасно.
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ class OutboundConsumer:
         self._task: Optional[asyncio.Task] = None
         self._batch_size = int(batch_size)
         self._idle_sleep_sec = float(idle_sleep_sec)
+        self._last_recovery_at = 0.0
 
     def start(self) -> None:
         if self._task and not self._task.done():
@@ -64,16 +66,12 @@ class OutboundConsumer:
                 log.warning(f"OutboundConsumer tick error: {e}")
                 processed = 0
             # Task 08: heartbeat для CP (shared corebot.db, без нового порта).
-            # Best-effort: запись троттлится внутри beat() и никогда не валит цикл.
-            try:
-                from control_plane.services.heartbeat import (
-                    OUTBOUND_COMPONENT,
-                    record_consumer_tick,
-                )
+            from control_plane.services.heartbeat import (
+                OUTBOUND_COMPONENT,
+                record_tick_best_effort,
+            )
 
-                await record_consumer_tick(OUTBOUND_COMPONENT)
-            except Exception:
-                pass
+            await record_tick_best_effort(OUTBOUND_COMPONENT)
             if processed == 0:
                 try:
                     await asyncio.wait_for(
@@ -84,6 +82,14 @@ class OutboundConsumer:
 
     async def _tick(self) -> int:
         from workers.manager import worker_manager  # локальный импорт против циклов
+
+        now = asyncio.get_running_loop().time()
+        if now - self._last_recovery_at >= 60:
+            async with session_scope() as session:
+                recovered = await OutboundQueueRepository.recover_stale_sending(session)
+            if recovered:
+                log.warning(f"OutboundConsumer: {recovered} stale sends require review")
+            self._last_recovery_at = now
 
         async with session_scope() as session:
             batch = await OutboundQueueRepository.fetch_pending_batch(
@@ -98,31 +104,11 @@ class OutboundConsumer:
             await asyncio.sleep(random.uniform(0.2, 0.6))
         return len(batch)
 
-    # Сколько раз пробуем отправить, прежде чем поставить final 'failed'.
+    # Число попыток подготовить соединение до первого Telegram RPC.
     MAX_ATTEMPTS = 5
     # База для экспоненциального бэк-оффа в секундах: 2, 4, 8, 16, 32.
     BACKOFF_BASE_SEC = 2.0
     BACKOFF_MAX_SEC = 60.0
-
-    # Permanent-ошибки — на них не ретраимся, сразу 'failed'.
-    _PERMANENT_ERR_MARKERS = (
-        "USER_DEACTIVATED",
-        "USER_DELETED",
-        "USER_IS_BLOCKED",
-        "PEER_ID_INVALID",
-        "CHAT_WRITE_FORBIDDEN",
-        "INPUT_USER_DEACTIVATED",
-        "Получатель недоступен",
-    )
-
-    def _looks_transient(self, err: str) -> bool:
-        if not err:
-            return True
-        err_up = err.upper()
-        for marker in self._PERMANENT_ERR_MARKERS:
-            if marker.upper() in err_up:
-                return False
-        return True
 
     def _backoff_delay(self, attempts_done: int) -> float:
         delay = self.BACKOFF_BASE_SEC * (2 ** max(0, attempts_done - 1))
@@ -130,17 +116,22 @@ class OutboundConsumer:
 
     async def _ensure_worker(self, account_id: int, worker_manager):
         """
-        Достать живой Worker для аккаунта. Если воркера нет вовсе — перезагрузить
-        пул из БД. Если воркер есть, но disconnected — попробовать поднять.
+        Достать живой Worker для аккаунта. Если воркера нет — догрузить
+        ТОЛЬКО его через ensure_worker (без disconnect_all+clear всего пула,
+        чтобы не ронять активную рассылку).
+        Если воркер есть, но disconnected — попробовать поднять.
         Возвращает Worker | None.
         """
         worker = worker_manager.workers.get(int(account_id))
         if worker is None:
             try:
-                await worker_manager.load_accounts()
+                if hasattr(worker_manager, "ensure_worker"):
+                    worker = await worker_manager.ensure_worker(int(account_id))
+                else:
+                    await worker_manager.load_accounts()
+                    worker = worker_manager.workers.get(int(account_id))
             except Exception as e:
-                log.warning(f"OutboundConsumer: load_accounts failed: {e}")
-            worker = worker_manager.workers.get(int(account_id))
+                log.warning(f"OutboundConsumer: ensure_worker failed: {e}")
             if worker is None:
                 return None
 
@@ -196,43 +187,76 @@ class OutboundConsumer:
                 await OutboundQueueRepository.mark_failed(session, row.id, "empty text")
             return
 
-        ok, msg_id, err, _peer_uid = await worker.send_message_with_typing(
-            int(row.peer_user_id),
-            text,
-            typing_delay=0.0,
-            use_typing=False,
-            parse_mode=None,
-        )
+        # Как в рассылочном пути (manager): предпочитаем @username строке,
+        # иначе Telethon часто даёт «Could not find the input entity»,
+        # если с этим аккаунтом ещё не было диалога.
+        target_peer = int(row.peer_user_id)
+        try:
+            async with session_scope() as _s:
+                _client = await ClientRepository.get_by_telegram_user_id(
+                    _s, int(row.peer_user_id)
+                )
+                _uname = (getattr(_client, "username", None) or "").strip().lstrip("@") if _client else ""
+                if _uname:
+                    target_peer = _uname
+                elif getattr(row, "client_id", None):
+                    _c2 = await ClientRepository.get_by_id(_s, int(row.client_id))
+                    _u2 = (getattr(_c2, "username", None) or "").strip().lstrip("@") if _c2 else ""
+                    if _u2:
+                        target_peer = _u2
+        except Exception as e:
+            log.debug(f"OutboundConsumer: username resolve failed, fallback to id: {e}")
+
+        # Claim is committed before the external side effect. If cancellation or
+        # another consumer won, this process must never call Telegram.
+        async with session_scope() as session:
+            claimed = await OutboundQueueRepository.claim_pending(session, row.id)
+        if not claimed:
+            return
+
+        try:
+            ok, msg_id, err, _peer_uid = await asyncio.wait_for(
+                worker.send_message_with_typing(
+                    target_peer,
+                    text,
+                    typing_delay=0.0,
+                    use_typing=False,
+                    parse_mode=None,
+                    source="manual_queue",
+                ),
+                timeout=300,
+            )
+        except asyncio.CancelledError:
+            # The in-flight RPC may have reached Telegram. Recovery will mark
+            # this row uncertain; a restart must never resend it.
+            raise
+        except Exception as e:
+            ok, msg_id, err = False, None, str(e)
 
         if not ok:
             err_str = err or "unknown send error"
-            transient = self._looks_transient(err_str)
-            if transient and attempts_done + 1 < self.MAX_ATTEMPTS:
-                delay = self._backoff_delay(attempts_done + 1)
+            if err_str.startswith("SAFETY_STOP:"):
                 async with session_scope() as session:
-                    await OutboundQueueRepository.reschedule(
-                        session, row.id, delay_sec=delay, last_error=err_str
-                    )
-                log.info(
-                    f"OutboundConsumer: transient send error for queue_id={row.id} "
-                    f"({err_str!r}), retry in {delay:.1f}s "
-                    f"(attempt {attempts_done + 1}/{self.MAX_ATTEMPTS})"
-                )
-            else:
-                async with session_scope() as session:
-                    await OutboundQueueRepository.mark_failed(session, row.id, err_str)
-                log.warning(
-                    f"OutboundConsumer: send failed (queue_id={row.id}, "
-                    f"account={row.account_id}, peer={row.peer_user_id}): {err_str}"
-                )
+                    await OutboundQueueRepository.mark_blocked_before_rpc(session, row.id, err_str)
+                log.warning(f"OutboundConsumer: safety stop queue_id={row.id}: {err_str}")
+                return
+            async with session_scope() as session:
+                await OutboundQueueRepository.mark_uncertain(session, row.id, err_str)
+            log.warning(
+                f"OutboundConsumer: send outcome uncertain (queue_id={row.id}, "
+                f"account={row.account_id}, peer={row.peer_user_id}): {err_str}"
+            )
+            return
+
+        # Persist delivery first, separately from optional history and counters.
+        # If this commit fails, the row stays sending and later becomes uncertain.
+        async with session_scope() as session:
+            marked = await OutboundQueueRepository.mark_sent(session, row.id, msg_id)
+        if not marked:
+            log.warning(f"OutboundConsumer: sent row {row.id} was no longer sending")
             return
 
         async with session_scope() as session:
-            try:
-                await OutboundQueueRepository.mark_sent(session, row.id, msg_id)
-            except Exception as e:
-                log.warning(f"OutboundConsumer: mark_sent failed: {e}")
-
             try:
                 await NeuroChatRepository.append(
                     session,

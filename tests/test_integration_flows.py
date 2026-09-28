@@ -150,6 +150,8 @@ def test_mailing_pause_signals_stop_without_spawning_task(monkeypatch):
     stops: list[bool] = []
 
     class _FakeWorkerManager:
+        current_mailing_id = 9
+
         def stop_mailing(self):
             stops.append(True)
 
@@ -176,6 +178,27 @@ def test_mailing_pause_signals_stop_without_spawning_task(monkeypatch):
     assert supervisor.spawned == []
     assert session.mailing.status is MailingStatus.PAUSED
     assert _done_params(executed)["status"] == "done"
+
+
+def test_stale_mailing_stop_cannot_stop_another_campaign(monkeypatch):
+    import workers.bot_command_consumer as consumer
+    import workers.manager as manager
+    from database.models import BotCommand
+
+    class _FakeWorkerManager:
+        current_mailing_id = 10
+
+        def stop_mailing(self):
+            raise AssertionError("stale stop must not reach active campaign")
+
+    monkeypatch.setattr(manager, "worker_manager", _FakeWorkerManager())
+    executed, _committed = _patch_db_boundary(monkeypatch, consumer, object())
+    row = BotCommand(command="mailing.stop", args_json='{"mailing_id": 9}')
+    row.id = 45
+    asyncio.run(consumer.BotCommandConsumer()._process_one(row))
+    params = _done_params(executed)
+    assert params["status"] == "failed"
+    assert "mailing_not_active" in str(params.get("error", ""))
 
 
 def test_unknown_command_fails_without_spawning_task(monkeypatch):
@@ -227,6 +250,7 @@ def test_duplicate_tdata_import_is_idempotent_without_http(tmp_path):
                     "first_name": "Test",
                     "last_name": "User",
                 },
+                proxy_id=1,
             )
             # Re-import of the same TData (converter may report different
             # phone/username casing) must NOT create a second row.
@@ -239,9 +263,11 @@ def test_duplicate_tdata_import_is_idempotent_without_http(tmp_path):
                     "first_name": "Test",
                     "last_name": "User",
                 },
+                proxy_id=2,
             )
             assert int(second) == int(first)
             count = db.query(Account).filter(Account.session_name == "sess_dup").count()
             assert count == 1
+            assert db.query(Account).filter(Account.session_name == "sess_dup").one().proxy_id == 1
     finally:
         engine.dispose()

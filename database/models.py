@@ -17,11 +17,96 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
     JSON,
+    text,
 )
 from sqlalchemy.orm import declarative_base, relationship
 import enum
+from uuid import uuid4
 
 Base = declarative_base()
+
+
+class OwnedStoryViewAttempt(Base):
+    """One operator-directed view RPC attempt for one owned channel story."""
+
+    __tablename__ = "owned_story_view_attempts"
+    __table_args__ = (
+        UniqueConstraint("account_id", "peer_id", "story_id", name="uq_owned_story_view_target"),
+        Index("ix_owned_story_view_actor_time", "actor_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    peer_id = Column(BigInteger, nullable=False)
+    story_id = Column(Integer, nullable=False)
+    actor_id = Column(BigInteger, nullable=False)
+    channel_title = Column(String(255), nullable=False, default="")
+    link = Column(String(255), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    status = Column(String(24), nullable=False, default="uncertain")
+    reason = Column(String(80), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
+class ManagedReactionAttempt(Base):
+    """One irreversible manual reaction attempt per account and Telegram message."""
+
+    __tablename__ = "managed_reaction_attempts"
+    __table_args__ = (
+        UniqueConstraint("account_id", "peer_id", "message_id", name="uq_managed_reaction_target"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    peer_id = Column(BigInteger, nullable=False)
+    message_id = Column(Integer, nullable=False)
+    actor_id = Column(BigInteger, nullable=False)
+    chat_title = Column(String(255), nullable=False, default="")
+    link = Column(String(255), nullable=False)
+    emoji = Column(String(8), nullable=False)
+    status = Column(String(24), nullable=False, default="uncertain")
+    reason = Column(String(80), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
+class CommunityLinkCheck(Base):
+    """Read-only ownership verification history; never stores Telegram errors."""
+
+    __tablename__ = "community_link_checks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, nullable=False, index=True)
+    actor_id = Column(BigInteger, nullable=True)
+    canonical_link = Column(String(255), nullable=False)
+    status = Column(String(24), nullable=False)
+    reason = Column(String(80), nullable=False)
+    title = Column(String(255), nullable=True)
+    kind = Column(String(24), nullable=True)
+    checked_at = Column(DateTime, nullable=False, default=utcnow_naive, index=True)
+
+
+class TDataCheckHistory(Base):
+    """Safe, operator-scoped pre-import check result; no archive/session data."""
+
+    __tablename__ = "tdata_check_history"
+    __table_args__ = (
+        Index("ix_tdata_check_history_operator_time", "requested_by", "created_at"),
+    )
+
+    run_id = Column(String(64), primary_key=True)
+    requested_by = Column(String(120), nullable=False)
+    check_group_id = Column(Integer, nullable=False)
+    status = Column(String(24), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    finished_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    total = Column(Integer, nullable=False, default=0)
+    ok_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    truncated = Column(Boolean, nullable=False, default=False)
+    reason = Column(String(80), nullable=True)
+    items_json = Column(Text, nullable=False, default="[]")
 
 
 # ==================== Ассоциативная таблица Many-to-Many ====================
@@ -229,6 +314,20 @@ class Account(Base):
         return f"{left} [{full}]"
 
 
+class AccountImportEvent(Base):
+    """Creation origin only; never stores session files, paths, or credentials."""
+
+    __tablename__ = "account_import_events"
+    __table_args__ = (Index("ix_account_import_events_account", "account_id", "id"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    source_kind = Column(String(32), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+    account = relationship("Account")
+
+
 class ProxyGroup(Base):
     """
     Группа прокси для пулов (например USA).
@@ -252,6 +351,32 @@ class ProxyGroup(Base):
 
 
 # ==================== Группы аккаунтов ====================
+
+class ProfileTemplate(Base):
+    """Reusable, named identity for an account profile."""
+
+    __tablename__ = "profile_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)
+    first_name = Column(String(100), nullable=False)
+    last_name = Column(String(100), nullable=True)
+    bio = Column(Text, nullable=False, default="")
+    photo_file = Column(String(80), nullable=True)
+    created_at = Column(DateTime, default=utcnow_naive)
+
+
+class ProfilePoolItem(Base):
+    """One candidate name, bio or photo for independent random selection."""
+
+    __tablename__ = "profile_pool_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(10), nullable=False, index=True)
+    category = Column(String(1), nullable=False, default="u", server_default="u", index=True)
+    value = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=utcnow_naive)
+
 
 class Group(Base):
     """
@@ -314,6 +439,22 @@ class Client(Base):
 
     def __repr__(self):
         return f"<Client @{self.username}>"
+
+
+class ClientContactPermission(Base):
+    """Operator-recorded right to contact a CRM client in campaigns.
+
+    Missing row means unverified. A parsed or imported username is never
+    sufficient permission for a first outbound campaign message.
+    """
+
+    __tablename__ = "client_contact_permissions"
+
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), primary_key=True)
+    state = Column(String(16), nullable=False)  # opt_in | opt_out
+    source = Column(String(255), nullable=False)
+    actor = Column(String(120), nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
 
 
 class ClientClassCounter(Base):
@@ -478,6 +619,8 @@ class Mailing(Base):
     __tablename__ = "mailings"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    prompt_scope_uuid = Column(String(32), nullable=False, default=lambda: uuid4().hex)
+    prompt_revision = Column(Integer, nullable=False, default=0)
     name = Column(String(255), nullable=True)  # Название для идентификации (с суффиксом)
     message_text = Column(Text, nullable=False, default="")  # Текст сообщения
 
@@ -518,8 +661,15 @@ class Mailing(Base):
     neurochat_enabled = Column(Boolean, default=False)
     # Идентификатор модели OpenRouter (например openai/gpt-oss-120b:free)
     neuro_model = Column(String(255), nullable=True)
+    # None keeps the existing OpenRouter configuration for older campaigns.
+    neuro_provider_id = Column(Integer, nullable=True)
     # JSON: параметры сэмплирования (temperature, top_p, max_tokens, …) для OpenRouter
     neuro_sampling_json = Column(Text, nullable=True, default="{}")
+    # Local daily interval [start, end) for AI replies; both NULL means always active.
+    neuro_active_start_minute = Column(Integer, nullable=True)
+    neuro_active_end_minute = Column(Integer, nullable=True)
+    neuro_timezone = Column(String(255), nullable=False, default="UTC")
+    neuro_daily_reply_limit = Column(Integer, nullable=False, default=0)
     # Кастомная ссылка для плейсхолдера {link}
     community_link = Column(String(1024), nullable=True)
     # Фильтр очереди рассылки: JSON {"client_status":"new"|"open","include_classes":[],"exclude_classes":["bl"]}
@@ -541,6 +691,54 @@ class Mailing(Base):
         return f"<Mailing {self.name or self.id} ({self.status.value})>"
 
 
+class NeuroReplyDailyUsage(Base):
+    """Committed sends and in-flight reservations for one mailing/local date."""
+
+    __tablename__ = "neuro_reply_daily_usage"
+
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), primary_key=True)
+    local_date = Column(String(10), primary_key=True)
+    sent_count = Column(Integer, nullable=False, default=0)
+    reserved_count = Column(Integer, nullable=False, default=0)
+
+
+class NeuroPromptVersion(Base):
+    """Immutable prompt revision, scoped to one mailing incarnation."""
+
+    __tablename__ = "neuro_prompt_versions"
+    __table_args__ = (
+        UniqueConstraint("scope_uuid", "revision", name="uq_neuro_prompt_scope_revision"),
+        Index("ix_neuro_prompt_versions_mailing_scope", "mailing_id", "scope_uuid"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
+    scope_uuid = Column(String(32), nullable=False)
+    revision = Column(Integer, nullable=False)
+    raw_text = Column(Text, nullable=True)
+    action = Column(String(20), nullable=False)
+    actor = Column(String(255), nullable=False)
+    sha256 = Column(String(64), nullable=True)
+    restored_from_version_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
+class NeuroKnowledgeEntry(Base):
+    """Mailing-scoped reference text for neurochat replies."""
+
+    __tablename__ = "neuro_knowledge_entries"
+    __table_args__ = (Index("ix_neuro_knowledge_mailing", "mailing_id", "id"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(120), nullable=False)
+    content = Column(Text, nullable=False)
+    keywords_json = Column(Text, nullable=False, default="[]")
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive, onupdate=utcnow_naive)
+
+
 class MailingTestRecipient(Base):
     """Тестовая аудитория рассылки: username из txt, привязка к Client для отправки и локальных классов."""
 
@@ -555,6 +753,40 @@ class MailingTestRecipient(Base):
     username = Column(String(255), nullable=False)
     client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime, default=utcnow_naive)
+
+
+class MailingRun(Base):
+    """One execution of a mailing with a fixed initial recipient set."""
+
+    __tablename__ = "mailing_runs"
+    __table_args__ = (
+        Index("ix_mailing_runs_mailing", "mailing_id", "id"),
+        Index("uq_mailing_runs_one_queued", "mailing_id", unique=True,
+              sqlite_where=text("status = 'queued'")),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mailing_id = Column(Integer, ForeignKey("mailings.id", ondelete="CASCADE"), nullable=False)
+    audience_mode = Column(String(20), nullable=False)
+    config_json = Column(Text, nullable=False, default="{}")
+    config_sha256 = Column(String(64), nullable=False)
+    audience_count = Column(Integer, nullable=False, default=0)
+    messages_sent = Column(Integer, nullable=False, default=0)
+    messages_failed = Column(Integer, nullable=False, default=0)
+    status = Column(String(20), nullable=False, default="running")
+    scheduled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class MailingRunRecipient(Base):
+    """Immutable membership; live opt-out and suppression still apply at send time."""
+
+    __tablename__ = "mailing_run_recipients"
+    __table_args__ = (Index("ix_mailing_run_recipients_client", "client_id"),)
+
+    run_id = Column(Integer, ForeignKey("mailing_runs.id", ondelete="CASCADE"), primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id", ondelete="CASCADE"), primary_key=True)
 
 
 class MailingLocalClassCounter(Base):
@@ -627,6 +859,8 @@ class NeuroChatMessage(Base):
     __tablename__ = "neuro_chat_messages"
     __table_args__ = (
         Index("ix_neuro_chat_account_peer", "account_id", "peer_user_id", "created_at"),
+        Index("ix_neuro_chat_unread", "account_id", "peer_user_id", "role", "id"),
+        Index("ix_neuro_chat_export_page", "account_id", "peer_user_id", "id"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -640,6 +874,55 @@ class NeuroChatMessage(Base):
 
     def __repr__(self):
         return f"<NeuroChat {self.account_id} peer={self.peer_user_id} {self.role}>"
+
+
+class DialogReadCursor(Base):
+    """Last inbound message read by one CP operator in one dialog.
+
+    CP users live in a separate database, so operator_user_id is intentionally
+    an opaque numeric identity here rather than a cross-database foreign key.
+    """
+
+    __tablename__ = "dialog_read_cursors"
+
+    operator_user_id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    peer_user_id = Column(BigInteger, primary_key=True)
+    last_read_message_id = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
+class DialogExportAudit(Base):
+    """Who exported a stored dialog; message contents never enter this log."""
+
+    __tablename__ = "dialog_export_audit"
+    __table_args__ = (
+        Index("ix_dialog_export_audit_account_time", "account_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    operator_user_id = Column(Integer, nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    peer_user_id = Column(BigInteger, nullable=False)
+    export_format = Column(String(8), nullable=False)
+    message_count = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
+class DialogViewAudit(Base):
+    """Throttled record that an operator accessed stored dialog messages."""
+
+    __tablename__ = "dialog_view_audit"
+    __table_args__ = (
+        Index("ix_dialog_view_audit_scope_time", "operator_user_id", "account_id",
+              "peer_user_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    operator_user_id = Column(Integer, nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    peer_user_id = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
 
 
 class NeuroActionLog(Base):
@@ -659,6 +942,24 @@ class NeuroActionLog(Base):
         return f"<NeuroAction {self.action} mailing={self.mailing_id} client={self.client_id}>"
 
 
+class AIProvider(Base):
+    """Configured OpenAI-compatible API endpoint; secrets are never serialized."""
+
+    __tablename__ = "ai_providers"
+    __table_args__ = (UniqueConstraint("name", name="uq_ai_providers_name"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(80), nullable=False)
+    kind = Column(String(20), nullable=False)  # openai | deepseek | custom
+    base_url = Column(String(1024), nullable=False)
+    api_key_ciphertext = Column(Text, nullable=False)
+    default_model = Column(String(255), nullable=False)
+    request_type = Column(String(40), nullable=False, default="chat_completions")
+    config_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive, onupdate=utcnow_naive)
+
+
 class InstanceSettings(Base):
     """
     Единственная строка настроек инстанса (id=1): ключи API и прочее.
@@ -669,10 +970,13 @@ class InstanceSettings(Base):
     id = Column(Integer, primary_key=True, autoincrement=False)
     # Зашифрованное или помеченное хранение ключа OpenRouter (см. utils/crypto_openrouter)
     openrouter_key_ciphertext = Column(Text, nullable=True)
+    default_ai_provider_id = Column(Integer, nullable=True)
     # Базовый UTC-сдвиг для плейсхолдеров {date}/{time}/… в первом сообщении (часы, −12…+14). None = брать из .env MAILING_BASE_UTC_OFFSET
     mailing_base_utc_offset = Column(Integer, nullable=True)
     # Глобальный toggle нейрочата: None = брать из .env NEUROCHAT_ENABLED
     neurochat_enabled = Column(Boolean, nullable=True)
+    # Default for campaigns created after the setting changes.
+    mailing_neurochat_default = Column(Boolean, nullable=False, default=False)
 
     def __repr__(self):
         return "<InstanceSettings>"
@@ -705,11 +1009,15 @@ class WarmupProfile(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(50), unique=True, nullable=False)  # safe, normal, custom...
-    base_delay_sec = Column(Float, default=45.0)
-    jitter_sec = Column(Float, default=25.0)
-    daily_action_limit = Column(Integer, default=40)
+    base_delay_sec = Column(Float, default=3600.0)
+    jitter_sec = Column(Float, default=900.0)
+    daily_action_limit = Column(Integer, default=4)
     # Сообщества/чаты для активности (строка: по одному username/ссылке на строку).
     target_chats_text = Column(Text, nullable=True, default="")
+    time_zone = Column(String(64), nullable=False, default="Europe/Moscow")
+    work_start_hour = Column(Integer, nullable=False, default=9)
+    work_end_hour = Column(Integer, nullable=False, default=18)
+    allowed_actions = Column(String(100), nullable=False, default="read_dialogs,read_channels")
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utcnow_naive)
     updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
@@ -768,6 +1076,105 @@ class OutboundQueue(Base):
 
     def __repr__(self):
         return f"<OutboundQueue id={self.id} acc={self.account_id} peer={self.peer_user_id} {self.status}>"
+
+
+class AccountSafetyState(Base):
+    """Persistent stop and daily attempt budget shared by all send paths."""
+
+    __tablename__ = "account_safety_state"
+
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    state = Column(String(20), nullable=False, default="ready")
+    reason_code = Column(String(64), nullable=True)
+    source = Column(String(32), nullable=True)
+    day_utc = Column(String(10), nullable=True)
+    attempts_today = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    reviewed_by = Column(String(120), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    resume_at = Column(DateTime, nullable=True)
+
+
+class AccountSafetyEvent(Base):
+    """Minimal, secret-free audit trail for account safety decisions."""
+
+    __tablename__ = "account_safety_events"
+    __table_args__ = (Index("ix_account_safety_events_account_time", "account_id", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String(24), nullable=False)
+    reason_code = Column(String(64), nullable=False)
+    source = Column(String(32), nullable=False)
+    actor = Column(String(120), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    peer_ref = Column(String(80), nullable=True)
+    resume_at = Column(DateTime, nullable=True)
+
+
+class AccountHealthCheck(Base):
+    """One operator-requested, read-only check through the bot-owned session."""
+
+    __tablename__ = "account_health_checks"
+    __table_args__ = (
+        Index("ix_account_health_checks_account_time", "account_id", "requested_at"),
+        Index(
+            "uq_account_health_checks_active", "account_id", unique=True,
+            sqlite_where=text("status IN ('pending', 'processing')"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    command_id = Column(Integer, ForeignKey("bot_commands.id"), nullable=False, unique=True)
+    status = Column(String(20), nullable=False, default="pending")
+    proxy_id = Column(Integer, nullable=True)
+    proxy_state = Column(String(20), nullable=False, default="unknown")
+    auth_state = Column(String(20), nullable=False, default="unknown")
+    safety_state = Column(String(20), nullable=True)
+    safety_reason_code = Column(String(64), nullable=True)
+    reason_code = Column(String(64), nullable=True)
+    requested_by = Column(String(120), nullable=True)
+    requested_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class AccountChatCooldown(Base):
+    """A Telegram slow-mode stop scoped to one chat and one account."""
+
+    __tablename__ = "account_chat_cooldowns"
+
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    peer_ref = Column(String(80), primary_key=True)
+    resume_at = Column(DateTime, nullable=False)
+    reason_code = Column(String(64), nullable=False, default="slow_mode")
+    source = Column(String(32), nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
+class EngagementDraft(Base):
+    """Reviewed reply to a post or message in an operator-managed community."""
+
+    __tablename__ = "engagement_drafts"
+    __table_args__ = (Index("ix_engagement_drafts_status_created", "status", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    mode = Column(String(16), nullable=False)  # comment | chat
+    peer_ref = Column(String(100), nullable=False)  # public @username or private -100<chat_id>
+    reply_to_message_id = Column(Integer, nullable=False)
+    source_text = Column(Text, nullable=False)
+    instruction = Column(String(1000), nullable=True)
+    draft_text = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="draft")
+    command_id = Column(Integer, ForeignKey("bot_commands.id"), nullable=True)
+    telegram_message_id = Column(BigInteger, nullable=True)
+    error_code = Column(String(64), nullable=True)
+    created_by = Column(String(120), nullable=False)
+    approved_by = Column(String(120), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
 
 
 # ==================== Архив (soft-delete) ====================
@@ -861,6 +1268,7 @@ class BotCommand(Base):
     status = Column(String(20), nullable=False, default="pending")  # pending|done|failed|cancelled
     error = Column(Text, nullable=True)
     requested_by = Column(String(120), nullable=True)
+    not_before = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utcnow_naive, nullable=False)
     processed_at = Column(DateTime, nullable=True)
 
@@ -935,6 +1343,17 @@ class ParsingTaskLog(Base):
     task = relationship("ParsingTask", backref="logs", foreign_keys=[task_id])
 
 
+class ParsingFilterReasonCount(Base):
+    """Aggregated exclusion reasons for a user parsing task."""
+
+    __tablename__ = "parsing_filter_reason_counts"
+
+    task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="CASCADE"), primary_key=True)
+    reason = Column(String(64), primary_key=True)
+    count = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
 class ParsedChannel(Base):
     __tablename__ = "parsed_channels"
     __table_args__ = (
@@ -982,6 +1401,31 @@ class ParsedGroup(Base):
         return f"<ParsedGroup {self.telegram_id}>"
 
 
+class CatalogFolder(Base):
+    """Operator-curated collection of locally discovered public venues."""
+
+    __tablename__ = "catalog_folders"
+    __table_args__ = (UniqueConstraint("name", name="uq_catalog_folder_name"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
+class CatalogFolderEntry(Base):
+    __tablename__ = "catalog_folder_entries"
+    __table_args__ = (
+        UniqueConstraint("folder_id", "kind", "telegram_id", name="uq_catalog_folder_entry"),
+        Index("ix_catalog_folder_entries_venue", "kind", "telegram_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    folder_id = Column(Integer, ForeignKey("catalog_folders.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String(10), nullable=False)
+    telegram_id = Column(BigInteger, nullable=False)
+    added_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
 class ParsedUser(Base):
     __tablename__ = "parsed_users"
     __table_args__ = (
@@ -1027,6 +1471,10 @@ class ParsedUserSource(Base):
     source_entity_kind = Column(String(16), nullable=False)  # channel | group
     source_kind = Column(String(32), nullable=False)  # member | active | commenter
     source_task_id = Column(Integer, ForeignKey("parsing_tasks.id", ondelete="SET NULL"), nullable=True)
+    message_id = Column(BigInteger, nullable=True)
+    post_id = Column(BigInteger, nullable=True)
+    message_at = Column(DateTime, nullable=True)
+    observed_at = Column(DateTime, nullable=False, default=utcnow_naive)
     created_at = Column(DateTime, default=utcnow_naive, nullable=False)
 
     user = relationship("ParsedUser", backref="sources", foreign_keys=[parsed_user_id])

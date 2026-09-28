@@ -149,7 +149,7 @@ def test_proxy_pools_and_file_import_wired():
     js = _read("main.js")
     assert "paintPoolCards" in js
     assert "свободно" in js and "занято" in js
-    assert 'id="prxImportFile"' in js
+    assert 'id="prxImportFile"' in html or 'id="prxImportFile"' in js
     assert "/business/proxies/import" in js
     assert "host:port@user:pass" in js
 
@@ -243,6 +243,18 @@ def test_tdata_check_wired_to_real_api():
         "/business/tdata/import"
         not in js.split("renderTdataCheck")[1].split("TData ZIP Import")[0]
     )
+
+
+def test_guide_page_wired():
+    """Отдельная страница-гайд: роут, навигация, палитра, контент."""
+    html = _read("index.html")
+    js = _read("main.js")
+    assert 'data-route="guide"' in html
+    assert '#/guide' in html
+    assert 'case "guide"' in js
+    assert 'function renderGuide' in js
+    assert 'Как пользоваться CoreBot' in js
+    assert 'outbound_queue' in js and 'bot_commands' in js
 
 
 def test_nav_and_shell_wiring():

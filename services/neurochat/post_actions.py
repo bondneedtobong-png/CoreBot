@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import random
+from typing import Awaitable, Callable
 
 from database.crm_repositories import ClientInteractionRepository
 from database.repositories import MailingRepository, NeuroActionRepository
 from database.session import session_scope
 from services.neurochat.class_bridge import increment_client_class_for_mailing
 from services.neurochat.dialog_service import append_assistant_message, append_user_message
+from services.neurochat.reply_quota import ReplyReservation
 from utils.links import plain_text_to_telegram_link_message
 from utils.logger import log
 from utils.telemetry import telemetry_emitter
@@ -20,6 +22,12 @@ async def persist_dialog_turn(account_id: int, peer_uid: int, user_text: str, as
             await append_assistant_message(session, account_id, peer_uid, assistant_text)
 
 
+async def persist_sent_reply(account_id: int, peer_uid: int, assistant_text: str) -> None:
+    """Keep assistant history aligned with messages accepted by Telegram."""
+    async with session_scope() as session:
+        await append_assistant_message(session, account_id, peer_uid, assistant_text)
+
+
 async def send_text_reply(
     worker,
     *,
@@ -28,6 +36,8 @@ async def send_text_reply(
     use_typing_neuro: bool,
     account_id: int,
     client_id: int,
+    before_send: Callable[[], Awaitable[bool]] | None = None,
+    reservation: ReplyReservation | None = None,
 ) -> bool:
     base = random.uniform(5.0, 10.0) if use_typing_neuro else 0.0
     extra = min(len(reply) / 30.0, 55.0) if use_typing_neuro else 0.0
@@ -40,8 +50,12 @@ async def send_text_reply(
         use_typing=use_typing_neuro,
         parse_mode=None,
         formatting_entities=out_entities or None,
+        source="neuro_reply",
+        before_send=before_send,
     )
     if ok:
+        if reservation is not None:
+            await reservation.mark_sent()
         return True
     log.warning(f"Neuro send failed: {send_err}")
     await telemetry_emitter.emit_event(
@@ -53,6 +67,32 @@ async def send_text_reply(
     return False
 
 
+async def send_and_record_reply(
+    worker,
+    *,
+    peer_uid: int,
+    reply: str,
+    use_typing_neuro: bool,
+    account_id: int,
+    client_id: int,
+    before_send: Callable[[], Awaitable[bool]] | None = None,
+    reservation: ReplyReservation | None = None,
+) -> bool:
+    ok = await send_text_reply(
+        worker,
+        peer_uid=peer_uid,
+        reply=reply,
+        use_typing_neuro=use_typing_neuro,
+        account_id=account_id,
+        client_id=client_id,
+        before_send=before_send,
+        reservation=reservation,
+    )
+    if ok:
+        await persist_sent_reply(account_id, peer_uid, reply)
+    return ok
+
+
 async def process_send_link_command(
     worker,
     *,
@@ -62,19 +102,13 @@ async def process_send_link_command(
     account_id: int,
     client_id: int,
     peer_uid: int,
-) -> None:
+    before_send: Callable[[], Awaitable[bool]] | None = None,
+    reservation: ReplyReservation | None = None,
+) -> bool:
     if cmd_send_link and link_for_send:
         log.info(
             f"Neuro command [SEND_LINK]: mailing={mailing_id} account={account_id} client={client_id}"
         )
-        async with session_scope() as session:
-            await NeuroActionRepository.create(
-                session,
-                mailing_id=mailing_id,
-                account_id=account_id,
-                client_id=client_id,
-                action="SEND_LINK",
-            )
         link_plain, link_entities = plain_text_to_telegram_link_message(link_for_send.strip())
         ok_link, _mid2, send_err2, _peer2 = await worker.send_message_with_typing(
             int(peer_uid),
@@ -83,6 +117,8 @@ async def process_send_link_command(
             use_typing=False,
             parse_mode=None,
             formatting_entities=link_entities or None,
+            source="neuro_link",
+            before_send=before_send,
         )
         if not ok_link:
             log.warning(f"Neuro SEND_LINK failed: {send_err2}")
@@ -92,11 +128,23 @@ async def process_send_link_command(
                 "Neuro send link failed",
                 payload={"account_id": account_id, "client_id": client_id, "error": send_err2 or ""},
             )
-        return
+        else:
+            if reservation is not None:
+                await reservation.mark_sent()
+            async with session_scope() as session:
+                await NeuroActionRepository.create(
+                    session,
+                    mailing_id=mailing_id,
+                    account_id=account_id,
+                    client_id=client_id,
+                    action="SEND_LINK",
+                )
+        return bool(ok_link)
     if cmd_send_link and not link_for_send:
         log.warning(
             f"Neuro command [SEND_LINK] skipped: empty/invalid community_link for mailing={mailing_id}"
         )
+    return False
 
 
 async def process_stop_command(

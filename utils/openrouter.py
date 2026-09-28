@@ -3,15 +3,10 @@
 """
 from __future__ import annotations
 
-import json
 from typing import Any, List, Optional, Tuple
 
-import aiohttp
-
 from bot.config import OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_HTTP_REFERER
-from utils.logger import log
-
-DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=120, connect=30)
+from utils.openai_compatible import chat_completion_verbose as compatible_chat_completion_verbose
 
 
 def _resolve_api_key(api_key: Optional[str]) -> str:
@@ -43,13 +38,14 @@ async def chat_completion(
 
     generation — полный набор параметров генерации (перекрывает max_tokens/temperature).
     """
-    return await chat_completion_verbose(
+    reply, error, _status = await chat_completion_verbose(
         messages,
         model,
         api_key=api_key,
         generation=generation
         or _default_generation(max_tokens=max_tokens, temperature=temperature),
-    )[:2]
+    )
+    return reply, error
 
 
 async def chat_completion_verbose(
@@ -74,48 +70,14 @@ async def chat_completion_verbose(
     if not key:
         return None, "Ключ OpenRouter не задан (ни в боте, ни OPENROUTER_API_KEY в .env)", None
 
-    url = f"{OPENROUTER_BASE_URL.rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"X-Title": "CoreBot"}
     if OPENROUTER_HTTP_REFERER:
         headers["HTTP-Referer"] = OPENROUTER_HTTP_REFERER
-    headers["X-Title"] = "CoreBot"
 
     gen = dict(generation) if generation is not None else _default_generation(
         max_tokens=max_tokens, temperature=temperature
     )
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        **gen,
-    }
-
-    try:
-        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                text = await resp.text()
-                if resp.status != 200:
-                    log.warning(f"OpenRouter HTTP {resp.status}: {text[:500]}")
-                    try:
-                        err = json.loads(text)
-                        msg = err.get("error", {}).get("message") or text[:300]
-                    except Exception:
-                        msg = text[:300]
-                    return None, msg, resp.status
-
-                data = json.loads(text)
-                choices = data.get("choices") or []
-                if not choices:
-                    return None, "Пустой ответ модели", 200
-                content = (choices[0].get("message") or {}).get("content")
-                if content is None:
-                    return None, "Нет content в ответе", 200
-                return str(content).strip(), None, 200
-    except aiohttp.ClientError as e:
-        log.error(f"OpenRouter сеть: {e}")
-        return None, str(e), None
-    except Exception as e:
-        log.error(f"OpenRouter: {e}")
-        return None, str(e), None
+    return await compatible_chat_completion_verbose(
+        messages, model, base_url=OPENROUTER_BASE_URL, api_key=key,
+        generation=gen, extra_headers=headers, allow_loopback_http=True,
+    )

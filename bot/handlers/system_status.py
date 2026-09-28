@@ -14,7 +14,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from database.models import Account, Mailing, MailingStatus
 from database.session import session_scope
 from services.neurochat.config_service import get_global_config
@@ -86,7 +86,7 @@ async def build_system_status_text() -> str:
 
 @router.callback_query(F.data == "menu_status")
 async def cb_menu_status(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()

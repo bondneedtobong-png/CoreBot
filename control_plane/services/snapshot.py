@@ -644,6 +644,10 @@ def collect_live_inputs(opts: CollectOptions) -> SnapshotInputs:
     try:
         from sqlalchemy import text as _text
 
+        # An external snapshot must not silently inspect the process CWD's
+        # database when --app-dir points at another (possibly empty) instance.
+        if not opts.in_process and not _resolve_corebot_db_path(app_dir).is_file():
+            raise FileNotFoundError("bot database is absent in app_dir")
         from control_plane.business.db import BotSession
         from control_plane.services.heartbeat import read_beats_session
 

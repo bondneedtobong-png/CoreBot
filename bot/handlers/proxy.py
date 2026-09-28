@@ -2,16 +2,19 @@
 Хендлеры для управления прокси.
 Добавление, просмотр списка, карточка прокси, редактирование, проверка, удаление.
 """
+import asyncio
 import re
+from html import escape
 from io import BytesIO
+from time import monotonic
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from bot.keyboards.main import (
     get_proxy_keyboard,
     get_proxy_bulk_purpose_keyboard,
@@ -22,6 +25,7 @@ from bot.keyboards.main import (
     get_context_back_keyboard,
     get_cancel_with_back_keyboard,
     get_proxy_groups_keyboard,
+    get_proxy_options_keyboard,
     get_proxy_group_card_keyboard,
     get_proxy_group_delete_confirm_keyboard,
     PROXY_LIST_PAGE_SIZE,
@@ -33,6 +37,19 @@ from utils.logger import log
 from utils.time import utcnow_naive
 
 router = Router()
+
+
+@router.callback_query(F.data == "proxy_options")
+async def cb_proxy_options(callback: CallbackQuery, state: FSMContext):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await state.clear()
+    await callback.message.edit_text(
+        "⚙️ <b>Дополнительно</b>",
+        reply_markup=get_proxy_options_keyboard(), parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
 
 
 # ==================== FSM Состояния ====================
@@ -59,16 +76,18 @@ class ProxyBulkAdd(StatesGroup):
 # ==================== Главное меню прокси ====================
 
 @router.callback_query(F.data == "menu_proxy")
-async def cb_proxy_menu(callback: CallbackQuery):
+async def cb_proxy_menu(callback: CallbackQuery, state: FSMContext):
     """Главное меню раздела Прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
+
+    await state.clear()
 
     await callback.message.edit_text(
         "🌐 <b>Управление прокси</b>\n\n"
         "Добавляйте прокси и привязывайте их к аккаунтам.\n"
-        "Формат: user:pass@host:port",
+        "Формат листа: host:port@user:pass",
         reply_markup=get_proxy_keyboard(),
         parse_mode=ParseMode.HTML,
     )
@@ -80,7 +99,7 @@ async def cb_proxy_menu(callback: CallbackQuery):
 @router.callback_query(F.data == "proxy_add")
 async def cb_proxy_add(callback: CallbackQuery, state: FSMContext):
     """Начало добавления прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -88,6 +107,7 @@ async def cb_proxy_add(callback: CallbackQuery, state: FSMContext):
         "🌐 <b>Добавление прокси</b>\n\n"
         "Введите <b>название прокси</b> (например: usa1, ger2):\n\n"
         "❌ Отмена: /start",
+        reply_markup=get_cancel_with_back_keyboard("menu_proxy", "proxy_options"),
         parse_mode=ParseMode.HTML,
     )
     await state.set_state(ProxyAdd.waiting_for_name)
@@ -96,7 +116,7 @@ async def cb_proxy_add(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "proxy_bulk_add")
 async def cb_proxy_bulk_add(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await callback.message.edit_text(
@@ -107,9 +127,10 @@ async def cb_proxy_bulk_add(callback: CallbackQuery, state: FSMContext):
         "• <code>user:pass@host:port</code>\n"
         "• <code>host:port:user:pass</code>\n"
         "• <code>host:port</code>\n"
-        "(префикс <code>http://</code> — для HTTP)\n\n"
+        "Принимаются только SOCKS5-прокси.\n\n"
         "Так список не разбивается на несколько сообщений и не перемешивается.\n\n"
-        "❌ Отмена: /start",
+        "Потом укажите название листа.",
+        reply_markup=get_cancel_with_back_keyboard("menu_proxy", "menu_proxy"),
         parse_mode=ParseMode.HTML,
     )
     await state.set_state(ProxyBulkAdd.waiting_for_lines)
@@ -119,7 +140,7 @@ async def cb_proxy_bulk_add(callback: CallbackQuery, state: FSMContext):
 @router.message(ProxyAdd.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
     """Обработка имени прокси."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     name = message.text.strip()
@@ -143,10 +164,11 @@ async def process_name(message: Message, state: FSMContext):
 
     await message.answer(
         "🌐 <b>Введите данные прокси</b>\n\n"
-        "Формат: <code>username:password@host:port</code>\n"
+        "Формат: <code>host:port@username:password</code>\n"
         "Тип: SOCKS5\n\n"
-        "Пример: <code>user123:pass456@1.2.3.4:1080</code>\n\n"
+        "Пример: <code>1.2.3.4:1080@user123:pass456</code>\n\n"
         "❌ Отмена: /start",
+        reply_markup=get_cancel_with_back_keyboard("menu_proxy", "proxy_options"),
         parse_mode=ParseMode.HTML,
     )
 
@@ -154,7 +176,7 @@ async def process_name(message: Message, state: FSMContext):
 @router.message(ProxyAdd.waiting_for_proxy)
 async def process_proxy(message: Message, state: FSMContext):
     """Обработка данных прокси."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     proxy_str = message.text.strip()
@@ -165,21 +187,18 @@ async def process_proxy(message: Message, state: FSMContext):
         await message.answer("❌ Добавление прокси отменено.")
         return
 
-    # Парсинг: user:pass@host:port
-    pattern = r'^([^:]+):([^@]+)@([^:]+):(\d+)$'
-    match = re.match(pattern, proxy_str)
-
-    if not match:
+    parsed = _parse_proxy_line(proxy_str)
+    if not parsed or parsed.proxy_type != "socks5":
         await message.answer(
             "❌ Неверный формат.\n\n"
-            "Используйте: <code>username:password@host:port</code>\n"
-            "Пример: <code>user123:pass456@1.2.3.4:1080</code>\n\n"
+            "Используйте: <code>host:port@username:password</code>\n"
+            "Пример: <code>1.2.3.4:1080@user123:pass456</code>\n\n"
             "Попробуйте ещё раз:",
             parse_mode=ParseMode.HTML,
         )
         return
 
-    username, password, host, port = match.groups()
+    username, password, host, port = parsed.username, parsed.password, parsed.host, parsed.port
 
     data = await state.get_data()
     name = data.get('name')
@@ -202,7 +221,7 @@ async def process_proxy(message: Message, state: FSMContext):
         f"✅ <b>Прокси добавлен!</b>\n\n"
         f"📋 Имя: {name}\n"
         f"🌍 Хост: {host}:{port}\n"
-        f"👤 Логин: {username}\n\n"
+        f"👤 Логин: {username or '—'}\n\n"
         "Теперь вы можете привязать его к аккаунту.",
         reply_markup=get_context_back_keyboard("proxy_list"),
         parse_mode=ParseMode.HTML,
@@ -221,7 +240,7 @@ def _parse_proxy_line(line: str):
 
 @router.message(ProxyBulkAdd.waiting_for_lines, F.document)
 async def process_bulk_proxy_document(message: Message, state: FSMContext, bot: Bot):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     doc = message.document
     fname = (doc.file_name or "").lower()
@@ -253,13 +272,14 @@ async def process_bulk_proxy_document(message: Message, state: FSMContext, bot: 
     await message.answer(
         f"Принято строк: <b>{len(lines)}</b>.\n\n"
         "Введите название группы прокси (например: <code>USA</code>):",
+        reply_markup=get_cancel_with_back_keyboard("menu_proxy", "proxy_bulk_add"),
         parse_mode=ParseMode.HTML,
     )
 
 
 @router.message(ProxyBulkAdd.waiting_for_lines)
 async def process_bulk_proxy_lines_not_document(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     text_cmd = (message.text or "").strip().lower()
     if text_cmd in ("/start", "cancel", "отмена"):
@@ -276,7 +296,7 @@ async def process_bulk_proxy_lines_not_document(message: Message, state: FSMCont
 
 @router.message(ProxyBulkAdd.waiting_for_group_name)
 async def process_bulk_proxy_group(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     group_name = (message.text or "").strip()
     if not group_name:
@@ -318,7 +338,7 @@ async def _run_bulk_proxy_import(
 
         for i, raw in enumerate(lines, start=1):
             parsed = _parse_proxy_line(raw)
-            if not parsed:
+            if not parsed or parsed.proxy_type != "socks5":
                 bad += 1
                 continue
             host, port, username, password = (
@@ -337,7 +357,7 @@ async def _run_bulk_proxy_import(
                 username=username,
                 password=password,
                 group_id=group.id,
-                proxy_type=ProxyType.HTTP if parsed.proxy_type == "http" else ProxyType.SOCKS5,
+                proxy_type=ProxyType.SOCKS5,
             )
             existing_keys.add(key)
             added += 1
@@ -358,7 +378,7 @@ async def _run_bulk_proxy_import(
 
 @router.callback_query(F.data == "proxy_bulk_purpose_runtime")
 async def cb_bulk_proxy_purpose_runtime(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     data = await state.get_data()
@@ -375,7 +395,7 @@ async def cb_bulk_proxy_purpose_runtime(callback: CallbackQuery, state: FSMConte
 
 @router.callback_query(F.data == "proxy_bulk_purpose_check")
 async def cb_bulk_proxy_purpose_check(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     data = await state.get_data()
@@ -395,24 +415,83 @@ async def cb_bulk_proxy_purpose_check(callback: CallbackQuery, state: FSMContext
 @router.callback_query(F.data == "proxy_groups")
 async def cb_proxy_groups(callback: CallbackQuery):
     """Список групп прокси c used/total/free."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
+    await _show_proxy_groups(callback, page=0)
+
+
+@router.callback_query(F.data.startswith("proxy_groups_p_"))
+async def cb_proxy_groups_page(callback: CallbackQuery):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await _show_proxy_groups(callback, page=int(callback.data.rsplit("_", 1)[-1]))
+
+
+@router.callback_query(F.data == "proxy_groups_page_info")
+async def cb_proxy_groups_page_info(callback: CallbackQuery):
+    await callback.answer()
+
+
+async def _show_proxy_groups(callback: CallbackQuery, *, page: int):
     async with session_scope() as session:
         groups_usage = await ProxyGroupRepository.list_with_usage(session)
     await callback.message.edit_text(
-        "📂 <b>Группы прокси</b>\n\n"
-        "Выберите группу для просмотра состава и занятости.",
-        reply_markup=get_proxy_groups_keyboard(groups_usage),
+        "📂 <b>Листы прокси</b>\n\nВыберите лист или проверьте первые 10 прокси каждого листа.",
+        reply_markup=get_proxy_groups_keyboard(groups_usage, page=page),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
 
 
+@router.callback_query(F.data == "proxy_groups_check_all")
+async def cb_proxy_groups_check_all(callback: CallbackQuery):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await callback.answer()
+    progress = await callback.message.answer("🔍 Проверяю до 10 прокси в каждом листе…")
+    async with session_scope() as session:
+        groups_usage = await ProxyGroupRepository.list_with_usage(session)
+        samples = [(group.name, (await ProxyRepository.get_by_group(session, group.id))[:10]) for group, _, _ in groups_usage]
+    from utils.proxy_checker import check_proxy
+
+    limit = asyncio.Semaphore(10)
+
+    async def probe(proxy):
+        async with limit:
+            started = monotonic()
+            ok, _ = await check_proxy(
+                proxy.proxy_type.value, proxy.host, proxy.port,
+                proxy.username, proxy.password, timeout=10,
+            )
+            return ok, round((monotonic() - started) * 1000)
+
+    lines = ["Проверка листов прокси", ""]
+    for name, proxies in samples:
+        results = await asyncio.gather(*(probe(proxy) for proxy in proxies), return_exceptions=True)
+        good = [latency for result in results if not isinstance(result, Exception) for ok, latency in [result] if ok]
+        latency = f"{round(sum(good) / len(good))} мс" if good else "—"
+        lines.append(f"{name}: {len(good)}/{len(proxies)} работают · средняя задержка {latency}")
+    report = "\n".join(lines)
+    try:
+        await progress.delete()
+    except Exception:
+        pass
+    if len(report) <= 3500:
+        await callback.message.answer(escape(report), parse_mode=ParseMode.HTML, reply_markup=get_proxy_groups_keyboard(groups_usage))
+    else:
+        await callback.message.answer_document(
+            BufferedInputFile(("\ufeff" + report).encode("utf-8"), filename="corebot-proxy-lists.txt"),
+            reply_markup=get_proxy_groups_keyboard(groups_usage),
+        )
+
+
 @router.callback_query(F.data.startswith("proxy_group_view_"))
 async def cb_proxy_group_view(callback: CallbackQuery):
     """Карточка группы прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     group_id = int(callback.data.split("_")[-1])
@@ -464,7 +543,7 @@ def _proxy_list_page_from_data(data: str) -> int:
 
 @router.callback_query(F.data == "proxy_list_page_info")
 async def cb_proxy_list_page_info(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     await callback.answer("Номер страницы · листайте ◀ ▶", show_alert=True)
@@ -474,7 +553,7 @@ async def cb_proxy_list_page_info(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("proxy_list_p_"))
 async def cb_proxy_list(callback: CallbackQuery):
     """Список прокси в виде inline-кнопок (с пагинацией)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -525,7 +604,7 @@ async def cb_proxy_list(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("proxy_group_delete_do_"))
 async def cb_proxy_group_delete_execute(callback: CallbackQuery):
     """Удаление группы прокси и всех её прокси (после подтверждения)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -566,7 +645,7 @@ async def cb_proxy_group_delete_execute(callback: CallbackQuery):
 @router.callback_query(F.data.regexp(r"^proxy_group_delete_(\d+)$"))
 async def cb_proxy_group_delete_prompt(callback: CallbackQuery):
     """Запрос на удаление группы: предупреждение, если прокси заняты."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -615,7 +694,7 @@ async def cb_proxy_group_delete_prompt(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("proxy_view_"))
 async def cb_proxy_view(callback: CallbackQuery, state: FSMContext):
     """Детальная карточка прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -691,7 +770,7 @@ async def cb_proxy_view(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("proxy_edit_"))
 async def cb_proxy_edit(callback: CallbackQuery):
     """Меню редактирования прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -709,7 +788,7 @@ async def cb_proxy_edit(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("proxy_edit_name_"))
 async def cb_edit_name(callback: CallbackQuery, state: FSMContext):
     """Изменение названия прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -730,7 +809,7 @@ async def cb_edit_name(callback: CallbackQuery, state: FSMContext):
 @router.message(ProxyEdit.waiting_for_name)
 async def process_edit_name(message: Message, state: FSMContext):
     """Обработка нового названия."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     new_name = message.text.strip()
@@ -769,7 +848,7 @@ async def process_edit_name(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("proxy_edit_data_"))
 async def cb_edit_data(callback: CallbackQuery, state: FSMContext):
     """Изменение данных прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -791,7 +870,7 @@ async def cb_edit_data(callback: CallbackQuery, state: FSMContext):
 @router.message(ProxyEdit.waiting_for_data)
 async def process_edit_data(message: Message, state: FSMContext):
     """Обработка новых данных прокси."""
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     proxy_str = message.text.strip()
@@ -848,7 +927,7 @@ async def process_edit_data(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("proxy_check_"))
 async def cb_proxy_check(callback: CallbackQuery):
     """Проверка работоспособности прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -934,7 +1013,7 @@ async def cb_proxy_check(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("proxy_delete_confirm_"))
 async def cb_delete_confirm(callback: CallbackQuery):
     """Подтверждение удаления прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -972,7 +1051,7 @@ async def cb_delete_confirm(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("proxy_delete_"))
 async def cb_delete_proxy(callback: CallbackQuery):
     """Удаление прокси."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -998,7 +1077,7 @@ async def cb_delete_proxy(callback: CallbackQuery):
 @router.callback_query(F.data == "cancel_proxy")
 async def cb_cancel_proxy(callback: CallbackQuery, state: FSMContext):
     """Отмена сценария прокси (отдельный callback от аккаунтов/рассылки)."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 

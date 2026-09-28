@@ -68,7 +68,8 @@ def test_run_tdata_import_converts_and_reports(monkeypatch, tmp_path):
 
     calls: list[str] = []
 
-    async def fake_convert(tdata_path, sessions_dir, password=None):
+    async def fake_convert(tdata_path, sessions_dir, password=None, *, proxy):
+        assert proxy.id == len(calls) + 1
         calls.append(Path(tdata_path).name)
         return {
             "success": True,
@@ -81,15 +82,35 @@ def test_run_tdata_import_converts_and_reports(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(tr, "convert_tdata_to_session", fake_convert)
-    monkeypatch.setattr(tr, "_create_account_from_tdata", lambda db, res, label=None: len(calls))
+    monkeypatch.setattr(tr, "_select_import_proxy", lambda db, group_id: type("Proxy", (), {"id": len(calls) + 1})())
+    monkeypatch.setattr(tr, "_create_account_from_tdata", lambda db, res, label=None, *, proxy_id: proxy_id)
 
     class FakeDB:
         pass
 
-    result = asyncio.run(run_tdata_import(archive.read_bytes(), FakeDB(), "admin", tmp_path / "sessions"))
+    result = asyncio.run(run_tdata_import(archive.read_bytes(), FakeDB(), "admin", tmp_path / "sessions", 1))
 
     assert result["ok"] is True
     assert result["total"] == 2
     assert result["converted"] == 2
     assert result["failed"] == 0
     assert len(calls) == 2
+
+
+def test_import_pool_busy_fails_before_proxy_selection(monkeypatch, tmp_path):
+    import control_plane.business.tdata_routes as tr
+    from workers.session_lease import proxy_pool_import_lease
+
+    archive = _zip({"a/tdata/settings": b"s", "a/tdata/key_datas": b"k"})
+    sessions_dir = tmp_path / "sessions"
+
+    def unexpected_selection(_db, _group_id):
+        raise AssertionError("proxy selection must wait for import lease")
+
+    monkeypatch.setattr(tr, "_select_import_proxy", unexpected_selection)
+    with proxy_pool_import_lease(sessions_dir, 7):
+        result = asyncio.run(tr.run_tdata_import(archive, object(), "admin", sessions_dir, 7))
+
+    assert result["ok"] is False
+    assert result["converted"] == 0
+    assert result["failed"] == 1

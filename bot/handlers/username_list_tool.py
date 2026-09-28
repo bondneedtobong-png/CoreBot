@@ -12,7 +12,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.config import FILES_DIR, OWNER_ID
+from bot.config import is_authorized_user
+from bot.config import FILES_DIR
 from bot.keyboards.main import get_cancel_with_back_keyboard, get_clients_keyboard
 from utils.logger import log
 from utils.username_list_tool import (
@@ -68,7 +69,7 @@ def _review_keyboard(session_id: str) -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "clients_username_tool")
 async def cb_username_tool_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -97,7 +98,7 @@ async def cb_username_tool_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_username_tool")
 async def cb_cancel_username_tool(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -110,7 +111,7 @@ async def cb_cancel_username_tool(callback: CallbackQuery, state: FSMContext):
 
 @router.message(UsernameListToolFSM.waiting_file, F.document)
 async def process_username_tool_file(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     document = message.document
@@ -202,7 +203,7 @@ async def process_username_tool_file(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith(f"{_SESSION_PREFIX}yes_"))
 async def cb_username_tool_yes(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     session_id = callback.data.split("_")[-1]
@@ -239,7 +240,7 @@ async def cb_username_tool_yes(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith(f"{_SESSION_PREFIX}keep_"))
 async def cb_username_tool_keep(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     session_id = callback.data.split("_")[-1]
@@ -255,7 +256,7 @@ async def cb_username_tool_keep(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith(f"{_SESSION_PREFIX}close_"))
 async def cb_username_tool_close(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔", show_alert=True)
         return
     session_id = callback.data.split("_")[-1]
@@ -291,6 +292,6 @@ async def _sweep_old_tool_files() -> None:
 
 @router.message(UsernameListToolFSM.waiting_file, F.text)
 async def username_tool_need_document(message: Message):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     await message.answer("Пришлите файл .txt <b>документом</b> (не текстом в чат).", parse_mode=ParseMode.HTML)

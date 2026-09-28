@@ -101,7 +101,8 @@ def test_startup_shutdown_once_parser_disabled(monkeypatch):
         assert client.get("/health/live").status_code == 200
         assert client.get("/health/live").json() == {"ok": True}
     assert len(bootstrap_calls) == 1
-    fake_db.connect.assert_not_called()
+    # Business migrations run before the panel serves routes even without a parser.
+    fake_db.connect.assert_awaited_once()
     fake_db.disconnect.assert_awaited_once()
     assert getattr(main.app.state, "parser_task", None) is None
 
@@ -109,6 +110,7 @@ def test_startup_shutdown_once_parser_disabled(monkeypatch):
     with TestClient(main.app):
         pass
     assert len(bootstrap_calls) == 2
+    assert fake_db.connect.await_count == 2
     assert fake_db.disconnect.await_count == 2
 
 

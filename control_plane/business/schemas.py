@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PositiveInt, field_validator
 
 
 # ===== Accounts =====
@@ -33,6 +33,22 @@ class AccountModeIn(BaseModel):
     mode: str = Field(pattern="^(AI_ACTIVE|MANUAL)$")
 
 
+class AccountBulkMetadataIn(BaseModel):
+    account_ids: list[PositiveInt] = Field(min_length=1, max_length=200)
+    action: str = Field(pattern="^(add|remove)$")
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    group_ids: list[PositiveInt] = Field(default_factory=list, max_length=20)
+
+
+class AccountBulkMetadataOut(BaseModel):
+    action: str
+    account_ids: list[int]
+    accounts_changed: int
+    tags_changed_accounts: int
+    group_memberships_added: int
+    group_memberships_removed: int
+
+
 # ===== Dialogs =====
 
 
@@ -45,6 +61,21 @@ class DialogListItem(BaseModel):
     last_message_at: Optional[datetime] = None
     last_role: Optional[str] = None  # 'user' | 'assistant'
     messages_count: int = 0
+    waiting_for_reply: bool = False
+    unread_count: int = 0
+
+
+class DialogMarkReadIn(BaseModel):
+    # Omit to mark all incoming messages currently stored in the dialog.
+    # Supplying an ID prevents a newer, unseen arrival from being marked read.
+    through_message_id: Optional[int] = Field(default=None, ge=0)
+
+
+class DialogReadState(BaseModel):
+    account_id: int
+    peer_user_id: int
+    last_read_message_id: int
+    unread_count: int
 
 
 class MessageOut(BaseModel):
@@ -115,7 +146,7 @@ class CleanupRequest(BaseModel):
     account_id: Optional[int] = None
     peer_user_id: Optional[int] = None
     older_than_days: Optional[int] = Field(default=None, ge=1, le=3650)
-    classes: Optional[list[str]] = None
+    classes: Optional[list[str]] = Field(default=None, min_length=1, max_length=50)
     dry_run: bool = False
     batch_size: int = Field(default=500, ge=1, le=5000)
 
@@ -131,7 +162,7 @@ class CleanupRequestV2(BaseModel):
     account_id: Optional[int] = None
     peer_user_id: Optional[int] = None
     older_than_days: Optional[int] = Field(default=None, ge=1, le=3650)
-    classes: Optional[list[str]] = None
+    classes: Optional[list[str]] = Field(default=None, min_length=1, max_length=50)
     dry_run: bool = False
     batch_size: int = Field(default=500, ge=1, le=5000)
     mode: str = Field(default="archive", pattern="^(archive|hard)$")
@@ -250,6 +281,10 @@ class MailingListItem(BaseModel):
     failed: int
     audience_mode: str
     neurochat_enabled: bool
+    neuro_active_start_minute: Optional[int] = None
+    neuro_active_end_minute: Optional[int] = None
+    neuro_timezone: str = "UTC"
+    queued_start: bool = False
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: datetime
@@ -264,6 +299,7 @@ class MailingDetail(MailingListItem):
     delay_between_messages: float
     delay_between_accounts: float
     daily_limit: int
+    neuro_daily_reply_limit: int = 0
     messages_per_batch: int
     batch_delay: float
     max_recipients: Optional[int] = None
@@ -274,6 +310,10 @@ class MailingDetail(MailingListItem):
     audience_client_status: str = "new"
     audience_include_classes: list[str] = []
     audience_exclude_classes: list[str] = []
+
+
+class MailingStartIn(BaseModel):
+    scheduled_at: Optional[datetime] = None
 
 
 class MailingActionResult(BaseModel):
@@ -312,6 +352,9 @@ class ClientListItem(BaseModel):
     added_at: datetime
     last_contacted_at: Optional[datetime] = None
     classes: list[ClientClassCount] = []
+    contact_permission: str = "unverified"
+    contact_permission_source: Optional[str] = None
+    contact_permission_at: Optional[datetime] = None
 
 
 class ClientInteractionItem(BaseModel):
@@ -401,6 +444,9 @@ class OpenRouterKeyIn(BaseModel):
 
 
 class AccountDetail(AccountListItem):
+    created_at: Optional[datetime] = None
+    import_source: Optional[str] = None
+    imported_at: Optional[datetime] = None
     bio: Optional[str] = None
     tags: Optional[str] = None
     daily_limit: int = 0
@@ -477,7 +523,7 @@ class GroupRename(BaseModel):
 
 
 class GroupAccountsSet(BaseModel):
-    account_ids: list[int]
+    account_ids: list[int] = Field(min_length=1, max_length=5000)
 
 
 # ===== Proxies =====
@@ -517,7 +563,7 @@ class ProxyCreate(BaseModel):
     port: int = Field(ge=1, le=65535)
     username: Optional[str] = Field(default=None, max_length=100)
     password: Optional[str] = Field(default=None, max_length=100)
-    proxy_type: str = Field(default="socks5", pattern="^(socks5|http)$")
+    proxy_type: str = Field(default="socks5", pattern="^socks5$")
     group_id: Optional[int] = None
     is_active: bool = True
 
@@ -528,7 +574,7 @@ class ProxyPatch(BaseModel):
     port: Optional[int] = Field(default=None, ge=1, le=65535)
     username: Optional[str] = Field(default=None, max_length=100)
     password: Optional[str] = Field(default=None, max_length=100)
-    proxy_type: Optional[str] = Field(default=None, pattern="^(socks5|http)$")
+    proxy_type: Optional[str] = Field(default=None, pattern="^socks5$")
     group_id: Optional[int] = None
     is_active: Optional[bool] = None
 
@@ -562,13 +608,14 @@ class ProxyImportResult(BaseModel):
 class MailingPatch(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     message_text: Optional[str] = Field(default=None, max_length=8000)
-    message_variants: Optional[list[str]] = None
+    message_variants: Optional[list[str]] = Field(default=None, min_length=1, max_length=20)
     variant_mode: Optional[str] = Field(default=None, pattern="^(random|sequential)$")
     use_typing: Optional[bool] = None
     smart_delay: Optional[bool] = None
     delay_between_messages: Optional[float] = Field(default=None, ge=0, le=600)
     delay_between_accounts: Optional[float] = Field(default=None, ge=0, le=600)
     daily_limit: Optional[int] = Field(default=None, ge=0, le=10000)
+    neuro_daily_reply_limit: Optional[int] = Field(default=None, ge=0, le=10000, strict=True)
     messages_per_batch: Optional[int] = Field(default=None, ge=0, le=10000)
     batch_delay: Optional[float] = Field(default=None, ge=0, le=86400)
     max_recipients: Optional[int] = Field(default=None, ge=0, le=1000000)
@@ -579,10 +626,13 @@ class MailingPatch(BaseModel):
     neurochat_enabled: Optional[bool] = None
     neuro_model: Optional[str] = Field(default=None, max_length=255)
     neuro_sampling_json: Optional[str] = Field(default=None, max_length=4000)
+    neuro_active_start_minute: Optional[int] = Field(default=None, ge=0, le=1439)
+    neuro_active_end_minute: Optional[int] = Field(default=None, ge=0, le=1439)
+    neuro_timezone: Optional[str] = Field(default=None, min_length=1, max_length=255)
     audience_mode: Optional[str] = Field(default=None, pattern="^(classes|test|all)$")
     audience_client_status: Optional[str] = Field(default=None, pattern="^(new|open)$")
-    audience_include_classes: Optional[list[str]] = None
-    audience_exclude_classes: Optional[list[str]] = None
+    audience_include_classes: Optional[list[str]] = Field(default=None, min_length=1, max_length=50)
+    audience_exclude_classes: Optional[list[str]] = Field(default=None, min_length=1, max_length=50)
 
 
 class MailingCreate(BaseModel):
@@ -597,10 +647,85 @@ class MailingPromptOut(BaseModel):
     mailing_id: int
     text: str
     has_custom_file: bool
+    version_id: Optional[int] = None
 
 
 class MailingPromptIn(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
+    expected_version_id: Optional[int] = Field(default=None, ge=1)
+
+
+class MailingPromptExpectedIn(BaseModel):
+    expected_version_id: Optional[int] = Field(default=None, ge=1)
+
+
+class NeuroPromptCompareIn(BaseModel):
+    sample_message: str = Field(min_length=3, max_length=1000)
+    sample_messages: Optional[list[str]] = Field(default=None, min_length=1, max_length=3)
+    candidate_text: str = Field(min_length=1, max_length=20000)
+    account_id: Optional[PositiveInt] = None
+
+    @field_validator("sample_message")
+    @classmethod
+    def validate_sample_message(cls, value: str) -> str:
+        value = value.strip()
+        if not 3 <= len(value) <= 1000:
+            raise ValueError("sample message must be 3-1000 non-whitespace characters")
+        return value
+
+    @field_validator("sample_messages")
+    @classmethod
+    def validate_sample_messages(cls, values: Optional[list[str]]) -> Optional[list[str]]:
+        if values is None:
+            return None
+        return [cls.validate_sample_message(value) for value in values]
+
+
+class NeuroKnowledgeCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(min_length=1, max_length=3000)
+    keywords: list[str] = Field(default_factory=list, max_length=10)
+    enabled: bool = True
+
+    @field_validator("title", "content")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must not be blank")
+        return value
+
+    @field_validator("keywords")
+    @classmethod
+    def normalize_keywords(cls, values: list[str]) -> list[str]:
+        result = []
+        seen = set()
+        for raw in values:
+            value = raw.strip()
+            if not value or len(value) > 64:
+                raise ValueError("keywords must contain 1-64 non-whitespace characters")
+            key = value.casefold()
+            if key not in seen:
+                result.append(value)
+                seen.add(key)
+        return result
+
+
+class NeuroKnowledgePatch(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    content: Optional[str] = Field(default=None, min_length=1, max_length=3000)
+    keywords: Optional[list[str]] = Field(default=None, max_length=10)
+    enabled: Optional[bool] = None
+
+    @field_validator("title", "content")
+    @classmethod
+    def nonblank(cls, value: Optional[str]) -> Optional[str]:
+        return NeuroKnowledgeCreate.nonblank(value) if value is not None else value
+
+    @field_validator("keywords")
+    @classmethod
+    def normalize_keywords(cls, values: Optional[list[str]]) -> Optional[list[str]]:
+        return NeuroKnowledgeCreate.normalize_keywords(values) if values is not None else values
 
 
 # ===== Parsing (Telegram parser-worker) =====
@@ -613,7 +738,7 @@ class ParsingTaskCreate(BaseModel):
     account_ids: list[int] = Field(min_length=1, max_length=50)
     depth: int = Field(default=1, ge=1, le=3)
     mode: str = Field(default="max_coverage", pattern="^(max_coverage|active_only)$")
-    params: dict = Field(default_factory=dict)
+    params: dict = Field(default_factory=dict, max_length=50)
 
 
 class ParsingTaskOut(BaseModel):

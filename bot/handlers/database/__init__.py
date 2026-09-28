@@ -2,6 +2,7 @@ from aiogram import Router
 
 from bot.handlers.database.crm_tools import router as database_crm_tools_router
 from bot.handlers.database.exports_delete import router as database_exports_delete_router
+from bot.handlers.database.client_exports import router as database_client_exports_router
 from bot.handlers.database.menu import router as database_menu_router
 from bot.handlers.database.sheet_212 import router as database_sheet_212_router
 from bot.handlers.database.sheet_new import router as database_sheet_new_router
@@ -9,6 +10,7 @@ from bot.handlers.database.sheet_new import router as database_sheet_new_router
 database_router = Router()
 database_router.include_router(database_menu_router)
 database_router.include_router(database_exports_delete_router)
+database_router.include_router(database_client_exports_router)
 database_router.include_router(database_crm_tools_router)
 database_router.include_router(database_sheet_new_router)
 database_router.include_router(database_sheet_212_router)

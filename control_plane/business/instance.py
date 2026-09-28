@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from bot.config import MAILING_BASE_UTC_OFFSET as ENV_BASE_UTC_OFFSET
 from bot.config import NEUROCHAT_ENABLED as ENV_NEUROCHAT_ENABLED
-from control_plane.business.db import get_bot_db
+from control_plane.business.db import commit_sync, get_bot_db
 from control_plane.business.schemas import (
     InstanceSettingsOut,
     InstanceSettingsPatch,
@@ -45,7 +45,7 @@ def _ensure_row(db: Session) -> InstanceSettings:
     if row is None:
         row = InstanceSettings(id=1)
         db.add(row)
-        db.commit()
+        commit_sync(db)
         db.refresh(row)
     return row
 
@@ -112,7 +112,7 @@ def patch_settings(
         changed = True
 
     if changed:
-        db.commit()
+        commit_sync(db)
         db.refresh(row)
     return _serialize(row)
 
@@ -132,7 +132,7 @@ def set_openrouter_key(
     if not plain:
         raise HTTPException(status_code=400, detail="empty key")
     row.openrouter_key_ciphertext = encrypt_openrouter_key(plain)
-    db.commit()
+    commit_sync(db)
     db.refresh(row)
     # Если в окружении нет ключа шифрования — об этом стоит сообщить через detail.
     if not os.getenv("OPENROUTER_KEY_ENCRYPTION_KEY"):
@@ -148,4 +148,4 @@ def clear_openrouter_key(
 ):
     row = _ensure_row(db)
     row.openrouter_key_ciphertext = None
-    db.commit()
+    commit_sync(db)

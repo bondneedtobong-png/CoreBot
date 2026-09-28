@@ -7,9 +7,9 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from bot.handlers.clients import render_clients_dashboard
 from bot.keyboards.database_menu import (
     kb_database_debug_windows,
@@ -26,8 +26,31 @@ from bot.keyboards.database_menu import (
 router = Router()
 
 
+def _database_root_keyboard() -> InlineKeyboardMarkup:
+    """Короткие пути из нового меню с сохранением прежних разделов."""
+    old_rows = kb_database_root().inline_keyboard
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📥 Загрузить базу", callback_data="db_sheet_211")],
+            [InlineKeyboardButton(text="📤 Выгрузить базу", callback_data="db_exp_menu")],
+            *old_rows,
+        ]
+    )
+
+
+def _database_export_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Простой TXT", callback_data="db_exp_txt")],
+            [InlineKeyboardButton(text="Продвинутый Excel", callback_data="db_exp_xlsx_menu")],
+            [InlineKeyboardButton(text="Прежние списки", callback_data="db_exp_legacy")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_database")],
+        ]
+    )
+
+
 def _owner_only(callback: CallbackQuery) -> bool:
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         return False
     return True
 
@@ -43,7 +66,7 @@ async def cb_menu_database(callback: CallbackQuery, state: FSMContext):
         "Единый центр: пользователи (username + user_id), классы-счётчики, теги, "
         "история взаимодействий, бэкапы.\n\n"
         "Выберите раздел:",
-        reply_markup=kb_database_root(),
+        reply_markup=_database_root_keyboard(),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
@@ -131,7 +154,25 @@ async def db_m_2132(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await callback.message.edit_text(
-        "<b>Выгрузить данные</b>\n\nВыберите группу:",
+        "<b>Выгрузить базу</b>\n\nВыберите формат:",
+        reply_markup=_database_export_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "db_exp_menu")
+async def db_exp_menu(callback: CallbackQuery, state: FSMContext):
+    await db_m_2132(callback, state)
+
+
+@router.callback_query(F.data == "db_exp_legacy")
+async def db_exp_legacy(callback: CallbackQuery):
+    if not _owner_only(callback):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "<b>Прежние списки TXT</b>\n\nВыберите группу:",
         reply_markup=kb_database_export_groups(),
         parse_mode=ParseMode.HTML,
     )

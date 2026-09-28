@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from database.models import (
     ParsedGroup,
     ParsedUser,
     ParsedUserSource,
+    ParsingFilterReasonCount,
     ParsingTask,
 )
 
@@ -171,23 +172,63 @@ async def add_user_source_edge(
     source_entity_kind: str,
     source_kind: str,
     source_task_id: int,
+    message_id: int | None = None,
+    post_id: int | None = None,
+    message_at: datetime | None = None,
 ) -> None:
+    observed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    if message_at is not None and message_at.tzinfo is not None:
+        message_at = message_at.astimezone(timezone.utc).replace(tzinfo=None)
     stmt = sqlite_insert(ParsedUserSource).values(
         parsed_user_id=parsed_user.id,
         source_entity_id=source_entity_id,
         source_entity_kind=source_entity_kind,
         source_kind=source_kind,
         source_task_id=source_task_id,
+        message_id=message_id,
+        post_id=post_id,
+        message_at=message_at,
+        observed_at=observed_at,
     )
-    stmt = stmt.on_conflict_do_nothing(
+    newer_event = or_(
+        ParsedUserSource.message_at.is_(None),
+        stmt.excluded.message_at > ParsedUserSource.message_at,
+    )
+    stmt = stmt.on_conflict_do_update(
         index_elements=[
             ParsedUserSource.parsed_user_id,
             ParsedUserSource.source_entity_id,
             ParsedUserSource.source_entity_kind,
             ParsedUserSource.source_kind,
-        ]
+        ],
+        set_={
+            "source_task_id": stmt.excluded.source_task_id,
+            "message_id": case((newer_event, stmt.excluded.message_id),
+                               else_=ParsedUserSource.message_id),
+            "post_id": case((newer_event, stmt.excluded.post_id),
+                            else_=ParsedUserSource.post_id),
+            "message_at": case((newer_event, stmt.excluded.message_at),
+                               else_=ParsedUserSource.message_at),
+            "observed_at": stmt.excluded.observed_at,
+        },
     )
     await execute_with_busy_retry(session, stmt, op_name="parser-user-source")
+
+
+async def bump_filter_reason(session: AsyncSession, task_id: int, reason: str) -> None:
+    key = (reason or "unspecified")[:64]
+    stmt = sqlite_insert(ParsingFilterReasonCount).values(
+        task_id=task_id, reason=key, count=1,
+        updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[ParsingFilterReasonCount.task_id, ParsingFilterReasonCount.reason],
+        set_={
+            "count": ParsingFilterReasonCount.count + 1,
+            "updated_at": stmt.excluded.updated_at,
+        },
+    )
+    await execute_with_busy_retry(session, stmt, op_name="parser-filter-reason")
 
 
 async def bump_task_counters(

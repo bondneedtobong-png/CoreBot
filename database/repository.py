@@ -12,6 +12,55 @@ from database.sqlite_pragmas import register_async_sqlite_pragmas
 from utils.logger import log
 
 
+async def migrate_owned_story_view_attempts(conn) -> None:
+    """Additive, idempotent audit table for one-story view attempts."""
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS owned_story_view_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            peer_id BIGINT NOT NULL,
+            story_id INTEGER NOT NULL,
+            actor_id BIGINT NOT NULL,
+            channel_title VARCHAR(255) NOT NULL DEFAULT '',
+            link VARCHAR(255) NOT NULL,
+            expires_at DATETIME NOT NULL,
+            status VARCHAR(24) NOT NULL DEFAULT 'uncertain',
+            reason VARCHAR(80),
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            CONSTRAINT uq_owned_story_view_target UNIQUE (account_id, peer_id, story_id)
+        )
+    """))
+    await conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_owned_story_view_actor_time "
+        "ON owned_story_view_attempts(actor_id, created_at)"
+    ))
+
+
+async def migrate_tdata_check_history(conn) -> None:
+    """Additive, idempotent history table for older bot databases."""
+    await conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS tdata_check_history (
+            run_id VARCHAR(64) PRIMARY KEY,
+            requested_by VARCHAR(120) NOT NULL,
+            check_group_id INTEGER NOT NULL,
+            status VARCHAR(24) NOT NULL,
+            created_at DATETIME NOT NULL,
+            finished_at DATETIME NOT NULL,
+            total INTEGER NOT NULL DEFAULT 0,
+            ok_count INTEGER NOT NULL DEFAULT 0,
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            truncated BOOLEAN NOT NULL DEFAULT 0,
+            reason VARCHAR(80),
+            items_json TEXT NOT NULL DEFAULT '[]'
+        )
+    """))
+    await conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_tdata_check_history_operator_time "
+        "ON tdata_check_history(requested_by, created_at)"
+    ))
+
+
 async def migrate_proxy_group_purpose(conn) -> None:
     """Forward-only миграция purpose пулов (задача 12, ADDITIVE only).
 
@@ -34,6 +83,35 @@ async def migrate_proxy_group_purpose(conn) -> None:
     await conn.execute(text(
         "UPDATE proxy_groups SET purpose='ACCOUNT_RUNTIME' "
         "WHERE purpose IS NULL OR purpose=''"
+    ))
+
+
+async def migrate_profile_pool_categories(conn) -> None:
+    """Keep pre-category ZIP pools available as unisex candidates."""
+    exists = await conn.execute(text(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='profile_pool_items'"
+    ))
+    if not exists.fetchone():
+        return
+    columns = {row[1] for row in (await conn.execute(text(
+        "PRAGMA table_info(profile_pool_items)"
+    ))).fetchall()}
+    if "category" not in columns:
+        await conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS profile_pool_items_category_backup "
+            "AS SELECT * FROM profile_pool_items"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE profile_pool_items ADD COLUMN category VARCHAR(1) "
+            "NOT NULL DEFAULT 'u'"
+        ))
+    await conn.execute(text(
+        "UPDATE profile_pool_items SET category='u' "
+        "WHERE category IS NULL OR category NOT IN ('m', 'f', 'u')"
+    ))
+    await conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_profile_pool_items_category "
+        "ON profile_pool_items(category)"
     ))
 
 
@@ -86,6 +164,8 @@ class Database:
         """
         try:
             async with self.engine.begin() as conn:
+                await migrate_owned_story_view_attempts(conn)
+                await migrate_tdata_check_history(conn)
                 # Проверяем, существует ли таблица accounts
                 result = await conn.execute(text(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='accounts'"
@@ -161,6 +241,28 @@ class Database:
                         )
                     )
 
+                # Keep legacy safety rows intact while adding scoped stop details.
+                safety_columns = {
+                    "account_safety_state": {
+                        "resume_at": "ALTER TABLE account_safety_state ADD COLUMN resume_at DATETIME",
+                    },
+                    "account_safety_events": {
+                        "peer_ref": "ALTER TABLE account_safety_events ADD COLUMN peer_ref VARCHAR(80)",
+                        "resume_at": "ALTER TABLE account_safety_events ADD COLUMN resume_at DATETIME",
+                    },
+                }
+                for table, additions in safety_columns.items():
+                    info = await conn.execute(text(f"PRAGMA table_info({table})"))
+                    present = {row[1] for row in info.fetchall()}
+                    missing = {name: sql for name, sql in additions.items() if name not in present}
+                    if missing:
+                        await conn.execute(text(
+                            f"CREATE TABLE IF NOT EXISTS {table}_pre_scoped_stop_backup "
+                            f"AS SELECT * FROM {table}"
+                        ))
+                        for sql in missing.values():
+                            await conn.execute(text(sql))
+
                 # --- Миграция: добавление таблицы groups ---
                 groups_exists = await conn.execute(text(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='groups'"
@@ -201,10 +303,14 @@ class Database:
                         CREATE TABLE warmup_profiles (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             name VARCHAR(50) UNIQUE NOT NULL,
-                            base_delay_sec FLOAT DEFAULT 45.0,
-                            jitter_sec FLOAT DEFAULT 25.0,
-                            daily_action_limit INTEGER DEFAULT 40,
+                            base_delay_sec FLOAT DEFAULT 3600.0,
+                            jitter_sec FLOAT DEFAULT 900.0,
+                            daily_action_limit INTEGER DEFAULT 4,
                             target_chats_text TEXT DEFAULT '',
+                            time_zone VARCHAR(64) NOT NULL DEFAULT 'Europe/Moscow',
+                            work_start_hour INTEGER NOT NULL DEFAULT 9,
+                            work_end_hour INTEGER NOT NULL DEFAULT 18,
+                            allowed_actions VARCHAR(100) NOT NULL DEFAULT 'read_dialogs,read_channels',
                             enabled BOOLEAN DEFAULT 1,
                             created_at DATETIME DEFAULT (datetime('now')),
                             updated_at DATETIME DEFAULT (datetime('now'))
@@ -212,7 +318,7 @@ class Database:
                     """))
                     await conn.execute(text(
                         "INSERT INTO warmup_profiles(name, base_delay_sec, jitter_sec, daily_action_limit, enabled) "
-                        "VALUES ('safe', 45.0, 25.0, 40, 1)"
+                        "VALUES ('safe', 3600.0, 900.0, 4, 1)"
                     ))
                     log.info("✅ Таблица warmup_profiles создана")
                 else:
@@ -223,6 +329,22 @@ class Database:
                         await conn.execute(text(
                             "ALTER TABLE warmup_profiles ADD COLUMN target_chats_text TEXT DEFAULT ''"
                         ))
+                    for column, definition in (
+                        ("time_zone", "VARCHAR(64) NOT NULL DEFAULT 'Europe/Moscow'"),
+                        ("work_start_hour", "INTEGER NOT NULL DEFAULT 9"),
+                        ("work_end_hour", "INTEGER NOT NULL DEFAULT 18"),
+                        ("allowed_actions", "VARCHAR(100) NOT NULL DEFAULT 'read_dialogs,read_channels'"),
+                    ):
+                        if column not in wp_cols:
+                            await conn.execute(text(
+                                f"ALTER TABLE warmup_profiles ADD COLUMN {column} {definition}"
+                            ))
+                # Upgrade the former rapid-fire safe preset, preserving custom values.
+                await conn.execute(text(
+                    "UPDATE warmup_profiles SET base_delay_sec=3600, jitter_sec=900, "
+                    "daily_action_limit=4 WHERE name='safe' AND base_delay_sec=45 "
+                    "AND jitter_sec=25 AND daily_action_limit=40"
+                ))
 
                 # --- warmup logs table ---
                 wl_exists = await conn.execute(text(
@@ -284,6 +406,13 @@ class Database:
                 if m_exists.fetchone():
                     m_info = await conn.execute(text("PRAGMA table_info(mailings)"))
                     mcols = {row[1] for row in m_info.fetchall()}
+                    if any(column not in mcols for column in (
+                        "neuro_active_start_minute", "neuro_active_end_minute", "neuro_timezone"
+                    )):
+                        await conn.execute(text(
+                            "CREATE TABLE IF NOT EXISTS mailings_neuro_active_hours_backup "
+                            "AS SELECT * FROM mailings"
+                        ))
                     if "target_group_id" not in mcols:
                         log.info("➕ mailings: target_group_id")
                         await conn.execute(text(
@@ -309,6 +438,10 @@ class Database:
                         await conn.execute(text(
                             "ALTER TABLE mailings ADD COLUMN neuro_model VARCHAR(255)"
                         ))
+                    if "neuro_provider_id" not in mcols:
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN neuro_provider_id INTEGER"
+                        ))
                     if "auto_stop_hours" not in mcols:
                         log.info("➕ mailings: auto_stop_hours")
                         await conn.execute(text(
@@ -333,6 +466,28 @@ class Database:
                         log.info("➕ mailings: neuro_sampling_json")
                         await conn.execute(text(
                             "ALTER TABLE mailings ADD COLUMN neuro_sampling_json TEXT DEFAULT '{}'"
+                        ))
+                    if "neuro_active_start_minute" not in mcols:
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN neuro_active_start_minute INTEGER"
+                        ))
+                    if "neuro_active_end_minute" not in mcols:
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN neuro_active_end_minute INTEGER"
+                        ))
+                    if "neuro_timezone" not in mcols:
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN neuro_timezone VARCHAR(255) "
+                            "NOT NULL DEFAULT 'UTC'"
+                        ))
+                    if "neuro_daily_reply_limit" not in mcols:
+                        await conn.execute(text(
+                            "CREATE TABLE IF NOT EXISTS mailings_neuro_reply_limit_backup "
+                            "AS SELECT * FROM mailings"
+                        ))
+                        await conn.execute(text(
+                            "ALTER TABLE mailings ADD COLUMN neuro_daily_reply_limit INTEGER "
+                            "NOT NULL DEFAULT 0"
                         ))
                     if "audience_filter_json" not in mcols:
                         log.info("➕ mailings: audience_filter_json")
@@ -365,8 +520,10 @@ class Database:
                         CREATE TABLE instance_settings (
                             id INTEGER PRIMARY KEY,
                             openrouter_key_ciphertext TEXT,
+                            default_ai_provider_id INTEGER,
                             mailing_base_utc_offset INTEGER,
-                            neurochat_enabled BOOLEAN
+                            neurochat_enabled BOOLEAN,
+                            mailing_neurochat_default BOOLEAN NOT NULL DEFAULT 0
                         )
                     """))
                     await conn.execute(text(
@@ -385,6 +542,14 @@ class Database:
                         log.info("➕ instance_settings: neurochat_enabled")
                         await conn.execute(text(
                             "ALTER TABLE instance_settings ADD COLUMN neurochat_enabled BOOLEAN"
+                        ))
+                    if "mailing_neurochat_default" not in iscols:
+                        await conn.execute(text(
+                            "ALTER TABLE instance_settings ADD COLUMN mailing_neurochat_default BOOLEAN NOT NULL DEFAULT 0"
+                        ))
+                    if "default_ai_provider_id" not in iscols:
+                        await conn.execute(text(
+                            "ALTER TABLE instance_settings ADD COLUMN default_ai_provider_id INTEGER"
                         ))
 
                 # --- clients: telegram_user_id + username → nullable ---
@@ -411,6 +576,24 @@ class Database:
                     # nullable — блок пропускается.
                     uname_row = next((r for r in c_rows if r[1] == "username"), None)
                     username_notnull = bool(uname_row) and int(uname_row[3]) == 1
+                    if not username_notnull:
+                        # Схема уже nullable: вечный clients_pre_username_backup
+                        # больше не нужен — чистим, чтобы не копился мусор.
+                        # Удаляем только если живой clients не пуст
+                        # (защита от удаления единственного снимка при битой БД).
+                        try:
+                            _bck = await conn.execute(text(
+                                "SELECT name FROM sqlite_master WHERE type='table' "
+                                "AND name='clients_pre_username_backup'"
+                            ))
+                            if _bck.fetchone():
+                                _cnt = await conn.execute(text("SELECT COUNT(*) FROM clients"))
+                                _n = int((_cnt.fetchone() or [0])[0] or 0)
+                                if _n > 0:
+                                    await conn.execute(text("DROP TABLE clients_pre_username_backup"))
+                                    log.info("🧹 clients_pre_username_backup удалён (схема уже nullable)")
+                        except Exception as e:
+                            log.warning(f"cleanup clients backup: {e}")
                     if username_notnull:
                         log.info("🔧 clients.username → nullable: пересборка таблицы (бэкап в clients_pre_username_backup)")
                         # 1. Авто-снимок для отката (идемпотентно).
@@ -670,11 +853,112 @@ class Database:
                     ))
                     log.info("✅ Таблица bot_commands создана")
 
+                # New diagnostic history has no legacy rows to transform. Keep
+                # its DDL here as well as in metadata for existing deployments.
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS account_health_checks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                        command_id INTEGER NOT NULL UNIQUE REFERENCES bot_commands(id),
+                        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                        proxy_id INTEGER,
+                        proxy_state VARCHAR(20) NOT NULL DEFAULT 'unknown',
+                        auth_state VARCHAR(20) NOT NULL DEFAULT 'unknown',
+                        safety_state VARCHAR(20),
+                        safety_reason_code VARCHAR(64),
+                        reason_code VARCHAR(64),
+                        requested_by VARCHAR(120),
+                        requested_at DATETIME NOT NULL,
+                        started_at DATETIME,
+                        finished_at DATETIME
+                    )
+                """))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_account_health_checks_account_time "
+                    "ON account_health_checks(account_id, requested_at)"
+                ))
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_account_health_checks_active "
+                    "ON account_health_checks(account_id) "
+                    "WHERE status IN ('pending', 'processing')"
+                ))
+
+                # Operator-specific read cursors are a new, additive table.
+                # User identities belong to CP's separate database, so no FK.
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS dialog_read_cursors (
+                        operator_user_id INTEGER NOT NULL,
+                        account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                        peer_user_id BIGINT NOT NULL,
+                        last_read_message_id INTEGER NOT NULL DEFAULT 0,
+                        updated_at DATETIME NOT NULL,
+                        PRIMARY KEY (operator_user_id, account_id, peer_user_id)
+                    )
+                """))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_neuro_chat_unread "
+                    "ON neuro_chat_messages(account_id, peer_user_id, role, id)"
+                ))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_neuro_chat_export_page "
+                    "ON neuro_chat_messages(account_id, peer_user_id, id)"
+                ))
+
+                # Only one frozen, unclaimed start per mailing. Existing DBs
+                # need this index because create_all does not add it to a table.
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_mailing_runs_one_queued "
+                    "ON mailing_runs(mailing_id) WHERE status = 'queued'"
+                ))
+                run_cols = {row[1] for row in (await conn.execute(text(
+                    "PRAGMA table_info(mailing_runs)"
+                ))).fetchall()}
+                if "scheduled_at" not in run_cols:
+                    await conn.execute(text(
+                        "ALTER TABLE mailing_runs ADD COLUMN scheduled_at DATETIME"
+                    ))
+                command_cols = {row[1] for row in (await conn.execute(text(
+                    "PRAGMA table_info(bot_commands)"
+                ))).fetchall()}
+                if "not_before" not in command_cols:
+                    await conn.execute(text(
+                        "ALTER TABLE bot_commands ADD COLUMN not_before DATETIME"
+                    ))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_bot_commands_status_not_before "
+                    "ON bot_commands(status, not_before, id)"
+                ))
+                source_cols = {row[1] for row in (await conn.execute(text(
+                    "PRAGMA table_info(parsed_user_sources)"
+                ))).fetchall()}
+                for column, ddl in {
+                    "message_id": "BIGINT",
+                    "post_id": "BIGINT",
+                    "message_at": "DATETIME",
+                    "observed_at": "DATETIME",
+                }.items():
+                    if column not in source_cols:
+                        await conn.execute(text(
+                            f"ALTER TABLE parsed_user_sources ADD COLUMN {column} {ddl}"
+                        ))
+                await conn.execute(text(
+                    "UPDATE parsed_user_sources SET observed_at = created_at "
+                    "WHERE observed_at IS NULL"
+                ))
+
+                from services.neurochat.prompt_history import migrate_prompt_history
+
+                await conn.run_sync(migrate_prompt_history, self.url)
+                await migrate_profile_pool_categories(conn)
+
                 log.info("✅ Все миграции завершены")
 
         except Exception as e:
-            log.error(f"⚠️ Ошибка при выполнении миграции: {e}")
-            # Не прерываем работу, продолжаем запуск
+            # Полумиграция молча стартовать не должна: транзакция engine.begin()
+            # уже откатила незавершённый шаг, но БД может остаться между
+            # миграциями. Fail-fast вместо «log+continue».
+            log.error(f"⛔ Ошибка миграции, старт запрещён: {e}")
+            raise RuntimeError(f"migration failed: {e}") from e
 
     async def disconnect(self):
         """Закрытие подключения."""

@@ -63,7 +63,7 @@ if not exist ".env" (
 )
 
 echo [3/5] Validating .env...
-"%PYTHON%" -m tools.validate_config --mode local
+"%PYTHON%" -m tools.validate_config --mode local --env-file .env
 if errorlevel 1 (
     echo ERROR: Required values are missing or invalid in .env.
     echo        Check API_ID, API_HASH, BOT_TOKEN and OWNER_ID.
@@ -80,7 +80,7 @@ if /I "%MODE%"=="--check" (
 echo [4/5] Starting Control Plane...
 powershell -NoProfile -Command "if (Get-NetTCPConnection -State Listen -LocalPort 8081 -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >nul 2>&1
 if errorlevel 1 (
-    start "CoreBot Control Plane" "%ComSpec%" /d /k ""%PYTHON%" -m uvicorn control_plane.main:app --host 127.0.0.1 --port 8081"
+    start "CoreBot Control Plane" "%ComSpec%" /d /k ""%PYTHON%" -m uvicorn control_plane.main:app --host 127.0.0.1 --port 8081 --no-access-log"
 ) else (
     echo       Port 8081 is already listening; Control Plane start skipped.
 )

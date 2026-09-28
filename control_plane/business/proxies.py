@@ -27,7 +27,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from control_plane.business.db import get_bot_db
+from control_plane.business.db import commit_sync, get_bot_db
 from control_plane.business.schemas import (
     ProxyCreate,
     ProxyGroupCreate,
@@ -68,8 +68,8 @@ def _proxy_type_to_str(value: object) -> str:
 
 def _proxy_type_from_str(value: str | None) -> ProxyType:
     s = (value or "").strip().lower()
-    if s == "http":
-        return ProxyType.HTTP
+    if s != "socks5":
+        raise HTTPException(status_code=400, detail="only SOCKS5 proxies are supported")
     return ProxyType.SOCKS5
 
 
@@ -280,7 +280,7 @@ def create_proxy(
     )
     db.add(p)
     try:
-        db.commit()
+        commit_sync(db)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="proxy with this name exists")
@@ -324,7 +324,7 @@ def patch_proxy(
     if payload.is_active is not None:
         p.is_active = bool(payload.is_active)
     try:
-        db.commit()
+        commit_sync(db)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="proxy with this name exists")
@@ -358,7 +358,7 @@ def delete_proxy(
         update(Account).where(Account.proxy_id == proxy_id).values(proxy_id=None)
     )
     db.delete(p)
-    db.commit()
+    commit_sync(db)
 
 
 @router.post("/business/proxies/{proxy_id}/test", response_model=ProxyTestResult)
@@ -381,7 +381,7 @@ def test_proxy(
     elapsed = int((time.perf_counter() - started) * 1000)
     p.last_checked = utcnow_naive()
     p.is_working = bool(ok)
-    db.commit()
+    commit_sync(db)
     return ProxyTestResult(
         proxy_id=int(proxy_id),
         ok=ok,
@@ -410,7 +410,7 @@ def import_proxies(
         group = ProxyGroup(name=group_name, purpose=payload.purpose.strip().upper())
         db.add(group)
         try:
-            db.commit()
+            commit_sync(db)
         except IntegrityError:
             db.rollback()
             group = db.execute(select(ProxyGroup).where(ProxyGroup.name == group_name)).scalars().first()
@@ -431,7 +431,7 @@ def import_proxies(
         if not line:
             continue
         parsed = parse_proxy_line(line)
-        if parsed is None:
+        if parsed is None or parsed.proxy_type != "socks5":
             bad += 1
             if len(bad_samples) < 5:
                 bad_samples.append(line[:80])
@@ -454,14 +454,14 @@ def import_proxies(
                 port=int(parsed.port),
                 username=parsed.username,
                 password=parsed.password,
-                proxy_type=ProxyType.HTTP if parsed.proxy_type == "http" else ProxyType.SOCKS5,
+                proxy_type=ProxyType.SOCKS5,
                 is_active=True,
                 is_working=True,
                 group_id=int(group.id),
             )
         )
         try:
-            db.commit()
+            commit_sync(db)
         except IntegrityError:
             db.rollback()
             skipped += 1
@@ -534,7 +534,7 @@ def create_proxy_group(
     group = ProxyGroup(name=payload.name.strip(), purpose=purpose)
     db.add(group)
     try:
-        db.commit()
+        commit_sync(db)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="proxy group with this name exists")

@@ -158,9 +158,9 @@ def test_import_dedups_and_reuses_group():
     assert second["group_id"] == first["group_id"]
 
 
-def test_import_http_type_and_list_shape():
+def test_import_rejects_http_type():
     client, _ = _client()
-    client.post(
+    response = client.post(
         "/business/proxies/import",
         json={
             "group_name": "H",
@@ -168,10 +168,9 @@ def test_import_http_type_and_list_shape():
             "lines": ["http://10.0.0.9:8080:u:p"],
         },
     )
-    rows = client.get("/business/proxies").json()
-    assert len(rows) == 1
-    assert rows[0]["proxy_type"] == "http"
-    assert rows[0]["group_name"] == "H"
-    assert rows[0]["accounts_count"] == 0
+    assert response.status_code == 200
+    assert response.json()["added"] == 0
+    assert response.json()["bad"] == 1
+    assert client.get("/business/proxies").json() == []
     groups = client.get("/business/proxy-groups").json()
     assert groups[0]["purpose"] == "TDATA_CHECK"

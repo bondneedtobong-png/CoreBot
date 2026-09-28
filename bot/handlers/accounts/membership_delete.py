@@ -4,7 +4,8 @@ import os
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
-from bot.config import OWNER_ID, SESSIONS_DIR
+from bot.config import is_authorized_user
+from bot.config import SESSIONS_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import get_account_card_keyboard, get_accounts_keyboard, get_confirm_delete_keyboard
 from database.models import Membership
@@ -17,7 +18,7 @@ router = Router()
 
 @router.callback_query(F.data.startswith("account_change_membership_"))
 async def cb_change_membership(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -54,7 +55,7 @@ async def cb_change_membership(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("account_delete_confirm_"))
 async def cb_delete_confirm(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -79,7 +80,7 @@ async def cb_delete_account(callback: CallbackQuery):
     Окончательное удаление. Callback строго `account_delete_{id}`, без `confirm`,
     чтобы не пересекаться с account_delete_confirm_{id}.
     """
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 

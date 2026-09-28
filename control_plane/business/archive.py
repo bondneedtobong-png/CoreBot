@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, asc, delete, desc, func, select
 from sqlalchemy.orm import Session
 
-from control_plane.business.db import get_bot_db
+from control_plane.business.db import commit_sync, get_bot_db
 from control_plane.business.schemas import (
     ArchivedDialogItem,
     ArchiveRestoreRequest,
@@ -192,7 +192,7 @@ def cleanup_v2(
         result = db.execute(
             delete(NeuroChatMessage).where(NeuroChatMessage.id.in_(ids_chunk))
         )
-        db.commit()
+        commit_sync(db)
         deleted_messages += int(result.rowcount or 0)
         if len(ids_chunk) < batch_size:
             break
@@ -244,7 +244,7 @@ def cleanup_v2(
                     ClientInteraction.id.in_(ids_chunk)
                 )
             )
-            db.commit()
+            commit_sync(db)
             deleted_interactions += int(result.rowcount or 0)
             if len(ids_chunk) < batch_size:
                 break
@@ -400,7 +400,7 @@ def restore_archive(
                 NeuroChatMessageArchive.id.in_(ids)
             )
         )
-        db.commit()
+        commit_sync(db)
         restored_msgs += len(rows)
         if len(rows) < batch:
             break
@@ -456,7 +456,7 @@ def restore_archive(
                     ClientInteractionArchive.id.in_(ids)
                 )
             )
-            db.commit()
+            commit_sync(db)
             restored_inters += len(rows)
             if len(rows) < batch:
                 break

@@ -8,10 +8,10 @@ import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from utils.time import utcnow_naive
-from pathlib import Path
 from typing import Optional
 
 from telethon import errors
+from telethon.errors import AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError
 from telethon.tl.functions.messages import SendReactionRequest
 from telethon.tl.types import ReactionEmoji
 
@@ -27,8 +27,14 @@ from database.repositories import (
     WarmupLogRepository,
     WarmupProfileRepository,
 )
+from database.models import AccountSafetyState
+from services.account_safety import check_account_gate, pause_account, reserve_send
 from utils.logger import log
 from utils.telemetry import telemetry_emitter
+from services.warmup_schedule import (
+    DEFAULT_TIME_ZONE, DEFAULT_WORK_END, DEFAULT_WORK_START,
+    MIN_INTERVAL_SECONDS, is_off_hours, next_action_at, next_off_hours, parse_read_targets,
+)
 
 
 @dataclass
@@ -40,10 +46,8 @@ class WarmupPolicy:
 
     def next_delay(self) -> float:
         """Случайная пауза между действиями с jitter."""
-        if self.base_delay_sec <= 0:
-            return 0.0
         jitter = random.uniform(-self.jitter_sec, self.jitter_sec) if self.jitter_sec > 0 else 0.0
-        return max(1.0, self.base_delay_sec + jitter)
+        return max(float(MIN_INTERVAL_SECONDS), self.base_delay_sec + jitter)
 
     def allow_action(self, actions_today: int) -> bool:
         """Проверка дневного лимита."""
@@ -74,11 +78,8 @@ def choose_warmup_action(now: Optional[datetime] = None) -> str:
     actions = (
         "read_dialogs",
         "read_channels",
-        "set_reaction",
-        "short_reply",
     )
-    # Сдвиг в сторону низкорисковых действий.
-    weights = (0.45, 0.35, 0.15, 0.05)
+    weights = (0.65, 0.35)
     return random.choices(actions, weights=weights, k=1)[0]
 
 
@@ -120,30 +121,16 @@ class WarmupRunner:
 
     @staticmethod
     def _parse_targets(raw: str) -> list[str]:
-        out: list[str] = []
-        for line in (raw or "").splitlines():
-            item = line.strip()
-            if not item:
-                continue
-            item = item.replace("https://t.me/", "").replace("http://t.me/", "")
-            item = item.split("/", 1)[0].strip()
-            if not item:
-                continue
-            if not item.startswith("@"):
-                item = f"@{item}"
-            out.append(item)
-        return out
+        return parse_read_targets(raw)
 
     async def _ensure_worker_connected(self, account) -> Optional["Worker"]:
-        from workers.manager import Worker, worker_manager
+        from workers.manager import worker_manager
 
         worker = worker_manager.workers.get(account.id)
         if worker is None:
-            session_path = Path("data/sessions") / f"{account.session_name}.session"
-            if not session_path.exists():
+            worker = await worker_manager.ensure_worker(account.id)
+            if worker is None:
                 return None
-            worker = Worker(account, session_path, account.proxy)
-            worker_manager.workers[account.id] = worker
         if not worker.is_connected:
             ok = await worker.connect()
             if not ok:
@@ -155,6 +142,8 @@ class WarmupRunner:
         worker: "Worker",
         action: str,
         targets: list[str],
+        *,
+        target_override: Optional[str] = None,
     ) -> tuple[str, str]:
         client = worker.client
         if client is None:
@@ -164,9 +153,8 @@ class WarmupRunner:
             await client.get_dialogs(limit=8)
             return "ok", "dialogs_refreshed"
 
-        if action in ("read_channels", "short_reply"):
+        if action == "read_channels":
             if not targets:
-                await client.get_dialogs(limit=5)
                 return "skip", "no_targets"
             target = random.choice(targets)
             entity = await client.get_entity(target)
@@ -178,7 +166,7 @@ class WarmupRunner:
         if action == "set_reaction":
             if not targets:
                 return "skip", "no_targets"
-            target = random.choice(targets)
+            target = target_override or random.choice(targets)
             entity = await client.get_entity(target)
             msgs = await client.get_messages(entity, limit=10)
             msg = next((m for m in msgs if getattr(m, "id", None)), None)
@@ -195,17 +183,54 @@ class WarmupRunner:
             )
             return "ok", f"reaction:{target}:{emoji}"
 
-        await client.get_dialogs(limit=5)
         return "skip", "unknown_action"
+
+    async def _perform_account_action(
+        self, worker: "Worker", account_id: int, action: str,
+        targets: list[str], session,
+    ) -> tuple[str, str]:
+        """Share the worker's action lock and persisted safety gate with text sends."""
+        if action == "set_reaction":
+            if not targets:
+                return "skip", "no_targets"
+            target = random.choice(targets)
+            async with worker._send_lock:
+                allowed, reason = await reserve_send(
+                    session, account_id, source="warmup_reaction", peer_ref=target,
+                )
+                if not allowed:
+                    return "skip", reason
+                return await self._do_action(
+                    worker, action, targets, target_override=target,
+                )
+        allowed, reason = await check_account_gate(session, account_id)
+        if not allowed:
+            return "skip", reason
+        return await self._do_action(worker, action, targets)
 
     async def _tick(self) -> None:
         async with session_scope() as session:
-            await AccountRepository.reset_warmup_daily(session)
             candidates = await AccountRepository.list_warmup_candidates(session, limit=20)
             if not candidates:
                 return
 
             for account in candidates:
+                safety_state = await session.get(AccountSafetyState, account.id)
+                if (
+                    account.is_spam_blocked
+                    or (account.flood_wait_until and account.flood_wait_until > utcnow_naive())
+                    or (safety_state and safety_state.state != "ready")
+                ):
+                    continue
+                now = utcnow_naive()
+                # This counter belongs to warmup, not the account's shared last_reset.
+                # The last warmup attempt supplies its UTC day across process restarts.
+                if not account.warmup_last_action_at or account.warmup_last_action_at.date() != now.date():
+                    account.warmup_actions_today = 0
+                    if account.warmup_pause_reason == "daily_limit_reached":
+                        account.warmup_pause_reason = None
+                        account.warmup_paused_until = None
+                    await session.commit()
                 profile = await WarmupProfileRepository.get_effective_for_account(session, account)
                 if profile and not profile.enabled:
                     await WarmupLogRepository.create(
@@ -215,17 +240,34 @@ class WarmupRunner:
                         status="skip",
                     )
                     continue
+                time_zone = getattr(profile, "time_zone", None) or DEFAULT_TIME_ZONE
+                work_start = int(getattr(profile, "work_start_hour", DEFAULT_WORK_START))
+                work_end = int(getattr(profile, "work_end_hour", DEFAULT_WORK_END))
+                now = utcnow_naive()
+                if not is_off_hours(now, time_zone, work_start, work_end):
+                    # Persist the first quiet instant so a 5-second tick does not reconnect.
+                    account.warmup_next_run_at = next_off_hours(now, time_zone, work_start, work_end)
+                    await session.commit()
+                    continue
+                last_at = account.warmup_last_action_at
+                if last_at and now < last_at + timedelta(seconds=MIN_INTERVAL_SECONDS):
+                    account.warmup_next_run_at = last_at + timedelta(seconds=MIN_INTERVAL_SECONDS)
+                    await session.commit()
+                    continue
                 active_policy = WarmupPolicy(
                     enabled=self._policy.enabled,
                     base_delay_sec=float(getattr(profile, "base_delay_sec", self._policy.base_delay_sec) or self._policy.base_delay_sec),
                     jitter_sec=float(getattr(profile, "jitter_sec", self._policy.jitter_sec) or self._policy.jitter_sec),
-                    daily_action_limit=int(getattr(profile, "daily_action_limit", self._policy.daily_action_limit) or self._policy.daily_action_limit),
+                    daily_action_limit=min(12, int(getattr(profile, "daily_action_limit", self._policy.daily_action_limit) or self._policy.daily_action_limit)),
                 )
                 if not active_policy.allow_action(int(account.warmup_actions_today or 0)):
+                    next_day = (utcnow_naive() + timedelta(days=1)).replace(
+                        hour=0, minute=0, second=0, microsecond=0,
+                    )
                     await AccountRepository.set_warmup_pause(
                         session,
                         account.id,
-                        until=utcnow_naive(),
+                        until=next_day,
                         reason="daily_limit_reached",
                     )
                     await WarmupLogRepository.create(
@@ -236,9 +278,20 @@ class WarmupRunner:
                     )
                     continue
 
+                allowed = set((getattr(profile, "allowed_actions", None) or "read_dialogs,read_channels").split(","))
+                allowed &= {"read_dialogs", "read_channels", "set_reaction"}
+                if not allowed:
+                    await WarmupLogRepository.create(
+                        session, account_id=account.id, action="skip_no_allowed_actions", status="skip",
+                    )
+                    continue
                 action = choose_warmup_action()
+                if action not in allowed:
+                    action = random.choice(sorted(allowed))
                 delay = active_policy.next_delay()
                 targets = self._parse_targets(getattr(profile, "target_chats_text", "") or "")
+                if action in ("read_channels", "set_reaction") and not targets:
+                    action = "read_dialogs" if "read_dialogs" in allowed else action
 
                 status = "ok"
                 details = ""
@@ -248,9 +301,21 @@ class WarmupRunner:
                         status = "skip"
                         details = "worker_unavailable"
                     else:
-                        status, details = await self._do_action(worker, action, targets)
+                        status, details = await self._perform_account_action(
+                            worker, account.id, action, targets, session,
+                        )
+                        if action == "set_reaction" and status == "skip":
+                            await WarmupLogRepository.create(
+                                session, account_id=account.id, action="skip_reaction",
+                                status="skip", details=details,
+                            )
+                            continue
                 except errors.FloodWaitError as e:
                     pause_until = utcnow_naive() + timedelta(seconds=int(e.seconds or 60))
+                    await pause_account(
+                        session, account.id, reason_code="flood_wait", source="warmup",
+                        state="cooling_down", resume_at=pause_until,
+                    )
                     await AccountRepository.set_warmup_pause(
                         session,
                         account.id,
@@ -265,11 +330,21 @@ class WarmupRunner:
                         details=f"seconds={int(e.seconds or 60)}",
                     )
                     continue
+                except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError) as e:
+                    await pause_account(
+                        session, account.id, reason_code="auth_invalid", source="warmup",
+                        state="needs_reauth",
+                    )
+                    await WarmupLogRepository.create(
+                        session, account_id=account.id, action=f"pause_auth_{action}",
+                        status="skip", details=type(e).__name__,
+                    )
+                    continue
                 except Exception as e:
                     status = "error"
                     details = f"err={str(e)[:180]}"
 
-                next_run = utcnow_naive() + timedelta(seconds=delay)
+                next_run = next_action_at(utcnow_naive(), last_at, delay, 0)
                 await AccountRepository.mark_warmup_action(
                     session,
                     account_id=account.id,

@@ -9,7 +9,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from bot.config import OPENROUTER_API_KEY, OWNER_ID
+from bot.config import is_authorized_user
+from bot.config import OPENROUTER_API_KEY
 from bot.keyboards.main import (
     get_context_back_keyboard,
     get_mailing_neuro_keyboard,
@@ -55,7 +56,7 @@ async def _openrouter_key_text(mailing_id: int) -> str:
 
 @router.callback_query(F.data.startswith("openrouter_key_menu_neuro_"))
 async def cb_openrouter_key_menu(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -71,7 +72,7 @@ async def cb_openrouter_key_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("openrouter_key_set_neuro_"))
 async def cb_openrouter_key_set(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -93,7 +94,7 @@ async def cb_openrouter_key_set(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("openrouter_key_clear_confirm_neuro_"))
 async def cb_openrouter_key_clear_confirm(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -110,7 +111,7 @@ async def cb_openrouter_key_clear_confirm(callback: CallbackQuery, state: FSMCon
 
 @router.callback_query(F.data.startswith("openrouter_key_clear_do_neuro_"))
 async def cb_openrouter_key_clear_do(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     mailing_id = int(callback.data.split("_")[-1])
@@ -127,7 +128,7 @@ async def cb_openrouter_key_clear_do(callback: CallbackQuery, state: FSMContext)
 
 @router.message(OpenRouterKeyFSM.waiting_for_key)
 async def process_openrouter_key(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     key = (message.text or "").strip()
     if not key:

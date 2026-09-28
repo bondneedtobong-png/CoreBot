@@ -16,26 +16,26 @@ class TokenOut(BaseModel):
 
 
 class IngestEventIn(BaseModel):
-    level: str = "info"
-    category: str
-    code: Optional[str] = None
-    message: str
+    level: str = Field(default="info", max_length=16)
+    category: str = Field(min_length=1, max_length=128)
+    code: Optional[str] = Field(default=None, max_length=128)
+    message: str = Field(min_length=1, max_length=8000)
     payload: Optional[dict[str, Any]] = None
-    schema_version: str = "1"
+    schema_version: str = Field(default="1", max_length=16)
 
 
 class MetricIn(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=128)
     value: float
     tags: Optional[dict[str, Any]] = None
 
 
 class IngestBatchIn(BaseModel):
     agent_name: str = Field(min_length=1, max_length=160)
-    machine_fingerprint: Optional[str] = None
-    version: Optional[str] = None
-    events: List[IngestEventIn] = []
-    metrics: List[MetricIn] = []
+    machine_fingerprint: Optional[str] = Field(default=None, max_length=256)
+    version: Optional[str] = Field(default=None, max_length=64)
+    events: List[IngestEventIn] = Field(default_factory=list, max_length=500)
+    metrics: List[MetricIn] = Field(default_factory=list, max_length=500)
 
 
 class DashboardSummaryOut(BaseModel):

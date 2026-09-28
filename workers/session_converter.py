@@ -11,14 +11,16 @@ tdata/
 ├── key_datas         # Ключи
 └── prefix            # Префикс
 """
-import time
 import asyncio
 import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from telethon import TelegramClient
+from uuid import uuid4
+
+from database.models import Proxy, ProxyType
+from workers.session_lease import SessionLease
 
 from telethon.errors import (
     FloodWaitError,
@@ -358,6 +360,8 @@ async def convert_tdata_to_session(
     tdata_path: Path,
     sessions_dir: Path,
     password: Optional[str] = None,
+    *,
+    proxy: Optional[Proxy] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Конвертация Tdata в .session файл через tgconvertor.
@@ -378,6 +382,11 @@ async def convert_tdata_to_session(
         - last_name: str (фамилия, опционально)
         - error: str (если ошибка)
     """
+    if proxy is None or proxy.proxy_type != ProxyType.SOCKS5 or not proxy.is_active:
+        return {"success": False, "error": "Для импорта нужен активный SOCKS5-прокси"}
+    client = None
+    lease = None
+    session_path = None
     try:
         tdata_path = Path(tdata_path)
         sessions_dir = Path(sessions_dir)
@@ -398,9 +407,9 @@ async def convert_tdata_to_session(
         except BaseException as e:
             hint = f"Проверка TData завершилась с ошибкой импорта: {e!r}"
         # Генерируем уникальное имя сессии заранее: понадобится и primary, и fallback
-        timestamp = int(time.time())
-        session_name = f"account_{timestamp}"
+        session_name = f"account_{uuid4().hex}"
         session_path = sessions_dir / f"{session_name}.session"
+        lease = SessionLease(session_path).acquire()
 
         if hint:
             log.warning(f"⚠️ Primary TData путь недоступен: {hint}")
@@ -489,9 +498,9 @@ async def convert_tdata_to_session(
         try:
             # Создаём клиента Telethon вручную (make_telethon() не существует!)
             # Используем реальные API credentials из .env
-            api_id, api_hash = _get_api_credentials()
-            
-            client = TelegramClient(str(session_path), api_id=api_id, api_hash=api_hash)
+            from workers.manager import create_telethon_client, get_telethon_proxy_dict
+
+            client = create_telethon_client(session_path, get_telethon_proxy_dict(proxy))
             await client.connect()
             log.info("🔌 Подключение к Telegram...")
             
@@ -572,9 +581,17 @@ async def convert_tdata_to_session(
             "success": False,
             "error": str(e),
         }
+    finally:
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+        if lease is not None:
+            lease.release()
 
 
-async def check_session_validity(session_path: Path) -> bool:
+async def check_session_validity(session_path: Path, proxy: Optional[Proxy] = None) -> bool:
     """
     Проверка валидности сессии.
 
@@ -584,6 +601,10 @@ async def check_session_validity(session_path: Path) -> bool:
     Returns:
         bool: True если сессия валидна и авторизована
     """
+    if proxy is None or proxy.proxy_type != ProxyType.SOCKS5 or not proxy.is_active:
+        return False
+    client = None
+    lease = None
     try:
         session_path = Path(session_path)
 
@@ -592,9 +613,10 @@ async def check_session_validity(session_path: Path) -> bool:
             return False
 
         # Используем реальные API credentials из .env
-        api_id, api_hash = _get_api_credentials()
+        from workers.manager import create_telethon_client, get_telethon_proxy_dict
 
-        client = TelegramClient(str(session_path), api_id=api_id, api_hash=api_hash)
+        lease = SessionLease(session_path).acquire()
+        client = create_telethon_client(session_path, get_telethon_proxy_dict(proxy))
         await client.connect()
 
         # Используем is_user_authorized() вместо isAuthorized()
@@ -612,9 +634,17 @@ async def check_session_validity(session_path: Path) -> bool:
     except Exception as e:
         log.error(f"❌ Ошибка проверки сессии {session_path}: {e}")
         return False
+    finally:
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+        if lease is not None:
+            lease.release()
 
 
-async def get_account_info(session_path: Path) -> Optional[Dict[str, Any]]:
+async def get_account_info(session_path: Path, proxy: Optional[Proxy] = None) -> Optional[Dict[str, Any]]:
     """
     Получение полной информации об аккаунте из сессии.
 
@@ -624,6 +654,10 @@ async def get_account_info(session_path: Path) -> Optional[Dict[str, Any]]:
     Returns:
         Dict с информацией об аккаунте или None
     """
+    if proxy is None or proxy.proxy_type != ProxyType.SOCKS5 or not proxy.is_active:
+        return None
+    client = None
+    lease = None
     try:
         session_path = Path(session_path)
 
@@ -632,9 +666,10 @@ async def get_account_info(session_path: Path) -> Optional[Dict[str, Any]]:
             return None
 
         # Используем реальные API credentials из .env
-        api_id, api_hash = _get_api_credentials()
+        from workers.manager import create_telethon_client, get_telethon_proxy_dict
 
-        client = TelegramClient(str(session_path), api_id=api_id, api_hash=api_hash)
+        lease = SessionLease(session_path).acquire()
+        client = create_telethon_client(session_path, get_telethon_proxy_dict(proxy))
         await client.connect()
 
         # Используем is_user_authorized() вместо isAuthorized()
@@ -664,3 +699,11 @@ async def get_account_info(session_path: Path) -> Optional[Dict[str, Any]]:
     except Exception as e:
         log.error(f"❌ Ошибка получения информации об аккаунте: {e}")
         return None
+    finally:
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+        if lease is not None:
+            lease.release()

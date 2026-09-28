@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from database.models import (
     Base,
     Client,
+    ClientContactPermission,
     ClientStatus,
     Mailing,
     MailingTestRecipient,
@@ -48,6 +49,9 @@ def test_get_test_recipients_all_excludes_invalid():
                 MailingTestRecipient(mailing_id=m.id, username="r1", client_id=c1.id),
                 MailingTestRecipient(mailing_id=m.id, username="r2", client_id=c2.id),
                 MailingTestRecipient(mailing_id=m.id, username="bad", client_id=c3.id),
+                ClientContactPermission(client_id=c1.id, state="opt_in", source="owned test account", actor="owner"),
+                ClientContactPermission(client_id=c2.id, state="opt_in", source="owned test account", actor="owner"),
+                ClientContactPermission(client_id=c3.id, state="opt_in", source="owned test account", actor="owner"),
             ])
             await s.commit()
 
@@ -118,7 +122,7 @@ def test_run_test_mailing_each_account_writes_each_recipient(monkeypatch):
 
         async def send_message_with_typing(self, *, peer, text, typing_delay=0,
                                            use_typing=False, parse_mode=None,
-                                           formatting_entities=None):
+                                               formatting_entities=None, source="manual", client_id=None):
             self.sends.append(peer)
             return True, 1, None, 555
 

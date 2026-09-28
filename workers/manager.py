@@ -8,9 +8,10 @@ import os
 import random
 import re
 import time
+from functools import wraps
 from datetime import datetime, timedelta, timezone
 from utils.time import utcnow_naive
-from typing import Optional, Dict, List, Callable, Any, Union
+from typing import Optional, Dict, List, Callable, Any, Union, Awaitable
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -18,14 +19,18 @@ import sqlalchemy
 from telethon import TelegramClient, errors
 from telethon.tl.functions.messages import SetTypingRequest
 from telethon.tl.types import PeerUser, SendMessageTypingAction
-from telethon.errors import FloodWaitError, PeerFloodError
+from telethon.errors import (
+    AuthKeyDuplicatedError, AuthKeyUnregisteredError, FloodWaitError,
+    PeerFloodError, SessionRevokedError, SlowModeWaitError,
+)
 from telethon.network.connection.tcpabridged import ConnectionTcpAbridged
 
-from database.models import Account, ClientStatus, Proxy, ProxyType, MailingStatus
+from database.models import Account, ClientStatus, Proxy, ProxyType, MailingRun, MailingStatus
 from bot.config import (
     BANDWIDTH_SKIP_PROFILE_ENRICH,
     BANDWIDTH_SKIP_SPAMBOT_CHECK,
     MAILING_BASE_UTC_OFFSET,
+    SESSIONS_DIR,
 )
 from database.repositories import (
     AccountRepository,
@@ -40,10 +45,20 @@ from database.repositories import (
 from database.crm_repositories import ClientMailSessionRepository
 from database.repository import db
 from database.session import session_scope
+from services.account_safety import (
+    check_account_gate, has_contact_permission, normalize_peer_ref, pause_account, record_chat_cooldown,
+    reserve_send,
+)
+from services.proxy_rotation import (
+    claim_proxy,
+    is_transport_error,
+    rotation_candidates,
+)
 from utils.background_tasks import background_tasks
 from utils.logger import log
 from utils.links import normalize_public_link, plain_text_to_telegram_link_message
 from utils.telemetry import telemetry_emitter
+from workers.session_lease import SessionLease
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -76,16 +91,20 @@ def _mailing_send_failure_hint(error: Optional[str]) -> str:
         return "Проверьте доступность клиента и статус аккаунта в мониторинге."
     e = error
     if "PEER_FLOOD" in e or "PeerFlood" in e:
-        return (
-            "Лимит Telegram на первые исходящие в новые диалоги с этого аккаунта (не то же, что @SpamBot). "
-            "Подождите от нескольких часов до суток, увеличьте задержку между сообщениями и между аккаунтами; "
-            "не спамьте повторно в тот же чат — лимит только усиливается. При необходимости смените аккаунт."
-        )
+        return "Telegram ограничил исходящие; проверьте аккаунт и не возобновляйте кампанию до снятия ограничения."
     if "FloodWait" in e or "FLOOD_WAIT" in e:
-        return "FloodWait: дождитесь окончания блокировки и увеличьте паузы в настройках рассылки."
+        return "FloodWait: дождитесь окончания ограничения и проверьте аккаунт перед ручным возобновлением."
+    if "SAFETY_STOP" in e:
+        return "Отправка остановлена общим контролем аккаунта; причина указана на странице состояния аккаунтов."
     if "No user has" in e and "username" in e:
         return "Пользователь с таким @username не найден — пометьте клиента невалидным или проверьте ник."
     return "См. текст ошибки; часто помогает увеличение задержек и снижение частоты первых сообщений."
+
+
+def _is_safety_stop(error: Optional[str]) -> bool:
+    if error == "SAFETY_STOP: contact_permission":
+        return False  # recipient-only skip; other permitted recipients may continue
+    return bool(error and any(token in error for token in ("PEER_FLOOD", "FloodWait", "FLOOD_WAIT", "SAFETY_STOP")))
 
 
 def _fmt_utc_offset(hours: int) -> str:
@@ -126,7 +145,7 @@ def get_telethon_proxy_dict(proxy: Proxy) -> Optional[dict]:
 
     Telethon принимает прокси в формате:
     {
-        'proxy_type': 'socks5' | 'http' | 'mtproto',
+        'proxy_type': 'socks5',
         'addr': 'host',
         'port': 1080,
         'username': 'user',   # опционально
@@ -143,18 +162,11 @@ def get_telethon_proxy_dict(proxy: Proxy) -> Optional[dict]:
     if not proxy:
         return None
 
-    # Определяем тип прокси для Telethon (строкой, не enum!)
-    if proxy.proxy_type == ProxyType.SOCKS5:
-        proxy_type_str = 'socks5'
-    elif proxy.proxy_type == ProxyType.HTTP:
-        proxy_type_str = 'http'
-    elif proxy.proxy_type == ProxyType.MTProxy:
-        proxy_type_str = 'mtproto'
-    else:
-        proxy_type_str = 'socks5'  # по умолчанию
+    if proxy.proxy_type != ProxyType.SOCKS5:
+        raise ValueError("Для Telegram-аккаунтов поддерживается только SOCKS5")
 
     result = {
-        'proxy_type': proxy_type_str,
+        'proxy_type': 'socks5',
         'addr': proxy.host,
         'port': proxy.port,
         'rdns': True,  # DNS resolution через прокси
@@ -173,16 +185,16 @@ async def verify_session_via_proxy(
 ) -> tuple[bool, str]:
     """
     Проверка, что .session авторизован при подключении через указанный прокси.
-    Без прокси — (True, "") (проверка не выполняется).
+    Без прокси проверка запрещена.
     """
     if proxy is None:
-        return True, ""
+        return False, "прокси SOCKS5 не назначен"
     session_path = Path(session_path)
-    proxy_config = get_telethon_proxy_dict(proxy)
-    if not proxy_config:
-        return False, "некорректный прокси"
     client: Optional[TelegramClient] = None
+    lease = SessionLease(session_path)
     try:
+        proxy_config = get_telethon_proxy_dict(proxy)
+        lease.acquire()
         client = create_telethon_client(session_path, proxy_config)
         await client.connect()
         if not await client.is_user_authorized():
@@ -197,22 +209,25 @@ async def verify_session_via_proxy(
                 await client.disconnect()
             except Exception:
                 pass
+        lease.release()
 
 
 def create_telethon_client(
     session_path: str | Path,
-    proxy: Optional[dict] = None,
+    proxy: dict,
 ) -> TelegramClient:
     """
     Создание TelegramClient с правильными API credentials.
 
     Args:
         session_path: Путь к .session файлу
-        proxy: Словарь прокси от get_telethon_proxy_dict() (опционально)
+        proxy: Словарь SOCKS5-прокси от get_telethon_proxy_dict()
 
     Returns:
         TelegramClient: Настроенный клиент
     """
+    if not proxy or proxy.get("proxy_type") != "socks5" or not proxy.get("addr") or not proxy.get("port"):
+        raise ValueError("TelegramClient requires a SOCKS5 proxy")
     api_id, api_hash = _get_api_credentials()
 
     return TelegramClient(
@@ -224,6 +239,15 @@ def create_telethon_client(
         auto_reconnect=True,
         raise_last_call_error=True,
     )
+
+
+def _serialized_send(method):
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        async with self._send_lock:
+            return await method(self, *args, **kwargs)
+
+    return wrapped
 
 
 class Worker:
@@ -238,8 +262,17 @@ class Worker:
         self.client: Optional[TelegramClient] = None
         self.is_connected = False
         self.is_running = False
+        self._session_lease: Optional[SessionLease] = None
+        self._connection_lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()
+        self.last_connect_error: BaseException | str | None = None
+        self.proxy_transport_failed = False
         
     async def connect(self, *, quiet: bool = False) -> bool:
+        async with self._connection_lock:
+            return await self._connect_once(quiet=quiet)
+
+    async def _connect_once(self, *, quiet: bool = False) -> bool:
         """
         Подключение аккаунта с прокси (если привязан).
 
@@ -248,8 +281,14 @@ class Worker:
         Returns:
             bool: True если успешно подключился
         """
+        self.last_connect_error = None
         try:
+            # Не плодим соединения/хендлеры: отключаем старый client перед пересозданием.
+            if self.client is not None and not await self._disconnect_unlocked():
+                return False
             # Создаём словарь прокси для Telethon (если прокси привязан)
+            if self.proxy is None:
+                raise ValueError("Прокси SOCKS5 не назначен; прямое подключение запрещено")
             proxy_config = get_telethon_proxy_dict(self.proxy)
 
             # Логирование перед подключением
@@ -259,10 +298,7 @@ class Worker:
                     f"   🌐 Подключение через прокси "
                     f"{self.proxy.name} ({self.proxy.host}:{self.proxy.port})"
                 )
-            else:
-                log.warning(
-                    f"   ⚠️ Подключение без прокси (не рекомендуется для аккаунта {self.account.id})"
-                )
+            self._session_lease = SessionLease(self.session_path).acquire()
 
             # Создание клиента через хелпер-функцию
             self.client = create_telethon_client(
@@ -305,6 +341,7 @@ class Worker:
 
             if is_auth:
                 self.is_connected = True
+                self.proxy_transport_failed = False
                 me = await self.client.get_me()
                 log.info(f"✅ Аккаунт подключён: {me.username or me.phone} (ID: {me.id})")
                 await telemetry_emitter.emit_event(
@@ -326,6 +363,7 @@ class Worker:
                     )
                 return True
             else:
+                self.last_connect_error = "unauthorized"
                 if quiet:
                     log.debug(
                         f"Сессия неавторизована, пропуск: account_id={self.account.id} "
@@ -339,10 +377,16 @@ class Worker:
                         "   ⚠️ Нужно заново загрузить Tdata или авторизовать аккаунт."
                     )
 
-                await self.client.disconnect()
+                await self._disconnect_unlocked()
                 return False
 
+        except asyncio.CancelledError:
+            await self._disconnect_unlocked()
+            raise
         except Exception as e:
+            self.last_connect_error = e
+            if is_transport_error(e):
+                self.proxy_transport_failed = True
             log.error(f"❌ Ошибка подключения аккаунта {self.account.id}: {e}")
             import traceback
             log.error(traceback.format_exc())
@@ -353,6 +397,11 @@ class Worker:
                 payload={"account_id": self.account.id, "error": str(e)},
             )
             self.is_connected = False
+            if self.client is not None:
+                await self._disconnect_unlocked()
+            elif self._session_lease is not None:
+                self._session_lease.release()
+                self._session_lease = None
             return False
 
     async def _update_account_info(self, me):
@@ -381,12 +430,19 @@ class Worker:
 
                     # Обновляем username если есть
                     if me.username:
-                        await session.execute(
+                        from database.sqlite_pragmas import (
+                            commit_with_busy_retry,
+                            execute_with_busy_retry,
+                        )
+
+                        await execute_with_busy_retry(
+                            session,
                             sqlalchemy.update(Account)
                             .where(Account.id == self.account.id)
-                            .values(username=me.username)
+                            .values(username=me.username),
+                            op_name="worker-update-username",
                         )
-                        await session.commit()
+                        await commit_with_busy_retry(session, op_name="worker-update-username")
 
                     log.info(f"Аккаунт {self.account.id}: профиль обновлён ({me.first_name} {me.last_name})")
 
@@ -398,12 +454,41 @@ class Worker:
 
         register_neuro_handler_on_worker(self)
 
-    async def disconnect(self):
-        """Отключение аккаунта."""
-        if self.client:
-            await self.client.disconnect()
-            self.is_connected = False
-            log.info(f"Аккаунт {self.account.id} отключён")
+    async def _stop_for_invalid_auth(self, source: str, error: Exception):
+        try:
+            async with session_scope() as session:
+                await pause_account(
+                    session, self.account.id, reason_code="auth_invalid", source=source,
+                    state="needs_reauth",
+                )
+        except Exception as persist_error:
+            log.error(f"Auth stop persist failed acc={self.account.id}: {persist_error}")
+        finally:
+            self.is_running = False
+            await self.disconnect()
+        return False, None, f"AUTH_INVALID: {type(error).__name__}", None
+
+    async def disconnect(self) -> bool:
+        """Отключение аккаунта. Никогда не бросает исключение наружу."""
+        async with self._connection_lock:
+            return await self._disconnect_unlocked()
+
+    async def _disconnect_unlocked(self) -> bool:
+        try:
+            if self.client:
+                await self.client.disconnect()
+                log.info(f"Аккаунт {self.account.id} отключён")
+        except Exception as e:
+            log.debug(f"disconnect account {self.account.id}: {e}")
+            return False
+        self.client = None
+        self.is_connected = False
+        if self._session_lease is not None:
+            self._session_lease.release()
+            self._session_lease = None
+        # Следующий connect привяжет нейро-хендлер к новому client.
+        self._neuro_handler_registered = False
+        return True
     
     async def check_proxy(self) -> bool:
         """
@@ -633,6 +718,7 @@ class Worker:
             log.error(f"Ошибка установки аватарки аккаунта {self.account.id}: {e}")
             return False
 
+    @_serialized_send
     async def send_message_with_typing(
         self,
         peer: Union[int, str],
@@ -642,6 +728,10 @@ class Worker:
         parse_mode: Optional[str] = None,
         buttons=None,
         formatting_entities: Optional[List[Any]] = None,
+        source: str = "manual",
+        reply_to_message_id: Optional[int] = None,
+        client_id: Optional[int] = None,
+        before_send: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> tuple[bool, Optional[int], Optional[str], Optional[int]]:
         """
         Отправка сообщения с имитацией набора текста.
@@ -653,12 +743,46 @@ class Worker:
         Returns:
             (success, message_id, error_message, peer_telegram_user_id_or_none)
         """
+        peer_ref = normalize_peer_ref(peer)
+        try:
+            async with session_scope() as session:
+                allowed, deny_reason = await check_account_gate(
+                    session, self.account.id, peer_ref=peer_ref,
+                )
+        except Exception as e:
+            log.error(f"Safety gate unavailable for account {self.account.id}: {e}")
+            return False, None, "SAFETY_STOP: gate_unavailable", None
+        if not allowed:
+            return False, None, f"SAFETY_STOP: {deny_reason}", None
+        if source.startswith("mailing") and client_id is None:
+            return False, None, "SAFETY_STOP: contact_permission", None
+
         if not self.client or not self.is_connected:
+            if self.client is not None and not self.client.is_connected():
+                self.proxy_transport_failed = True
             return False, None, "Не подключён", None
+
+        # All outbound paths (manual queue, mailing, neuro replies) reserve
+        # through the same persisted gate before any Telegram RPC.
+        try:
+            async with session_scope() as session:
+                allowed, deny_reason = await reserve_send(
+                    session, self.account.id, source=source, peer_ref=peer_ref,
+                    client_id=client_id,
+                )
+        except Exception as e:
+            log.error(f"Safety gate unavailable for account {self.account.id}: {e}")
+            return False, None, "SAFETY_STOP: gate_unavailable", None
+        if not allowed:
+            return False, None, f"SAFETY_STOP: {deny_reason}", None
 
         try:
             input_entity = await self.client.get_input_entity(peer)
         except Exception as e:
+            if isinstance(e, (AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError)):
+                return await self._stop_for_invalid_auth(source, e)
+            if is_transport_error(e):
+                self.proxy_transport_failed = True
             return False, None, f"Получатель недоступен: {e}", None
         
         try:
@@ -672,6 +796,19 @@ class Worker:
                     )
                 )
                 await asyncio.sleep(typing_delay)
+
+            if source.startswith("mailing"):
+                async with session_scope() as session:
+                    if not await has_contact_permission(session, client_id):
+                        return False, None, "SAFETY_STOP: contact_permission", None
+            if before_send is not None:
+                try:
+                    still_allowed = await before_send()
+                except Exception as exc:
+                    log.warning(f"Pre-send gate unavailable: {exc}")
+                    still_allowed = False
+                if not still_allowed:
+                    return False, None, "NEURO_WINDOW_CLOSED", None
             
             # Отправка сообщения
             try:
@@ -682,6 +819,7 @@ class Worker:
                     link_preview=False,
                     buttons=buttons,
                     formatting_entities=formatting_entities,
+                    reply_to=reply_to_message_id,
                 )
             except ValueError as e:
                 # Fallback: если HTML разметка оказалась невалидной, шлём как plain text
@@ -699,6 +837,7 @@ class Worker:
                         link_preview=False,
                         buttons=buttons,
                         formatting_entities=None,
+                        reply_to=reply_to_message_id,
                     )
                 else:
                     raise
@@ -711,29 +850,63 @@ class Worker:
 
         except PeerFloodError:
             # PEER_FLOOD / «Too many requests» — лимит исходящих к контактам (часто новые ЛС), не @SpamBot.
+            try:
+                async with session_scope() as session:
+                    await pause_account(
+                        session, self.account.id, reason_code="peer_flood", source=source
+                    )
+            finally:
+                self.is_running = False
+                await self.disconnect()
             return False, None, (
-                "PEER_FLOOD: Telegram ограничил исходящие (слишком частые сообщения в новые диалоги). "
-                "Это не то же, что спамблок в @SpamBot. Увеличьте задержки между сообщениями и аккаунтами."
+                "PEER_FLOOD: Telegram ограничил исходящие; аккаунт остановлен до проверки."
             ), None
 
         except FloodWaitError as e:
-            # FloodWait — критично!
+            # FloodWait — критично! Ротация смотрит на is_connected,
+            # поэтому сбрасываем оба флага и рвём соединение:
+            # иначе следующий клиент снова уйдёт в тот же аккаунт.
             wait_time = e.seconds + 5  # +5 секунд запас
             log.warning(
                 f"FloodWait на аккаунте {self.account.id} "
                 f"({self.account.username or self.account.phone}). "
                 f"Ожидание {wait_time} сек"
             )
-            
+
             # Обновляем статус в БД
-            async with session_scope() as session:
-                    until = utcnow_naive() + timedelta(seconds=wait_time)
-                    await AccountRepository.set_flood_wait(session, self.account.id, until)
-            
+            try:
+                async with session_scope() as session:
+                        until = utcnow_naive() + timedelta(seconds=wait_time)
+                        await AccountRepository.set_flood_wait(session, self.account.id, until)
+                        await pause_account(
+                            session, self.account.id, reason_code="flood_wait", source=source,
+                            state="cooling_down", resume_at=until,
+                        )
+            except Exception as e2:
+                log.warning(f"FloodWait persist failed acc={self.account.id}: {e2}")
+
             # Отключаем аккаунт временно
             self.is_running = False
+            await self.disconnect()
 
             return False, None, f"FloodWait: {e.seconds} сек", None
+
+        except SlowModeWaitError as e:
+            wait_time = max(1, int(e.seconds or 1))
+            until = utcnow_naive() + timedelta(seconds=wait_time)
+            try:
+                async with session_scope() as session:
+                    await record_chat_cooldown(
+                        session, self.account.id, peer_ref=peer_ref,
+                        resume_at=until, source=source,
+                    )
+            except Exception as persist_error:
+                log.error(f"Slow mode persist failed acc={self.account.id}: {persist_error}")
+                return False, None, "SAFETY_STOP: gate_unavailable", None
+            return False, None, f"SLOWMODE_WAIT: {wait_time} сек", None
+
+        except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError) as e:
+            return await self._stop_for_invalid_auth(source, e)
 
         except errors.UserBlockedError:
             return False, None, "Пользователь заблокировал бота", None
@@ -748,6 +921,8 @@ class Worker:
             return False, None, "Нет прав на запись", None
 
         except Exception as e:
+            if is_transport_error(e):
+                self.proxy_transport_failed = True
             log.error(f"Ошибка отправки сообщения: {e}")
             return False, None, str(e), None
 
@@ -771,6 +946,13 @@ class WorkerManager:
         # True только если дошли до основного цикла (иначе finally не трогает пул).
         self._mailing_run_started: bool = False
         self._notify_bot = None  # aiogram Bot — для уведомлений владельца о рассылке
+        self._proxy_rotation_locks: dict[int, asyncio.Lock] = {}
+        self._proxy_retry_after: dict[int, float] = {}
+        self._proxy_lost_since: dict[int, float] = {}
+
+    def is_mailing_busy(self) -> bool:
+        """True, если рассылка выполняется или завершается (пул трогать нельзя)."""
+        return bool(self._mailing_busy or self.is_running)
 
     def set_notify_bot(self, bot) -> None:
         """Вызывается из run_bot: отправка статуса рассылки в личку владельцу."""
@@ -795,7 +977,8 @@ class WorkerManager:
             None — все аккаунты (мониторинг, нейрочат, общий режим).
             int — только участники этой группы (рассылка с выбранной группой).
         """
-        await self.disconnect_all()
+        if not await self.disconnect_all():
+            raise RuntimeError("Нельзя пересобрать пул: одна из Telegram-сессий не отключилась")
         self.workers.clear()
 
         async with session_scope() as session:
@@ -808,7 +991,7 @@ class WorkerManager:
             else:
                 accounts = await AccountRepository.get_all(session)
 
-        sessions_dir = Path("data/sessions")
+        sessions_dir = SESSIONS_DIR
         sessions_dir.mkdir(exist_ok=True)
 
         for account in accounts:
@@ -825,6 +1008,35 @@ class WorkerManager:
 
         log.info(f"Загружено {len(self.workers)} аккаунтов")
 
+    async def ensure_worker(self, account_id: int):
+        """Догрузить ОДИН воркер без disconnect_all+clear всего пула.
+
+        Используется ручными отправками (outbound), чтобы не ронять
+        активную рассылку. Возвращает Worker | None.
+        """
+        account_id = int(account_id)
+        existing = self.workers.get(account_id)
+        if existing is not None:
+            return existing
+        try:
+            async with session_scope() as session:
+                account = await AccountRepository.get_by_id(session, account_id)
+            if not account:
+                return None
+            sessions_dir = SESSIONS_DIR
+            sessions_dir.mkdir(exist_ok=True)
+            session_path = sessions_dir / f"{account.session_name}.session"
+            if not session_path.exists():
+                log.warning(f"ensure_worker: сессия не найдена: {session_path}")
+                return None
+            worker = Worker(account, session_path, account.proxy)
+            self.workers[account_id] = worker
+            log.info(f"ensure_worker: догружен аккаунт {account_id} без пересборки пула")
+            return worker
+        except Exception as e:
+            log.warning(f"ensure_worker {account_id} failed: {e}")
+            return None
+
     async def _interruptible_sleep(self, seconds: float) -> None:
         """Ожидание с проверкой остановки рассылки (не блокировать до 60 с)."""
         if seconds <= 0:
@@ -838,7 +1050,7 @@ class WorkerManager:
     async def _pool_member_ids(self, gid: Optional[int]) -> set[int]:
         """ID аккаунтов, которые должны быть в пуле (группа gid или все) и у
         которых есть файл сессии — то есть ровно то, что загрузил бы load_accounts."""
-        sessions_dir = Path("data/sessions")
+        sessions_dir = SESSIONS_DIR
         async with session_scope() as session:
             if gid is not None:
                 member_ids = await GroupRepository.get_member_account_ids(session, gid)
@@ -896,7 +1108,7 @@ class WorkerManager:
         if not need.issubset(self.workers.keys()):
             await self.load_accounts()
     
-    async def precheck_proxies(self, *, timeout: int = 8) -> Dict[int, Optional[bool]]:
+    async def precheck_proxies(self, *, timeout: int = 15) -> Dict[int, Optional[bool]]:
         """
         Параллельная проверка прокси всех загруженных воркеров (через сам прокси,
         запрос exit-IP). Возвращает {account_id: True|False|None}:
@@ -979,13 +1191,18 @@ class WorkerManager:
                     summary["skipped_no_proxy"] += 1
                     continue
                 if st is False:
-                    log.warning(
-                        f"⛔ Аккаунт {worker.account.id}: прокси не работает — "
-                        f"пропускаю подключение/авторизацию"
-                    )
-                    summary["skipped_dead_proxy"] += 1
+                    if await self.rotate_account_proxy(worker.account.id, reason="startup_precheck"):
+                        summary["connected"] += 1
+                    else:
+                        log.warning(
+                            f"⛔ Аккаунт {worker.account.id}: прокси не работает, "
+                            "замена из листа не найдена"
+                        )
+                        summary["skipped_dead_proxy"] += 1
                     continue
             ok = await worker.connect(quiet=quiet_unauthorized)
+            if not ok and is_transport_error(worker.last_connect_error):
+                ok = await self.rotate_account_proxy(worker.account.id, reason="startup_connect")
             summary["connected" if ok else "unauthorized"] += 1
             if i + 1 < len(items):
                 await asyncio.sleep(0.35)
@@ -998,11 +1215,137 @@ class WorkerManager:
                 f"мёртвый прокси {summary['skipped_dead_proxy']}"
             )
         return summary
+
+    async def rotate_account_proxy(self, account_id: int, *, reason: str) -> bool:
+        """Replace a failed proxy with a free one from the same runtime list.
+
+        The account assignment is compare-and-swapped in SQLite. Each candidate
+        must establish a real Telegram connection before rotation is successful.
+        Messages with an uncertain send outcome are never retried here.
+        """
+        account_id = int(account_id)
+        lock = self._proxy_rotation_locks.setdefault(account_id, asyncio.Lock())
+        async with lock:
+            worker = self.workers.get(account_id)
+            current = worker.proxy if worker else None
+            group_id = getattr(current, "group_id", None)
+            if current is None or group_id is None or current.proxy_type != ProxyType.SOCKS5:
+                return False
+            old_proxy_id = int(current.id)
+            worker.proxy_transport_failed = True
+            if not await worker.disconnect():
+                log.warning(f"Proxy rotation acc={account_id}: session did not close")
+                return False
+            async with session_scope() as session:
+                await ProxyRepository.update_status(session, old_proxy_id, False)
+                candidates = await rotation_candidates(session, group_id=int(group_id))
+            expected_proxy_id = old_proxy_id
+            for candidate in candidates:
+                async with session_scope() as session:
+                    claimed = await claim_proxy(
+                        session,
+                        account_id=account_id,
+                        expected_proxy_id=expected_proxy_id,
+                        candidate_id=int(candidate.id),
+                        group_id=int(group_id),
+                    )
+                    account = await AccountRepository.get_by_id(session, account_id)
+                if not claimed:
+                    if account is None or account.proxy_id != expected_proxy_id:
+                        worker.proxy_transport_failed = False
+                        log.warning(
+                            f"Proxy rotation acc={account_id}: assignment changed externally"
+                        )
+                        return False
+                    continue
+                expected_proxy_id = int(candidate.id)
+                worker.account = account
+                worker.proxy = account.proxy
+                try:
+                    connected = await asyncio.wait_for(worker.connect(quiet=True), timeout=25.0)
+                except asyncio.TimeoutError as exc:
+                    worker.last_connect_error = exc
+                    worker.proxy_transport_failed = True
+                    connected = False
+                if connected:
+                    self._proxy_retry_after.pop(account_id, None)
+                    self._proxy_lost_since.pop(account_id, None)
+                    log.info(
+                        f"Proxy rotation acc={account_id}: {old_proxy_id} -> "
+                        f"{candidate.id} group={group_id} reason={reason}"
+                    )
+                    await telemetry_emitter.emit_event(
+                        "info", "proxy_rotation", "Account proxy rotated",
+                        payload={
+                            "account_id": account_id,
+                            "old_proxy_id": old_proxy_id,
+                            "new_proxy_id": int(candidate.id),
+                            "group_id": int(group_id),
+                            "reason": reason,
+                        },
+                    )
+                    return True
+                if not is_transport_error(worker.last_connect_error):
+                    worker.proxy_transport_failed = False
+                    log.warning(
+                        f"Proxy rotation acc={account_id}: stopped after non-network "
+                        f"connect failure ({worker.last_connect_error})"
+                    )
+                    return False
+                async with session_scope() as session:
+                    await ProxyRepository.update_status(session, int(candidate.id), False)
+            self._proxy_retry_after[account_id] = time.monotonic() + 60.0
+            log.warning(
+                f"Proxy rotation acc={account_id}: no working free proxy in "
+                f"current batch of group={group_id}"
+            )
+            return False
+
+    async def check_proxy_health_once(self) -> None:
+        """Notice exhausted Telethon reconnects and schedule bounded failover."""
+        if self.is_mailing_busy():
+            return
+        now = time.monotonic()
+        for account_id, worker in list(self.workers.items()):
+            if now < self._proxy_retry_after.get(account_id, 0.0):
+                continue
+            client = worker.client
+            disconnected = bool(
+                worker.is_connected and client is not None and not client.is_connected()
+            )
+            if disconnected:
+                since = self._proxy_lost_since.setdefault(account_id, now)
+                if now - since < 20.0 and not worker.proxy_transport_failed:
+                    continue
+            else:
+                self._proxy_lost_since.pop(account_id, None)
+            if worker.proxy_transport_failed or disconnected:
+                await self.rotate_account_proxy(account_id, reason="runtime_disconnect")
+
+    async def run_proxy_health_loop(self) -> None:
+        while True:
+            try:
+                await self.check_proxy_health_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning(f"Proxy health loop failed: {type(exc).__name__}: {exc}")
+            await asyncio.sleep(10.0)
     
-    async def disconnect_all(self):
-        """Отключение всех аккаунтов."""
-        for worker in self.workers.values():
-            await worker.disconnect()
+    async def disconnect_all(self) -> bool:
+        """Отключение всех аккаунтов. Один упавший disconnect не роняет остальных."""
+        all_closed = True
+        for worker in list(self.workers.values()):
+            try:
+                if not await worker.disconnect():
+                    all_closed = False
+            except Exception as e:
+                all_closed = False
+                try:
+                    log.warning(f"disconnect_all worker {worker.account.id}: {e}")
+                except Exception:
+                    pass
+        return all_closed
 
     async def reconnect_account(self, account_id: int):
         """
@@ -1176,6 +1519,7 @@ class WorkerManager:
         self,
         mailing_id: int,
         *,
+        run_id: Optional[int] = None,
         variants: List[str],
         variant_mode: str,
         mailing_name: str,
@@ -1196,7 +1540,14 @@ class WorkerManager:
         Лимит успешных и пауза-кулдаун здесь не применяются. Возвращает processed.
         """
         async with session_scope() as session:
-            recipients = await ClientRepository.get_test_recipients_all(session, mailing_id)
+            if run_id is None:
+                recipients = await ClientRepository.get_test_recipients_all(
+                    session, mailing_id,
+                )
+            else:
+                recipients = await ClientRepository.get_test_recipients_all(
+                    session, mailing_id, run_id=run_id,
+                )
             if group_id:
                 accounts = await AccountRepository.get_all_in_group(session, group_id)
             else:
@@ -1254,6 +1605,8 @@ class WorkerManager:
                     use_typing=use_typing,
                     parse_mode=None,
                     formatting_entities=out_entities or None,
+                    source="mailing_test",
+                    client_id=int(recipient.id),
                 )
 
                 async with session_scope() as session:
@@ -1288,6 +1641,10 @@ class WorkerManager:
                             )
                         await AccountRepository.increment_stats(session, account.id, failed=1)
                         await MailingRepository.increment_stats(session, mailing_id, failed=1)
+                    if run_id is not None:
+                        await MailingRepository.record_run_result(
+                            session, run_id, success=success,
+                        )
 
                 processed += 1
                 wrote_any = True
@@ -1306,6 +1663,10 @@ class WorkerManager:
                         f"@{cl_usr} | ошибка: {error}"
                     )
 
+                if _is_safety_stop(error):
+                    self._safety_stop_reason = error
+                    break
+
                 await self._interruptible_sleep(_mailing_jittered_delay(delay, smart_delay))
 
             # Пауза между аккаунтами (как и в обычной рассылке).
@@ -1313,6 +1674,8 @@ class WorkerManager:
                 extra = delay_between_accounts + batch_delay
                 if extra > 0:
                     await self._interruptible_sleep(_mailing_jittered_delay(extra, smart_delay))
+            if getattr(self, "_safety_stop_reason", None):
+                break
 
         log.info(f"Тест {mailing_id}: завершено, отправок всего {processed}.")
         return processed
@@ -1321,6 +1684,8 @@ class WorkerManager:
         self,
         mailing_id: int,
         progress_callback: Optional[Callable] = None,
+        *,
+        queued_run_id: Optional[int] = None,
     ):
         """
         Запуск рассылки. Аудитория: mailing.target_group_id или все аккаунты.
@@ -1328,6 +1693,11 @@ class WorkerManager:
         """
         if self._mailing_busy:
             log.warning("Рассылка уже выполняется или завершается")
+            if queued_run_id is not None:
+                async with session_scope() as session:
+                    run = await session.get(MailingRun, queued_run_id)
+                    if run and run.mailing_id == mailing_id and run.status == "queued":
+                        await MailingRepository.finish_run(session, queued_run_id, "rejected")
             return
 
         self._mailing_busy = True
@@ -1335,7 +1705,9 @@ class WorkerManager:
         self.is_running = True
         self.current_mailing_id = mailing_id
         self._stop_event.clear()
+        self._safety_stop_reason = None
 
+        run_id: Optional[int] = None
         try:
             await telemetry_emitter.emit_event(
                 "info",
@@ -1349,6 +1721,18 @@ class WorkerManager:
                 if not mailing:
                     log.error(f"Рассылка {mailing_id} не найдена")
                     return
+
+                queued_run = None
+                if queued_run_id is not None:
+                    queued_run = await session.get(MailingRun, queued_run_id)
+                    if (queued_run is None or queued_run.mailing_id != mailing_id
+                            or queued_run.status != "queued"):
+                        log.error(f"Рассылка {mailing_id}: queued run не найден или уже обработан")
+                        return
+                    if queued_run.config_json != MailingRepository.run_config_json(mailing):
+                        log.warning(f"Рассылка {mailing_id}: настройки изменены после постановки в очередь")
+                        await MailingRepository.finish_run(session, queued_run_id, "rejected")
+                        return
 
                 self._mailing_utc_offset = (
                     await InstanceSettingsRepository.get_effective_mailing_base_utc_offset(
@@ -1364,17 +1748,29 @@ class WorkerManager:
                         for x in extra:
                             s = str(x).strip()
                             if s:
-                                variants.append(s)
-                except Exception:
-                    pass
+                                # Лимит цены/памяти: вариант не длиннее 8000 (как в API).
+                                variants.append(s[:8000])
+                except Exception as e:
+                    log.warning(f"mailing {mailing_id}: bad message_variants_json: {e}")
 
                 if not variants:
                     log.error(f"Рассылка {mailing_id}: нет ни одного варианта текста")
+                    if queued_run_id is not None:
+                        await MailingRepository.finish_run(session, queued_run_id, "rejected")
                     await MailingRepository.update_status(session, mailing_id, MailingStatus.ERROR)
                     return
 
+                if queued_run is not None:
+                    queued_run.status = "running"
                 await MailingRepository.update_status(session, mailing_id, MailingStatus.RUNNING)
                 await MailingRepository.reset_stats_for_new_run(session, mailing_id)
+                run = queued_run or await MailingRepository.create_run(session, mailing)
+                run_id = int(run.id)
+                if run.audience_count == 0:
+                    log.info(f"Рассылка {mailing_id}: нет разрешённых получателей")
+                    await MailingRepository.finish_run(session, run_id, "empty")
+                    await MailingRepository.update_status(session, mailing_id, MailingStatus.COMPLETED)
+                    return
 
                 group_id = mailing.target_group_id
                 self._last_mailing_group_id = group_id
@@ -1441,18 +1837,38 @@ class WorkerManager:
                 else None
             )
             processed = 0
+            attempted_client_ids: set[int] = set()
             current_idx = 0
             sent_from_current = 0
             sequential_variant_idx = 0
             prev_eligible_ids: Optional[tuple[int, ...]] = None
             cap_reached = False
 
+            if group_id is not None:
+                async with session_scope() as session:
+                    group_members = await GroupRepository.get_member_account_ids(session, group_id)
+                has_usable_worker = any(
+                    account_id in group_members and worker.is_connected
+                    for account_id, worker in self.workers.items()
+                )
+            else:
+                has_usable_worker = any(w.is_connected for w in self.workers.values())
+            if not has_usable_worker:
+                # Panel starts arrive through BotCommandConsumer without the bot
+                # callback's account preparation. Build the pool once, before
+                # handling any recipient; never reconnect after an uncertain send.
+                await self.load_accounts(group_id=group_id)
+                await self.connect_all()
+                if not any(w.is_connected for w in self.workers.values()):
+                    self._safety_stop_reason = "SAFETY_STOP: no_connected_accounts"
+
             # Тестовый режим — отдельная логика: каждый аккаунт пишет каждому
             # тестовому получателю (без дедупа и ротации). Production-цикл ниже
             # для test_mode сразу прерывается.
-            if test_mode:
+            if test_mode and not self._safety_stop_reason:
                 processed = await self._run_test_mailing(
                     mailing_id,
+                    run_id=run_id,
                     variants=variants,
                     variant_mode=variant_mode,
                     mailing_name=mailing_name,
@@ -1470,6 +1886,8 @@ class WorkerManager:
             while True:
                 if test_mode:
                     break
+                if self._safety_stop_reason:
+                    break
                 if self._stop_event.is_set():
                     log.info("Рассылка остановлена пользователем")
                     break
@@ -1485,7 +1903,10 @@ class WorkerManager:
                         log.error(f"Рассылка {mailing_id} пропала из БД")
                         break
                     group_id = mrow.target_group_id
-                    clients = await ClientRepository.get_mailing_queue(session, mrow)
+                    clients = await ClientRepository.get_mailing_queue(
+                        session, mrow, run_id=run_id,
+                    )
+                    clients = [c for c in clients if c.id not in attempted_client_ids]
 
                 if not clients:
                     log.info(f"Рассылка {mailing_id}: очередь пуста — завершение.")
@@ -1509,9 +1930,9 @@ class WorkerManager:
                         )
 
                     if not available_accounts:
-                        log.warning("Нет доступных аккаунтов для рассылки")
-                        await self._interruptible_sleep(60)
-                        continue
+                        self._safety_stop_reason = "SAFETY_STOP: no_available_accounts"
+                        log.warning("Нет доступных аккаунтов для рассылки; запуск поставлен на паузу")
+                        break
 
                     accounts_pool = sorted(available_accounts, key=lambda a: a.id)
                     # Не ограничиваем аккаунты прошлыми успехами по этой рассылке — только ротация в этом запуске.
@@ -1542,9 +1963,9 @@ class WorkerManager:
                             break
 
                     if not account or not worker or used_idx is None:
-                        log.warning("Нет подключённых аккаунтов для рассылки")
-                        await self._interruptible_sleep(60)
-                        continue
+                        self._safety_stop_reason = "SAFETY_STOP: no_connected_accounts"
+                        log.warning("Нет подключённых аккаунтов для рассылки; запуск поставлен на паузу")
+                        break
 
                     if variant_mode == "sequential":
                         message_body = variants[sequential_variant_idx % len(variants)]
@@ -1562,19 +1983,29 @@ class WorkerManager:
                     # Username, а не сырой user_id: иначе Telethon часто даёт
                     # «Could not find the input entity», если с этим аккаунтом ещё не было диалога.
                     uname = (getattr(client, "username", None) or "").strip().lstrip("@")
-                    target_peer: Union[int, str] = (
-                        uname if uname else int(client.telegram_user_id)
-                    )
-                    typing_delay = random.uniform(5.0, 10.0) if use_typing else 0.0
-                    out_plain, out_entities = plain_text_to_telegram_link_message(final_text)
-                    success, msg_id, error, peer_uid = await worker.send_message_with_typing(
-                        peer=target_peer,
-                        text=out_plain,
-                        typing_delay=typing_delay,
-                        use_typing=use_typing,
-                        parse_mode=None,
-                        formatting_entities=out_entities or None,
-                    )
+                    if not uname and client.telegram_user_id is None:
+                        success, msg_id, error, peer_uid = (
+                            False, None, "Получатель без @username и Telegram ID", None,
+                        )
+                    else:
+                        target_peer: Union[int, str] = (
+                            uname if uname else int(client.telegram_user_id)
+                        )
+                        typing_delay = random.uniform(5.0, 10.0) if use_typing else 0.0
+                        out_plain, out_entities = plain_text_to_telegram_link_message(final_text)
+                        success, msg_id, error, peer_uid = await worker.send_message_with_typing(
+                            peer=target_peer,
+                            text=out_plain,
+                            typing_delay=typing_delay,
+                            use_typing=use_typing,
+                            parse_mode=None,
+                            formatting_entities=out_entities or None,
+                            source="mailing",
+                            client_id=int(client.id),
+                        )
+                    # A failed RPC may have delivered the message before the
+                    # connection dropped. Never replay it in this run.
+                    attempted_client_ids.add(int(client.id))
 
                     async with session_scope() as session:
                         await MailingLogRepository.create(
@@ -1626,6 +2057,10 @@ class WorkerManager:
                             await MailingRepository.increment_stats(
                                 session, mailing_id, failed=1
                             )
+                        if run_id is not None:
+                            await MailingRepository.record_run_result(
+                                session, run_id, success=success,
+                            )
 
                     if success and max_recipients_cap:
                         async with session_scope() as session:
@@ -1670,6 +2105,18 @@ class WorkerManager:
                             },
                         )
 
+                    if _is_safety_stop(error):
+                        self._safety_stop_reason = error
+                        log.warning(f"Рассылка {mailing_id} поставлена на паузу: {error}")
+                        break
+
+                    if not success and worker.proxy_transport_failed:
+                        # The failed delivery stays failed: its outcome may be
+                        # uncertain. Restore the account before the next peer.
+                        await self.rotate_account_proxy(
+                            account.id, reason="mailing_transport"
+                        )
+
                     await self._interruptible_sleep(
                         _mailing_jittered_delay(delay, smart_delay)
                     )
@@ -1688,18 +2135,35 @@ class WorkerManager:
                     if cap_reached:
                         break
 
-                if cap_reached:
+                if cap_reached or self._safety_stop_reason:
                     break
 
             # Завершение
             async with session_scope() as session:
-                if self._stop_event.is_set():
+                pool_unavailable = self._safety_stop_reason in (
+                    "SAFETY_STOP: no_connected_accounts",
+                    "SAFETY_STOP: no_available_accounts",
+                )
+                if pool_unavailable:
+                    await MailingRepository.update_status(
+                        session, mailing_id, MailingStatus.ERROR
+                    )
+                    log.warning(f"Рассылка {mailing_id}: {self._safety_stop_reason}")
+                    run_status = "error"
+                elif self._safety_stop_reason:
+                    await MailingRepository.update_status(
+                        session, mailing_id, MailingStatus.PAUSED
+                    )
+                    log.warning(f"Рассылка {mailing_id} требует проверки аккаунта")
+                    run_status = "paused"
+                elif self._stop_event.is_set():
                     await MailingRepository.update_status(
                         session, mailing_id, MailingStatus.CANCELLED
                     )
                     log.info(
                         f"Рассылка {mailing_id} остановлена пользователем. Обработано: {processed}"
                     )
+                    run_status = "cancelled"
                 else:
                     await MailingRepository.update_status(
                         session, mailing_id, MailingStatus.COMPLETED
@@ -1712,6 +2176,9 @@ class WorkerManager:
                         log.info(
                             f"Рассылка {mailing_id} завершена. Обработано: {processed}"
                         )
+                    run_status = "completed"
+                if run_id is not None:
+                    await MailingRepository.finish_run(session, run_id, run_status)
                 await telemetry_emitter.emit_event(
                     "info",
                     "mailing_finish",
@@ -1725,7 +2192,19 @@ class WorkerManager:
                 _ok = int(m_final.messages_sent or 0)
                 _fail = int(m_final.messages_failed or 0)
                 _neuro = bool(getattr(m_final, "neurochat_enabled", False))
-                if self._stop_event.is_set():
+                if pool_unavailable:
+                    await self._notify_owner_html(
+                        f"⚠️ <b>Рассылка #{mailing_id}</b> не смогла отправлять: "
+                        f"{html.escape(self._safety_stop_reason or '')}. "
+                        "Проверьте подключение аккаунтов, прокси и лимиты."
+                    )
+                elif self._safety_stop_reason:
+                    await self._notify_owner_html(
+                        f"⏸ <b>Рассылка #{mailing_id}</b> поставлена на паузу: ограничение аккаунта.\n"
+                        f"Проверьте состояние аккаунтов перед возобновлением.\n"
+                        f"✅ Успешно: <b>{_ok}</b> · ❌ Ошибок: <b>{_fail}</b>"
+                    )
+                elif self._stop_event.is_set():
                     await self._notify_owner_html(
                         f"⏹ <b>Рассылка #{mailing_id}</b> остановлена вручную.\n"
                         f"✅ Успешно: <b>{_ok}</b> · ❌ Ошибок: <b>{_fail}</b>"
@@ -1753,9 +2232,11 @@ class WorkerManager:
             )
             
             async with session_scope() as session:
-                    await MailingRepository.update_status(
-                        session, mailing_id, MailingStatus.ERROR
-                    )
+                await MailingRepository.update_status(
+                    session, mailing_id, MailingStatus.ERROR
+                )
+                if run_id is not None:
+                    await MailingRepository.finish_run(session, run_id, "error")
         
         finally:
             self.is_running = False
@@ -1783,3 +2264,28 @@ class WorkerManager:
 
 # Глобальный экземпляр
 worker_manager = WorkerManager()
+
+
+class _BorrowedWorker:
+    """Use the bot's existing Telethon client without closing it after an action."""
+
+    def __init__(self, worker: Worker):
+        self._worker = worker
+
+    def __getattr__(self, name: str):
+        return getattr(self._worker, name)
+
+    async def connect(self, *, quiet: bool = False) -> bool:
+        return bool(self._worker.is_connected and self._worker.client)
+
+    async def disconnect(self) -> bool:
+        return True
+
+
+def account_worker_for_action(account: Account, session_path: Path, proxy: Optional[Proxy] = None):
+    """Reuse an active in-process client; otherwise create a lease-protected one."""
+    active = worker_manager.workers.get(int(account.id))
+    if (active is not None and active.is_connected and active.client is not None
+            and active.session_path.resolve() == Path(session_path).resolve()):
+        return _BorrowedWorker(active)
+    return Worker(account, session_path, proxy)

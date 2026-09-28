@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Any, Awaitable, Callable, Optional
 
 from sqlalchemy import select
@@ -29,6 +30,12 @@ def _display_name(u: User) -> str:
     fn = (getattr(u, "first_name", None) or "").strip()
     ln = (getattr(u, "last_name", None) or "").strip()
     return (fn + " " + ln).strip() or (u.username or str(u.id))
+
+
+def _entity_reference(peer: str) -> str | int:
+    """Telethon needs numeric IDs as integers to resolve private joined chats."""
+    value = peer.strip()
+    return int(value) if re.fullmatch(r"-?\d+", value) else value
 
 
 def _extract_last_seen_at(u: User) -> Optional[datetime]:
@@ -69,7 +76,27 @@ def _build_user_row(u: User) -> dict[str, Any]:
         "lang_guess": lang,
         "is_deleted": bool(getattr(u, "deleted", False)),
         "is_suspicious": susp,
+        # Internal filter input only; storage has no premium field.
+        "premium": getattr(u, "premium", None),
+        # Internal filter inputs only; these flags are not persisted either.
+        "scam": getattr(u, "scam", None),
+        "fake": getattr(u, "fake", None),
     }
+
+
+def _storage_user_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep Telegram Premium as a transient filter signal, not persisted data."""
+    return {
+        key: value for key, value in row.items()
+        if key not in {"premium", "scam", "fake"}
+    }
+
+
+async def _record_sender_unavailable(session, task_id: int) -> None:
+    """Record a visible message/comment whose sender could not be resolved."""
+    await storage.bump_filter_reason(session, task_id, "sender_unavailable")
+    await storage.bump_task_counters(session, task_id, filtered_delta=1)
+    await session.commit()
 
 
 async def _collect_from_messages(
@@ -85,6 +112,7 @@ async def _collect_from_messages(
     user_flt: dict[str, Any],
     log: LogFn,
     limit_messages: int = 40,
+    message_flt: dict[str, Any] | None = None,
 ) -> int:
     seen: set[int] = set()
     found = 0
@@ -94,20 +122,36 @@ async def _collect_from_messages(
         uid = int(m.sender_id)
         if uid in seen:
             continue
+        text = getattr(m, "raw_text", None)
+        if text is None:
+            text = getattr(m, "message", None)
+        ok, reason = filters.message_passes_filters(text, getattr(m, "date", None), message_flt)
+        if not ok:
+            await storage.bump_filter_reason(session, task_id, reason)
+            await storage.bump_task_counters(session, task_id, filtered_delta=1)
+            await session.commit()
+            continue
         seen.add(uid)
         try:
             u = await m.get_sender()
         except Exception:
+            await _record_sender_unavailable(session, task_id)
+            continue
+        if u is None:
+            await _record_sender_unavailable(session, task_id)
             continue
         if not isinstance(u, User) or u.bot:
             continue
         row = _build_user_row(u)
-        ok, _reason = filters.user_passes_filters(row, user_flt)
+        ok, reason = filters.user_passes_filters(row, user_flt)
         if not ok:
+            await storage.bump_filter_reason(session, task_id, reason)
             await storage.bump_task_counters(session, task_id, filtered_delta=1)
             await session.commit()
             continue
-        pu = await storage.upsert_user(session, source_task_id=task_id, **row)
+        pu = await storage.upsert_user(
+            session, source_task_id=task_id, **_storage_user_fields(row)
+        )
         await storage.add_user_source_edge(
             session,
             parsed_user=pu,
@@ -115,6 +159,8 @@ async def _collect_from_messages(
             source_entity_kind=source_entity_kind,
             source_kind=source_kind,
             source_task_id=task_id,
+            message_id=int(m.id) if getattr(m, "id", None) else None,
+            message_at=getattr(m, "date", None),
         )
         await storage.bump_task_counters(session, task_id, found_delta=1)
         await session.commit()
@@ -146,12 +192,15 @@ async def _collect_participants(
         if not isinstance(u, User) or u.bot:
             continue
         row = _build_user_row(u)
-        ok, _reason = filters.user_passes_filters(row, user_flt)
+        ok, reason = filters.user_passes_filters(row, user_flt)
         if not ok:
+            await storage.bump_filter_reason(session, task_id, reason)
             await storage.bump_task_counters(session, task_id, filtered_delta=1)
             await session.commit()
             continue
-        pu = await storage.upsert_user(session, source_task_id=task_id, **row)
+        pu = await storage.upsert_user(
+            session, source_task_id=task_id, **_storage_user_fields(row)
+        )
         await storage.add_user_source_edge(
             session,
             parsed_user=pu,
@@ -179,6 +228,7 @@ async def _collect_channel_commenters_from_posts(
     log: LogFn,
     posts_limit: int = 25,
     comments_per_post: int = 50,
+    message_flt: dict[str, Any] | None = None,
 ) -> int:
     """
     Реальный путь для каналов: собирать пользователей из комментариев к постам
@@ -195,20 +245,36 @@ async def _collect_channel_commenters_from_posts(
             uid = int(c.sender_id)
             if uid in seen_users:
                 continue
+            text = getattr(c, "raw_text", None)
+            if text is None:
+                text = getattr(c, "message", None)
+            ok, reason = filters.message_passes_filters(text, getattr(c, "date", None), message_flt)
+            if not ok:
+                await storage.bump_filter_reason(session, task_id, reason)
+                await storage.bump_task_counters(session, task_id, filtered_delta=1)
+                await session.commit()
+                continue
             seen_users.add(uid)
             try:
                 u = await c.get_sender()
             except Exception:
+                await _record_sender_unavailable(session, task_id)
+                continue
+            if u is None:
+                await _record_sender_unavailable(session, task_id)
                 continue
             if not isinstance(u, User) or u.bot:
                 continue
             row = _build_user_row(u)
-            ok, _reason = filters.user_passes_filters(row, user_flt)
+            ok, reason = filters.user_passes_filters(row, user_flt)
             if not ok:
+                await storage.bump_filter_reason(session, task_id, reason)
                 await storage.bump_task_counters(session, task_id, filtered_delta=1)
                 await session.commit()
                 continue
-            pu = await storage.upsert_user(session, source_task_id=task_id, **row)
+            pu = await storage.upsert_user(
+                session, source_task_id=task_id, **_storage_user_fields(row)
+            )
             await storage.add_user_source_edge(
                 session,
                 parsed_user=pu,
@@ -216,6 +282,9 @@ async def _collect_channel_commenters_from_posts(
                 source_entity_kind="channel",
                 source_kind="commenter",
                 source_task_id=task_id,
+                message_id=int(c.id) if getattr(c, "id", None) else None,
+                post_id=int(post.id),
+                message_at=getattr(c, "date", None),
             )
             await storage.bump_task_counters(session, task_id, found_delta=1)
             await session.commit()
@@ -234,6 +303,9 @@ async def run_users_task(
     user_flt = params.get("filters") or {}
     if not isinstance(user_flt, dict):
         user_flt = {}
+    message_flt = params.get("message_filters") or {}
+    if not isinstance(message_flt, dict):
+        message_flt = {}
     mode = (task.mode or "max_coverage").lower()
     manual = querygen.manual_queries_from_txt(str(params.get("manual_usernames_text") or ""))
     peers = querygen.manual_queries_from_txt(str(params.get("user_inputs_text") or ""))
@@ -261,7 +333,7 @@ async def run_users_task(
         if cur_status == "cancelled":
             await log(account_id, "info", "cancelled", "Task cancelled before resolve")
             return
-        ent = await client.get_entity(peer)
+        ent = await client.get_entity(_entity_reference(peer))
         src_id = int(ent.id)
         is_mg = isinstance(ent, Channel) and bool(getattr(ent, "megagroup", False))
         is_bc = isinstance(ent, Channel) and bool(getattr(ent, "broadcast", False)) and not is_mg
@@ -312,7 +384,7 @@ async def run_users_task(
                 return
             found_before = int((await session.get(ParsingTask, task.id)).found_count or 0)
             if is_mg:
-                if mname in ("members", "active"):
+                if mname == "members":
                     await _collect_participants(
                         client,
                         ent,
@@ -320,14 +392,14 @@ async def run_users_task(
                         account_id=account_id,
                         source_entity_id=src_id,
                         source_entity_kind="group",
-                        source_kind="active" if mname == "active" else "member",
+                        source_kind="member",
                         session=session,
                         user_flt=user_flt,
                         log=log,
-                        recent_only=(mname == "active"),
+                        recent_only=False,
                         limit_users=max_per_source,
                     )
-                elif mname == "commenters":
+                elif mname == "active":
                     await _collect_from_messages(
                         client,
                         ent,
@@ -335,10 +407,11 @@ async def run_users_task(
                         account_id=account_id,
                         source_entity_id=src_id,
                         source_entity_kind="group",
-                        source_kind="commenter",
+                        source_kind="active",
                         session=session,
                         user_flt=user_flt,
                         log=log,
+                        message_flt=message_flt,
                     )
             elif is_bc:
                 if mname == "commenters":
@@ -351,6 +424,7 @@ async def run_users_task(
                         session=session,
                         user_flt=user_flt,
                         log=log,
+                        message_flt=message_flt,
                     )
                 elif mname == "active":
                     target = discussion_entity or ent
@@ -366,6 +440,7 @@ async def run_users_task(
                         user_flt=user_flt,
                         log=log,
                         limit_messages=120,
+                        message_flt=message_flt,
                     )
             else:
                 await log(account_id, "warn", "skip_entity", f"unsupported entity for {peer}")

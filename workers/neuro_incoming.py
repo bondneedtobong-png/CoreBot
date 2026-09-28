@@ -13,9 +13,18 @@ if TYPE_CHECKING:
 
 
 def register_neuro_handler_on_worker(worker: Worker) -> None:
-    """Один раз на Worker после подключения Telethon."""
-    if getattr(worker, "_neuro_handler_registered", False):
+    """Один раз на (Worker, client) после подключения Telethon.
+
+    Флаг привязан к id(client): пересоздание client (reconnect) требует
+    новой привязки, повторный вызов на том же client — no-op без дубля.
+    """
+    client = getattr(worker, "client", None)
+    if client is None:
         return
+    client_id = id(client)
+    if getattr(worker, "_neuro_handler_client_id", None) == client_id:
+        return
+    worker._neuro_handler_client_id = client_id
     worker._neuro_handler_registered = True
 
     @worker.client.on(events.NewMessage(incoming=True))

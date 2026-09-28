@@ -11,6 +11,8 @@ from bot.config import (
 )
 from utils.logger import log
 from utils.openrouter import chat_completion_verbose
+from utils.openai_compatible import chat_completion_verbose as compatible_chat_completion_verbose
+from services.neurochat.provider_registry import ProviderRuntime
 
 
 def is_retryable_openrouter_error(status: int | None, err: str | None) -> bool:
@@ -26,15 +28,20 @@ async def generate_reply_with_retries_and_fallback(
     *,
     api_key: str,
     generation: dict[str, Any],
+    provider: ProviderRuntime | None = None,
 ) -> tuple[str | None, str | None]:
     models: list[str] = []
     if primary_model:
         models.append(primary_model)
-    for m in NEURO_FALLBACK_MODELS:
-        if m not in models:
-            models.append(m)
+    if provider is None or provider.is_openrouter:
+        for m in NEURO_FALLBACK_MODELS:
+            if m not in models:
+                models.append(m)
     if not models:
-        models = [DEFAULT_NEURO_MODEL]
+        models = [provider.model if provider else DEFAULT_NEURO_MODEL]
+
+    request_generation = dict(provider.generation_defaults) if provider else {}
+    request_generation.update(generation)
 
     last_err: str | None = None
     for model in models:
@@ -43,12 +50,18 @@ async def generate_reply_with_retries_and_fallback(
             log.info(
                 f"Neuro LLM request: model={model} attempt={attempt + 1}/{max(1, NEURO_OPENROUTER_MAX_RETRIES)}"
             )
-            reply, err, status = await chat_completion_verbose(
-                messages,
-                model,
-                api_key=api_key,
-                generation=generation,
-            )
+            if provider is not None and not provider.is_openrouter:
+                reply, err, status = await compatible_chat_completion_verbose(
+                    messages, model, base_url=provider.base_url,
+                    api_key=api_key, generation=request_generation,
+                    extra_headers=provider.headers,
+                    allow_loopback_http=provider.base_url.startswith(("http://localhost", "http://127.0.0.1", "http://[::1]")),
+                )
+            else:
+                reply, err, status = await chat_completion_verbose(
+                    messages, model, api_key=api_key,
+                    generation=request_generation,
+                )
             if reply:
                 log.info(f"Neuro LLM success: model={model}")
                 return reply, None

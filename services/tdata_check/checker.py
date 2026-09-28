@@ -16,7 +16,9 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import sqlite3
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -260,6 +262,158 @@ async def _disconnect_quiet(client: Any) -> None:
         await client.disconnect()
     except Exception:
         pass
+
+
+def _valid_telethon_session(data: bytes) -> bool:
+    """Inspect SQLite in memory, before creating a file or Telethon client."""
+    if not data.startswith(b"SQLite format 3\x00"):
+        return False
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.deserialize(data)
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("PRAGMA trusted_schema=OFF")
+        if conn.execute("PRAGMA quick_check(1)").fetchone() != ("ok",):
+            return False
+        if conn.execute(
+            "SELECT type FROM sqlite_master WHERE name='sessions'"
+        ).fetchone() != ("table",):
+            return False
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(sessions)")
+        }
+        if not {"dc_id", "server_address", "port", "auth_key", "takeout_id"} <= columns:
+            return False
+        row = conn.execute(
+            "SELECT dc_id, server_address, port, auth_key FROM sessions LIMIT 1"
+        ).fetchone()
+        return bool(
+            row
+            and isinstance(row[0], int)
+            and row[0] > 0
+            and isinstance(row[1], str)
+            and row[1]
+            and isinstance(row[2], int)
+            and 0 < row[2] <= 65535
+            and isinstance(row[3], bytes)
+            and len(row[3]) == 256
+        )
+    except (sqlite3.Error, ValueError, OverflowError):
+        return False
+    finally:
+        conn.close()
+
+
+async def run_check_session(
+    data: bytes,
+    *,
+    proxies: list[CheckProxy],
+    client_factory: Optional[ClientFactory] = None,
+    run_id: Optional[str] = None,
+    connect_timeout_sec: Optional[float] = None,
+    tmp_parent: Optional[Path] = None,
+) -> TDataCheckRun:
+    """Check one uploaded Telethon session through a leased check-pool proxy."""
+    rid = run_id or uuid.uuid4().hex[:12]
+    created = utcnow_naive().isoformat()
+
+    def failed(status: str, code: str, detail: str) -> TDataCheckRun:
+        return TDataCheckRun(
+            run_id=rid, created_at=created, total=1, failed_count=1,
+            items=[TDataCheckItem(
+                item_id="item-01", relpath="uploaded.session", status=status,
+                error_code=code, error_detail=detail,
+            )],
+        )
+
+    if len(data) > check_limits.MAX_SESSION_BYTES:
+        return failed("structure_invalid", "session_too_large", "session exceeds size limit")
+    if not data:
+        return failed("structure_invalid", "session_empty", "session is empty")
+    if not _valid_telethon_session(data):
+        return failed("structure_invalid", "invalid_session", "invalid Telethon session")
+    if not proxies:
+        return failed("proxy_required", "no_check_proxy", "TDATA_CHECK pool is empty")
+
+    leases = CheckProxyLeaseManager()
+    timeout = connect_timeout_sec or check_limits.CONNECT_TIMEOUT_SEC
+    leased_id = await leases.acquire_wait(
+        [int(proxy.id) for proxy in proxies], timeout_sec=max(5.0, timeout)
+    )
+    if leased_id is None:
+        return failed("proxy_failed", "proxy_lease_timeout", "no check proxy available")
+    proxy = next(proxy for proxy in proxies if int(proxy.id) == int(leased_id))
+    proxy_dict = proxy.to_telethon_dict()
+    client: Any = None
+    work_dir: Optional[Path] = None
+    try:
+        # The directory is private and independent of production SESSIONS_DIR.
+        work_dir = Path(tempfile.mkdtemp(
+            prefix=check_limits.TMP_PREFIX,
+            dir=str(tmp_parent) if tmp_parent else None,
+        ))
+        session_path = work_dir / "check.session"
+        with session_path.open("xb") as session_file:
+            session_file.write(data)
+        assert proxy_dict, "direct connect forbidden"
+        client = (client_factory or default_client_factory)(str(session_path), proxy_dict)
+        await asyncio.wait_for(client.connect(), timeout=timeout)
+        authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=timeout)
+        if not authorized:
+            item = TDataCheckItem(
+                item_id="item-01", relpath="uploaded.session", status="unauthorized",
+                proxy_id=int(proxy.id), proxy_label=proxy.label,
+                error_code="session_unauthorized", error_detail="session is not authorized",
+            )
+        else:
+            me = await asyncio.wait_for(client.get_me(), timeout=timeout)
+            if me is None:
+                item = TDataCheckItem(
+                    item_id="item-01", relpath="uploaded.session", status="unauthorized",
+                    proxy_id=int(proxy.id), proxy_label=proxy.label,
+                    error_code="empty_profile", error_detail="empty Telegram profile",
+                )
+            else:
+                phone = getattr(me, "phone", None) or None
+                item = TDataCheckItem(
+                    item_id="item-01", relpath="uploaded.session", status="ok",
+                    phone=phone, username=getattr(me, "username", None) or None,
+                    first_name=getattr(me, "first_name", None) or None,
+                    last_name=getattr(me, "last_name", None) or None,
+                    country=guess_country(phone), user_id=getattr(me, "id", None),
+                    proxy_id=int(proxy.id), proxy_label=proxy.label,
+                )
+    except Exception as exc:
+        status, code, detail, retry_after = map_exception(
+            exc, tmp_dir=work_dir, secrets=_pool_secrets(proxies)
+        )
+        if code in {"rpc_error", "proxy_connect_error"}:
+            detail = "session check failed" if code == "rpc_error" else "proxy connection failed"
+        item = TDataCheckItem(
+            item_id="item-01", relpath="uploaded.session", status=status,
+            proxy_id=int(proxy.id), proxy_label=proxy.label,
+            error_code=code, error_detail=detail, retry_after=retry_after,
+        )
+    finally:
+        try:
+            if client is not None:
+                await _disconnect_quiet(client)
+        finally:
+            leases.release(int(proxy.id))
+            if work_dir is not None:
+                for attempt in range(3):
+                    try:
+                        shutil.rmtree(work_dir)
+                        break
+                    except OSError:
+                        if attempt == 2:
+                            raise RuntimeError("session temp cleanup failed") from None
+                        time.sleep(0.05)
+    return TDataCheckRun(
+        run_id=rid, created_at=created, total=1,
+        ok_count=int(item.status == "ok"), failed_count=int(item.status != "ok"),
+        items=[item],
+    )
 
 
 async def check_single_root(
@@ -573,4 +727,5 @@ __all__ = [
     "default_client_factory",
     "check_single_root",
     "run_check_archive",
+    "run_check_session",
 ]

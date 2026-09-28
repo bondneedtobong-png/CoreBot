@@ -15,13 +15,13 @@ Recommended paths:
 DATABASE_URL=sqlite+aiosqlite:////opt/corebot/app/data/corebot.db
 BOT_DATABASE_URL=sqlite:////opt/corebot/app/data/corebot.db
 CP_DATABASE_URL=sqlite:////opt/corebot/app/data/control_plane.db
-PARSER_EMBEDDED=1
+PARSER_EMBEDDED=0
 ```
 
 Generate secrets with `openssl rand -hex 32` without placing the resulting value in shell history.
 
 Validate with the shared gate before starting services (validates bot +
-Control Plane per `docs/operations/CONFIG_CONTRACT.md`; secrets are masked;
+Control Plane per `DEPLOY.md` §2.1; secrets are masked;
 exit 0 ok, 1 usage error, 2 config error):
 
 ```bash

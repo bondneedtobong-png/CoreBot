@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from bot.keyboards.database_menu import (
     kb_database_debug_windows,
     kb_database_detail,
@@ -32,7 +32,6 @@ from database.models import Client, ClientClassCounter
 
 router = Router()
 
-STUB = "\n\n<i>Подробности: <code>docs/DATABASE_MODULE_SPEC.md</code></i>"
 
 
 class DatabaseSearchFSM(StatesGroup):
@@ -44,7 +43,7 @@ class DatabaseBackupMergeFSM(StatesGroup):
 
 
 def _owner(uid: int) -> bool:
-    return uid == OWNER_ID
+    return is_authorized_user(uid)
 
 
 @router.callback_query(F.data == "db_dl2141")
@@ -228,7 +227,7 @@ async def db_stats_short(callback: CallbackQuery):
     else:
         extra = "Агрегаты по аккаунтам/переписке — в следующих версиях; см. мониторинг рассылки."
     await callback.message.edit_text(
-        f"📈 <b>{labels.get(callback.data, callback.data)}</b>\n\n{extra}" + STUB,
+        f"📈 <b>{labels.get(callback.data, callback.data)}</b>\n\n{extra}",
         reply_markup=kb_database_stats(),
         parse_mode=ParseMode.HTML,
     )

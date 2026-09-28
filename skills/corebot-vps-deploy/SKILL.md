@@ -60,7 +60,7 @@ Obtain the SSH host/user, source method (Git checkout or uploaded directory), an
   (sidecar + manifest verified first; live-instance overwrite is always
   refused, `--allow-nonempty` covers stray non-live files only); after
   restore both DBs must pass `integrity_check`.
-- Full drill (timed, within RTO): `docs/operations/BACKUP_RESTORE_DRILL.md`
+- Backup/restore and drill cadence: `DEPLOY.md` §2.4
   (repeat at least every 90 days); automated coverage in
   `tests/test_backup_restore.py`.
 

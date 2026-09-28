@@ -4,7 +4,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from bot.handlers.accounts.common import safe_edit_message
 from bot.handlers.accounts.states import EditTagsFSM
 from bot.keyboards.main import get_context_back_keyboard
@@ -18,7 +18,7 @@ router = Router()
 
 @router.callback_query(F.data.startswith("account_edit_tags_"))
 async def cb_account_edit_tags(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -64,7 +64,7 @@ async def cb_account_edit_tags(callback: CallbackQuery, state: FSMContext):
 
 @router.message(EditTagsFSM.waiting_for_tags)
 async def handle_set_tags(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     data = await state.get_data()

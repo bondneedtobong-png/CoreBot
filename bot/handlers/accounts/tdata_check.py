@@ -19,7 +19,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import (
     get_accounts_keyboard,
@@ -64,7 +64,7 @@ class TDataCheckFSM(StatesGroup):
 
 @router.callback_query(F.data == "accounts_check_tdata")
 async def cb_tdata_check_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -83,7 +83,7 @@ async def cb_tdata_check_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TDataCheckFSM.waiting_for_zip, F.document)
 async def process_check_zip(message: Message, state: FSMContext, bot: Bot):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     document = message.document
     if not document.file_name.lower().endswith(".zip"):
@@ -149,7 +149,7 @@ async def process_check_zip(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data.startswith("tdata_check_group_"))
 async def process_check_group(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     data = await state.get_data()
@@ -206,7 +206,7 @@ async def process_check_group(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "tdata_check_no_groups")
 async def cb_check_no_groups(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await callback.answer(

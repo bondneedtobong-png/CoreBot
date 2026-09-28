@@ -1,11 +1,12 @@
 """Отдельное меню прогрева: аккаунты/группы/настройки/сообщества."""
+from html import escape
 from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import (
     get_warmup_status_keyboard,
@@ -29,6 +30,12 @@ from database.repositories import (
     WarmupLogRepository,
     WarmupProfileRepository,
 )
+from services.warmup_schedule import (
+    DEFAULT_TIME_ZONE, DEFAULT_WORK_START, DEFAULT_WORK_END,
+    MIN_INTERVAL_SECONDS, is_off_hours, next_off_hours, parse_read_targets, validate_schedule,
+)
+from utils.time import utcnow_naive
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 router = Router()
 
@@ -38,11 +45,12 @@ class WarmupSettingsFSM(StatesGroup):
     waiting_limit = State()
     waiting_chats = State()
     waiting_copy_new_name = State()
+    waiting_schedule = State()
 
 
 @router.callback_query(F.data == "menu_warmup")
 async def cb_menu_warmup(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await safe_edit_message(
@@ -58,7 +66,7 @@ async def cb_menu_warmup(callback: CallbackQuery):
 
 @router.callback_query(F.data == "warmup_status_summary")
 async def cb_warmup_status_summary(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     try:
@@ -85,7 +93,7 @@ async def cb_warmup_status_summary(callback: CallbackQuery):
 
 @router.callback_query(F.data == "warmup_pick_accounts")
 async def cb_warmup_pick_accounts(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     async with session_scope() as session:
@@ -101,7 +109,7 @@ async def cb_warmup_pick_accounts(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("warmup_toggle_acc_"))
 async def cb_warmup_toggle_acc(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     account_id = int(callback.data.split("_")[-1])
@@ -128,7 +136,7 @@ async def cb_warmup_toggle_acc(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("warmup_acc_profile_"))
 async def cb_warmup_acc_profile(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     account_id = int(callback.data.split("_")[-1])
@@ -150,7 +158,7 @@ async def cb_warmup_acc_profile(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("warmup_set_acc_profile_"))
 async def cb_warmup_set_acc_profile(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     payload = callback.data[len("warmup_set_acc_profile_"):]
@@ -180,7 +188,7 @@ async def cb_warmup_set_acc_profile(callback: CallbackQuery):
 
 @router.callback_query(F.data == "warmup_pick_group")
 async def cb_warmup_pick_group(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     async with session_scope() as session:
@@ -196,7 +204,7 @@ async def cb_warmup_pick_group(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("warmup_group_menu_"))
 async def cb_warmup_group_menu(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     group_id = int(callback.data.split("_")[-1])
@@ -211,7 +219,7 @@ async def cb_warmup_group_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("warmup_group_on_"))
 async def cb_warmup_group_on(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     group_id = int(callback.data.split("_")[-1])
@@ -228,7 +236,7 @@ async def cb_warmup_group_on(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("warmup_group_off_"))
 async def cb_warmup_group_off(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     group_id = int(callback.data.split("_")[-1])
@@ -241,7 +249,7 @@ async def cb_warmup_group_off(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("warmup_group_profile_"))
 async def cb_warmup_group_profile(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     group_id = int(callback.data.split("_")[-1])
@@ -263,7 +271,7 @@ async def cb_warmup_group_profile(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("warmup_group_set_profile_"))
 async def cb_warmup_group_set_profile(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     payload = callback.data[len("warmup_group_set_profile_"):]
@@ -288,32 +296,94 @@ async def cb_warmup_group_set_profile(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "warmup_settings")
-async def cb_warmup_settings(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+async def cb_warmup_settings(callback: CallbackQuery, state: FSMContext):
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
+    selected = (await state.get_data()).get("settings_profile", "safe")
     async with session_scope() as session:
-        safe_profile = await WarmupProfileRepository.get_by_name(session, "safe")
-    chats_preview = (safe_profile.target_chats_text or "").strip() if safe_profile else ""
+        profile = await WarmupProfileRepository.get_by_name(session, selected)
+    if profile is None:
+        selected = "safe"
+        async with session_scope() as session:
+            profile = await WarmupProfileRepository.get_by_name(session, selected)
+    chats_preview = (profile.target_chats_text or "").strip() if profile else ""
     if chats_preview:
         chats_preview = chats_preview[:300] + ("..." if len(chats_preview) > 300 else "")
+    time_zone = getattr(profile, "time_zone", None) or DEFAULT_TIME_ZONE
+    work_start = getattr(profile, "work_start_hour", DEFAULT_WORK_START)
+    work_end = getattr(profile, "work_end_hour", DEFAULT_WORK_END)
+    now = utcnow_naive()
+    quiet = is_off_hours(now, time_zone, work_start, work_end)
+    next_eligible = next_off_hours(now, time_zone, work_start, work_end)
+    actions = getattr(profile, "allowed_actions", "read_dialogs,read_channels") or ""
     await safe_edit_message(
         callback.message,
         "⚙️ <b>Настройки прогрева</b>\n\n"
-        f"Профиль: <code>safe</code>\n"
-        f"Delay: <b>{safe_profile.base_delay_sec if safe_profile else 45}</b> сек\n"
-        f"Jitter: <b>{safe_profile.jitter_sec if safe_profile else 25}</b> сек\n"
-        f"Дневной лимит: <b>{safe_profile.daily_action_limit if safe_profile else 40}</b>\n\n"
-        f"Сообщества:\n<pre>{chats_preview or 'не задано'}</pre>",
+        f"Профиль: <code>{escape(selected)}</code>\n"
+        f"Рабочее время: <b>{work_start:02d}:00–{work_end:02d}:00 {escape(time_zone)}</b>\n"
+        f"Сейчас: <b>{'тихое окно' if quiet else 'рабочее время'}</b>\n"
+        f"Ближайшее тихое окно UTC: <code>{next_eligible:%Y-%m-%d %H:%M}</code>\n"
+        f"Минимальный интервал: <b>{MIN_INTERVAL_SECONDS // 60} мин</b>\n"
+        f"Задержка: <b>{profile.base_delay_sec if profile else MIN_INTERVAL_SECONDS}</b> сек\n"
+        f"Jitter: <b>{profile.jitter_sec if profile else 0}</b> сек\n"
+        f"Дневной лимит: <b>{profile.daily_action_limit if profile else 4}</b>\n"
+        f"Действия: <code>{escape(actions)}</code>\n\n"
+        f"Чаты:\n<pre>{escape(chats_preview or 'не задано')}</pre>",
         reply_markup=get_warmup_settings_keyboard(),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
 
 
+@router.callback_query(F.data == "warmup_settings_pick_profile")
+async def cb_warmup_settings_pick_profile(callback: CallbackQuery):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    async with session_scope() as session:
+        profiles = await WarmupProfileRepository.get_all(session)
+    rows = [[InlineKeyboardButton(text=p.name, callback_data=f"warmup_settings_select_{p.id}")]
+            for p in profiles]
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="warmup_settings")])
+    await safe_edit_message(callback.message, "Выберите профиль для настройки:",
+                            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("warmup_settings_select_"))
+async def cb_warmup_settings_select(callback: CallbackQuery, state: FSMContext):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    selected_id = int(callback.data.rsplit("_", 1)[1])
+    async with session_scope() as session:
+        profiles = await WarmupProfileRepository.get_all(session)
+    profile = next((p for p in profiles if p.id == selected_id), None)
+    if profile is None:
+        await callback.answer("Профиль не найден", show_alert=True)
+        return
+    await state.update_data(settings_profile=profile.name)
+    await cb_warmup_settings(callback, state)
+
+
+@router.callback_query(F.data == "warmup_settings_schedule")
+async def cb_warmup_settings_schedule(callback: CallbackQuery, state: FSMContext):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await state.set_state(WarmupSettingsFSM.waiting_schedule)
+    await callback.message.answer(
+        "Введите часовой пояс IANA и рабочие часы начала/конца. "
+        "Например: <code>Europe/Samara 09 18</code>. "
+        "Прогрев выполняется только вне этого интервала.", parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == "warmup_copy_profile_start")
 async def cb_warmup_copy_profile_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.clear()
@@ -331,7 +401,7 @@ async def cb_warmup_copy_profile_start(callback: CallbackQuery, state: FSMContex
 
 @router.callback_query(F.data.startswith("warmup_copy_source_idx_"))
 async def cb_warmup_copy_source(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     idx_raw = callback.data[len("warmup_copy_source_idx_"):].strip()
@@ -359,7 +429,7 @@ async def cb_warmup_copy_source(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "warmup_copy_mode_new")
 async def cb_warmup_copy_mode_new(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     data = await state.get_data()
@@ -379,7 +449,7 @@ async def cb_warmup_copy_mode_new(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "warmup_copy_mode_overwrite")
 async def cb_warmup_copy_mode_overwrite(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     data = await state.get_data()
@@ -402,7 +472,7 @@ async def cb_warmup_copy_mode_overwrite(callback: CallbackQuery, state: FSMConte
 
 @router.callback_query(F.data == "warmup_copy_mode_back")
 async def cb_warmup_copy_mode_back(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     data = await state.get_data()
@@ -422,7 +492,7 @@ async def cb_warmup_copy_mode_back(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "warmup_copy_confirm_back")
 async def cb_warmup_copy_confirm_back(callback: CallbackQuery, state: FSMContext):
     """С экрана подтверждения перезаписи — назад к выбору профиля-получателя."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     data = await state.get_data()
@@ -445,7 +515,7 @@ async def cb_warmup_copy_confirm_back(callback: CallbackQuery, state: FSMContext
 
 @router.callback_query(F.data.startswith("warmup_copy_target_idx_"))
 async def cb_warmup_copy_target(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     idx_raw = callback.data[len("warmup_copy_target_idx_"):].strip()
@@ -483,7 +553,7 @@ async def cb_warmup_copy_target(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "warmup_copy_confirm_overwrite")
 async def cb_warmup_copy_confirm(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     data = await state.get_data()
@@ -515,12 +585,13 @@ async def cb_warmup_copy_confirm(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "warmup_settings_delay")
 async def cb_warmup_settings_delay(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.set_state(WarmupSettingsFSM.waiting_delay)
     await callback.message.answer(
-        "Введите delay и jitter через пробел, например: <code>45 25</code>",
+        "Введите задержку и разброс в секундах, например: <code>3600 600</code>. "
+        "Минимум между действиями — 30 минут.",
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
@@ -528,31 +599,78 @@ async def cb_warmup_settings_delay(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "warmup_settings_limit")
 async def cb_warmup_settings_limit(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.set_state(WarmupSettingsFSM.waiting_limit)
-    await callback.message.answer("Введите дневной лимит (число), например: <code>40</code>", parse_mode=ParseMode.HTML)
+    await callback.message.answer("Введите дневной лимит 1–12, например: <code>4</code>", parse_mode=ParseMode.HTML)
     await callback.answer()
 
 
 @router.callback_query(F.data == "warmup_settings_chats")
 async def cb_warmup_settings_chats(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await state.set_state(WarmupSettingsFSM.waiting_chats)
     await callback.message.answer(
-        "Пришли сообщества по одному на строку (username/ссылки). Пример:\n"
+        "Пришли только разрешённые чаты по одному на строку (username/ссылки). Пример:\n"
         "<code>@chat1\n@chat2\nhttps://t.me/somegroup</code>",
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
 
 
+@router.message(WarmupSettingsFSM.waiting_schedule)
+async def process_warmup_schedule(message: Message, state: FSMContext):
+    if not is_authorized_user(message.from_user.id):
+        return
+    parts = (message.text or "").strip().split()
+    if len(parts) != 3:
+        await message.answer("Формат: <code>Europe/Samara 09 18</code>", parse_mode=ParseMode.HTML)
+        return
+    try:
+        start, end = int(parts[1]), int(parts[2])
+        validate_schedule(parts[0], start, end)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    profile = (await state.get_data()).get("settings_profile", "safe")
+    async with session_scope() as session:
+        await WarmupProfileRepository.update_profile_settings(
+            session, profile, time_zone=parts[0], work_start_hour=start, work_end_hour=end,
+        )
+    await state.clear()
+    await state.update_data(settings_profile=profile)
+    await message.answer(f"✅ Рабочие часы профиля {escape(profile)}: {start:02d}:00–{end:02d}:00 {escape(parts[0])}.",
+                         parse_mode=ParseMode.HTML)
+
+
+@router.callback_query(F.data == "warmup_settings_reactions")
+async def cb_warmup_settings_reactions(callback: CallbackQuery, state: FSMContext):
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    profile_name = (await state.get_data()).get("settings_profile", "safe")
+    async with session_scope() as session:
+        profile = await WarmupProfileRepository.get_by_name(session, profile_name)
+        if not profile:
+            await callback.answer("Профиль не найден", show_alert=True)
+            return
+        allowed = {x.strip() for x in (profile.allowed_actions or "").split(",")}
+        if "set_reaction" in allowed:
+            allowed.remove("set_reaction")
+        else:
+            allowed.add("set_reaction")
+        await WarmupProfileRepository.update_profile_settings(
+            session, profile_name, allowed_actions=",".join(sorted(allowed)),
+        )
+    await callback.answer("Реакции включены" if "set_reaction" in allowed else "Реакции выключены", show_alert=True)
+
+
 @router.message(WarmupSettingsFSM.waiting_delay)
 async def process_warmup_delay(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     parts = (message.text or "").strip().split()
     if len(parts) != 2:
@@ -563,47 +681,66 @@ async def process_warmup_delay(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Нужно ввести числа.")
         return
+    if not (MIN_INTERVAL_SECONDS <= delay <= 86400 and 0 <= jitter <= delay / 2):
+        await message.answer("Задержка 1800–86400 сек, разброс от 0 до половины задержки.")
+        return
+    profile = (await state.get_data()).get("settings_profile", "safe")
     async with session_scope() as session:
         await WarmupProfileRepository.update_profile_settings(
-            session, "safe", base_delay_sec=delay, jitter_sec=jitter
+            session, profile, base_delay_sec=delay, jitter_sec=jitter
         )
     await state.clear()
-    await message.answer("✅ Обновил delay/jitter профиля safe.")
+    await state.update_data(settings_profile=profile)
+    await message.answer(f"✅ Обновил задержку профиля {escape(profile)}.", parse_mode=ParseMode.HTML)
 
 
 @router.message(WarmupSettingsFSM.waiting_limit)
 async def process_warmup_limit(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     raw = (message.text or "").strip()
     if not raw.isdigit():
         await message.answer("Нужно целое число.")
         return
     limit = int(raw)
+    if not 1 <= limit <= 12:
+        await message.answer("Введите число от 1 до 12.")
+        return
+    profile = (await state.get_data()).get("settings_profile", "safe")
     async with session_scope() as session:
         await WarmupProfileRepository.update_profile_settings(
-            session, "safe", daily_action_limit=limit
+            session, profile, daily_action_limit=limit
         )
     await state.clear()
-    await message.answer("✅ Обновил дневной лимит профиля safe.")
+    await state.update_data(settings_profile=profile)
+    await message.answer(f"✅ Обновил дневной лимит профиля {escape(profile)}.", parse_mode=ParseMode.HTML)
 
 
 @router.message(WarmupSettingsFSM.waiting_chats)
 async def process_warmup_chats(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     text = (message.text or "").strip()
+    targets = parse_read_targets(text)
+    if len(text) > 2000 or len(targets) > 20:
+        await message.answer("Не более 20 чатов и 2000 символов.")
+        return
+    if len(targets) != len([line for line in text.splitlines() if line.strip()]):
+        await message.answer("Укажите уникальные публичные @username или ссылки t.me/username, по одному на строку.")
+        return
+    profile = (await state.get_data()).get("settings_profile", "safe")
     async with session_scope() as session:
         await WarmupProfileRepository.update_profile_settings(
-            session, "safe", target_chats_text=text
+            session, profile, target_chats_text=text
         )
     await state.clear()
-    await message.answer("✅ Сохранил список сообществ для активности (профиль safe).")
+    await state.update_data(settings_profile=profile)
+    await message.answer(f"✅ Сохранил разрешённые чаты профиля {escape(profile)}.", parse_mode=ParseMode.HTML)
 
 
 @router.message(WarmupSettingsFSM.waiting_copy_new_name)
 async def process_copy_new_profile_name(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
     raw_name = (message.text or "").strip()
     if not raw_name:

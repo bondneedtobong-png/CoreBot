@@ -9,7 +9,8 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.config import OWNER_ID, SESSIONS_DIR, TDATA_TEMP_DIR
+from bot.config import is_authorized_user
+from bot.config import SESSIONS_DIR, TDATA_TEMP_DIR
 from bot.handlers.accounts.common import safe_edit_message
 from bot.handlers.accounts.states import AccountUpload
 from bot.keyboards.main import (
@@ -18,11 +19,11 @@ from bot.keyboards.main import (
     get_proxy_group_select_keyboard,
 )
 from database.session import session_scope
-from database.models import AccountStatus
+from database.models import AccountStatus, ProxyType, ProxyGroupPurpose
 from database.repositories import AccountRepository, ProxyGroupRepository
 from utils.logger import log
-from workers.manager import verify_session_via_proxy
 from workers.session_converter import convert_tdata_to_session, find_tdata_roots
+from workers.session_lease import proxy_pool_import_lease
 
 router = Router()
 
@@ -67,7 +68,7 @@ def _labels_from_user_input(raw: str, n_accounts: int) -> list[str]:
 
 @router.callback_query(F.data == "accounts_upload")
 async def cb_accounts_upload(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -85,7 +86,7 @@ async def cb_accounts_upload(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "accounts_upload_bulk_geo")
 async def cb_accounts_upload_bulk_geo(callback: CallbackQuery, state: FSMContext):
     """Отдельный сценарий массового залива с предупреждением по GEO."""
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -116,7 +117,7 @@ async def cb_accounts_upload_bulk_geo(callback: CallbackQuery, state: FSMContext
 
 @router.callback_query(F.data == "accounts_upload_bulk_geo_confirm")
 async def cb_accounts_upload_bulk_geo_confirm(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -134,7 +135,7 @@ async def cb_accounts_upload_bulk_geo_confirm(callback: CallbackQuery, state: FS
 
 @router.message(AccountUpload.waiting_for_file, F.document)
 async def process_tdata_zip(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     document = message.document
@@ -198,11 +199,7 @@ async def process_tdata_zip(message: Message, state: FSMContext):
             ),
             reply_markup=get_proxy_group_select_keyboard(
                 groups_usage,
-                none_callback=(
-                    "proxy_group_select_bulk_none_blocked"
-                    if bulk_geo
-                    else "proxy_group_select_none"
-                ),
+                none_callback="proxy_group_select_bulk_none_blocked",
                 cancel_callback="accounts_upload",
             ),
         )
@@ -216,7 +213,7 @@ async def process_tdata_zip(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("proxy_group_select_"))
 async def process_proxy_select(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -224,7 +221,6 @@ async def process_proxy_select(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     extract_dir = data.get("extract_dir")
     tdata_count = data.get("tdata_count", 1)
-    upload_mode = data.get("upload_mode", "single")
 
     if not extract_dir:
         await callback.message.answer("❌ Ошибка: данные потеряны. Загрузите файл заново.")
@@ -233,9 +229,9 @@ async def process_proxy_select(callback: CallbackQuery, state: FSMContext):
         return
 
     group_id = None if group_id_str == "none" else int(group_id_str)
-    if upload_mode == "bulk_geo" and group_id is None:
+    if group_id is None:
         await callback.answer(
-            "В массовом режиме нужно выбрать группу прокси",
+            "Для импорта нужно выбрать группу SOCKS5-прокси",
             show_alert=True,
         )
         return
@@ -265,11 +261,11 @@ async def process_proxy_select(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "proxy_group_select_bulk_none_blocked")
 async def cb_proxy_group_select_bulk_none_blocked(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     await callback.answer(
-        "Для массового залива нельзя выбрать «без прокси». Выберите группу прокси.",
+        "Для импорта нельзя выбрать «без прокси». Выберите группу SOCKS5.",
         show_alert=True,
     )
 
@@ -297,9 +293,25 @@ async def _run_tdata_conversion(
 
         for idx, tdata_path in enumerate(tdata_roots, 1):
             acc_label = list_labels[idx - 1] if idx <= len(list_labels) else list_labels[-1]
+            pool_lease = None
             try:
                 log.info(f"🔄 Конвертация аккаунта {idx}/{len(tdata_roots)}...")
-                result = await convert_tdata_to_session(tdata_path=tdata_path, sessions_dir=SESSIONS_DIR)
+                pool_lease = proxy_pool_import_lease(SESSIONS_DIR, group_id).acquire()
+                async with session_scope() as session:
+                    picked_proxy = await ProxyGroupRepository.acquire_next_free_proxy(
+                        session, group_id
+                    ) if group_id is not None else None
+                    if (picked_proxy is None or picked_proxy.proxy_type != ProxyType.SOCKS5
+                            or not picked_proxy.is_active or not picked_proxy.is_working
+                            or group is None or group.purpose != ProxyGroupPurpose.ACCOUNT_RUNTIME.value):
+                        raise RuntimeError("В выбранной группе нет доступного SOCKS5-прокси")
+                    assigned_proxy_id = picked_proxy.id
+                    session.expunge(picked_proxy)
+                # Длинный Telegram RPC проходит без открытой DB-сессии.
+                result = await convert_tdata_to_session(
+                    tdata_path=tdata_path, sessions_dir=SESSIONS_DIR,
+                    proxy=picked_proxy,
+                )
 
                 if result and result.get("success"):
                     session_name = result.get("session_name")
@@ -309,40 +321,6 @@ async def _run_tdata_conversion(
                     last_name = result.get("last_name", "")
 
                     async with session_scope() as session:
-                        assigned_proxy_id = None
-                        picked_proxy = None
-                        if group_id is not None:
-                            picked_proxy = await ProxyGroupRepository.acquire_next_free_proxy(
-                                session, group_id
-                            )
-                            if not picked_proxy:
-                                raise RuntimeError(
-                                    f"В группе {group.name if group else group_id} закончились свободные прокси"
-                                )
-                            assigned_proxy_id = picked_proxy.id
-
-                        session_file = SESSIONS_DIR / f"{session_name}.session"
-                        if picked_proxy is not None:
-                            ok_proxy, proxy_err = await verify_session_via_proxy(
-                                session_file, picked_proxy
-                            )
-                            if ok_proxy:
-                                log.info(
-                                    f"✅ Прокси для нового аккаунта: {picked_proxy.name} "
-                                    f"({picked_proxy.host}:{picked_proxy.port}) — "
-                                    f"сессия {session_name} авторизована через прокси"
-                                )
-                            else:
-                                log.warning(
-                                    f"⚠️ Прокси назначен в БД ({picked_proxy.name}), "
-                                    f"но проверка через прокси не прошла: {proxy_err}"
-                                )
-                        else:
-                            log.info(
-                                f"ℹ️ Новый аккаунт без прокси — сессия {session_name}, "
-                                f"статус active после успешной конвертации"
-                            )
-
                         existing = await AccountRepository.get_by_session_name(session, session_name)
                         if not existing:
                             await AccountRepository.create(
@@ -355,6 +333,7 @@ async def _run_tdata_conversion(
                                 proxy_id=assigned_proxy_id,
                                 status=AccountStatus.ACTIVE,
                                 list_label=acc_label,
+                                import_source="tdata_bot",
                             )
 
                     converted += 1
@@ -371,6 +350,9 @@ async def _run_tdata_conversion(
             except Exception as e:
                 errors += 1
                 log.error(f"Ошибка конвертации аккаунта {idx}: {e}")
+            finally:
+                if pool_lease is not None:
+                    pool_lease.release()
 
         try:
             shutil.rmtree(Path(extract_dir))
@@ -400,7 +382,7 @@ async def _run_tdata_conversion(
 
 @router.message(AccountUpload.waiting_for_list_label)
 async def process_tdata_list_label(message: Message, state: FSMContext):
-    if message.from_user.id != OWNER_ID:
+    if not is_authorized_user(message.from_user.id):
         return
 
     text = (message.text or "").strip()

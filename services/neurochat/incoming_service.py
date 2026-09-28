@@ -14,17 +14,19 @@ from database.repositories import (
     NeuroChatRepository,
 )
 from database.session import session_scope
+from database.models import Mailing
 from services.neurochat.class_bridge import apply_neuro_class_commands
 from services.neurochat.commands import extract_commands, user_asked_for_link
 from services.neurochat.llm_service import generate_reply_with_retries_and_fallback
-from services.neurochat.manager import prepare_incoming_context
+from services.neurochat.manager import neuro_active_now, prepare_incoming_context
 from services.neurochat.monitor import neuro_monitor
 from services.neurochat.post_actions import (
     persist_dialog_turn,
     process_send_link_command,
     process_stop_command,
-    send_text_reply,
+    send_and_record_reply,
 )
+from services.neurochat.reply_quota import reserve_reply
 from utils.logger import log
 from utils.telemetry import telemetry_emitter
 
@@ -36,6 +38,30 @@ _llm_sem = asyncio.Semaphore(NEURO_MAX_CONCURRENT)
 # дистанции).
 _dialog_locks: dict[str, asyncio.Lock] = {}
 _dialog_lock_refs: dict[str, int] = {}
+
+
+@asynccontextmanager
+async def _reply_slot(mailing: Mailing):
+    # Legacy test doubles without the new setting represent an unmetered path.
+    reservation = await reserve_reply(mailing.id) if hasattr(mailing, "neuro_daily_reply_limit") else None
+    try:
+        yield reservation
+    finally:
+        if reservation is not None:
+            await asyncio.shield(reservation.release())
+
+
+async def _neuro_reply_allowed_now(mailing_id: int) -> bool:
+    """Read current settings after waits or long LLM calls, without using a stale ORM row."""
+    async with session_scope() as session:
+        mailing = await session.get(Mailing, mailing_id)
+        return bool(mailing and mailing.neurochat_enabled and neuro_active_now(mailing))
+
+
+async def _before_neuro_send(mailing_id: int, reservation) -> bool:
+    if not await _neuro_reply_allowed_now(mailing_id):
+        return False
+    return reservation is None or await reservation.refresh_for_send()
 
 
 def _lock_key(account_id: int, peer_id: int) -> str:
@@ -103,9 +129,13 @@ async def handle_incoming(worker: Any, event: events.NewMessage.Event) -> None:
     if not worker.client:
         return
 
+    # Лимит цены LLM: входящий текст длиннее 6000 отрезаем для промпта
+    # (в БД/piшется полный хвост через persist, но в LLM идёт срез).
     text = (event.message.message or "").strip()
     if not text:
         return
+    if len(text) > 6000:
+        text = text[:6000]
 
     peer_uid = event.sender_id
     if peer_uid is None or peer_uid <= 0:
@@ -189,123 +219,148 @@ async def handle_incoming(worker: Any, event: events.NewMessage.Event) -> None:
     generation = prepared.generation
     use_typing_neuro = prepared.use_typing_neuro
     async with _dialog_lock(worker.account.id, int(peer_uid)):
-        async with _llm_sem:
-            reply, err = await generate_reply_with_retries_and_fallback(
-                messages,
-                model,
-                api_key=api_key,
-                generation=generation,
-            )
-        if not reply:
-            neuro_monitor.record_fallback()
-            log.warning(f"Neuro LLM: {err}; fallback to template")
-            await telemetry_emitter.emit_event(
-                "warning",
-                "neuro_llm_fallback",
-                "Neuro fallback template used",
-                payload={"account_id": worker.account.id, "peer_id": int(peer_uid), "error": err or ""},
-            )
-            reply = NEURO_UNAVAILABLE_TEMPLATE
-        else:
-            neuro_monitor.record_success()
-
-        reply = reply.replace("{link}", link_for_prompt).strip()
-        reply, cmd_send_link, cmd_stop, cmd_accept, cmd_decline, cmd_hater = extract_commands(reply)
-        asked_link = user_asked_for_link(text)
-        log.info(f"Neuro command gate: asked_link={asked_link} has_send_link={cmd_send_link}")
-        if cmd_send_link and not asked_link:
-            log.info("Neuro command [SEND_LINK] ignored: user did not ask for link")
-            cmd_send_link = False
-            if not reply:
-                retry_messages = list(messages)
-                retry_messages.insert(
-                    1,
-                    {
-                        "role": "system",
-                        "content": (
-                            "Пользователь НЕ просил ссылку. "
-                            "Ответь обычным кратким сообщением по контексту. "
-                            "Не используй служебные метки [SEND_LINK] и [STOP] "
-                            "(ровно так, без пробелов внутри скобок)."
-                        ),
-                    },
-                )
-                retry_reply, retry_err = await generate_reply_with_retries_and_fallback(
-                    retry_messages,
+        async with _reply_slot(mailing) as reservation:
+            if reservation is None and hasattr(mailing, "neuro_daily_reply_limit"):
+                neuro_monitor.record_deny("neuro_daily_reply_limit")
+                return
+            async with _llm_sem:
+                if not await _neuro_reply_allowed_now(mailing.id):
+                    neuro_monitor.record_deny("neuro_outside_active_hours")
+                    return
+                reply, err = await generate_reply_with_retries_and_fallback(
+                    messages,
                     model,
                     api_key=api_key,
                     generation=generation,
+                    provider=prepared.provider,
                 )
-                if retry_reply:
-                    retry_reply = retry_reply.replace("{link}", link_for_prompt).strip()
-                    (
-                        retry_reply,
-                        retry_send_link,
-                        retry_stop,
-                        retry_accept,
-                        retry_decline,
-                        retry_hater,
-                    ) = extract_commands(retry_reply)
-                    if retry_send_link:
-                        retry_reply = ""
-                    if retry_reply:
-                        reply = retry_reply
-                        cmd_send_link = retry_send_link
-                        cmd_stop = retry_stop
-                        cmd_accept = retry_accept
-                        cmd_decline = retry_decline
-                        cmd_hater = retry_hater
-                    else:
-                        cmd_stop = cmd_stop or retry_stop
-                        cmd_accept = cmd_accept or retry_accept
-                        cmd_decline = cmd_decline or retry_decline
-                        cmd_hater = cmd_hater or retry_hater
-                else:
-                    log.warning(f"Neuro retry (no commands) failed: {retry_err}")
+            if not reply:
+                neuro_monitor.record_fallback()
+                log.warning(f"Neuro LLM: {err}; fallback to template")
+                await telemetry_emitter.emit_event(
+                    "warning",
+                    "neuro_llm_fallback",
+                    "Neuro fallback template used",
+                    payload={"account_id": worker.account.id, "peer_id": int(peer_uid), "error": err or ""},
+                )
+                reply = NEURO_UNAVAILABLE_TEMPLATE
+            else:
+                neuro_monitor.record_success()
+
+            reply = reply.replace("{link}", link_for_prompt).strip()
+            reply, cmd_send_link, cmd_stop, cmd_accept, cmd_decline, cmd_hater = extract_commands(reply)
+            asked_link = user_asked_for_link(text)
+            log.info(f"Neuro command gate: asked_link={asked_link} has_send_link={cmd_send_link}")
+            if cmd_send_link and not asked_link:
+                log.info("Neuro command [SEND_LINK] ignored: user did not ask for link")
+                cmd_send_link = False
                 if not reply:
-                    reply = "Понял, давай продолжим."
+                    retry_messages = list(messages)
+                    retry_messages.insert(
+                        1,
+                        {
+                            "role": "system",
+                            "content": (
+                                "Пользователь НЕ просил ссылку. "
+                                "Ответь обычным кратким сообщением по контексту. "
+                                "Не используй служебные метки [SEND_LINK] и [STOP] "
+                                "(ровно так, без пробелов внутри скобок)."
+                            ),
+                        },
+                    )
+                    if not await _neuro_reply_allowed_now(mailing.id):
+                        neuro_monitor.record_deny("neuro_outside_active_hours")
+                        return
+                    retry_reply, retry_err = await generate_reply_with_retries_and_fallback(
+                        retry_messages,
+                        model,
+                        api_key=api_key,
+                        generation=generation,
+                        provider=prepared.provider,
+                    )
+                    if retry_reply:
+                        retry_reply = retry_reply.replace("{link}", link_for_prompt).strip()
+                        (
+                            retry_reply,
+                            retry_send_link,
+                            retry_stop,
+                            retry_accept,
+                            retry_decline,
+                            retry_hater,
+                        ) = extract_commands(retry_reply)
+                        if retry_send_link:
+                            retry_reply = ""
+                        if retry_reply:
+                            reply = retry_reply
+                            cmd_send_link = retry_send_link
+                            cmd_stop = retry_stop
+                            cmd_accept = retry_accept
+                            cmd_decline = retry_decline
+                            cmd_hater = retry_hater
+                        else:
+                            cmd_stop = cmd_stop or retry_stop
+                            cmd_accept = cmd_accept or retry_accept
+                            cmd_decline = cmd_decline or retry_decline
+                            cmd_hater = cmd_hater or retry_hater
+                    else:
+                        log.warning(f"Neuro retry (no commands) failed: {retry_err}")
+                    if not reply:
+                        reply = "Понял, давай продолжим."
 
-        await apply_neuro_class_commands(
-            worker.account.id,
-            client.id,
-            mailing.id,
-            cmd_accept,
-            cmd_decline,
-            cmd_hater,
-        )
-        should_send_text_reply = bool(reply) and (not cmd_send_link)
+            if not await _neuro_reply_allowed_now(mailing.id):
+                neuro_monitor.record_deny("neuro_outside_active_hours")
+                return
+            await apply_neuro_class_commands(
+                worker.account.id,
+                client.id,
+                mailing.id,
+                cmd_accept,
+                cmd_decline,
+                cmd_hater,
+            )
+            should_send_text_reply = bool(reply) and (not cmd_send_link)
 
-        await persist_dialog_turn(
-            worker.account.id,
-            int(peer_uid),
-            text,
-            reply if should_send_text_reply else None,
-        )
-        if should_send_text_reply:
-            ok = await send_text_reply(
+            await persist_dialog_turn(
+                worker.account.id,
+                int(peer_uid),
+                text,
+                None,
+            )
+            if should_send_text_reply:
+                if not await _neuro_reply_allowed_now(mailing.id):
+                    neuro_monitor.record_deny("neuro_outside_active_hours")
+                    return
+                ok = await send_and_record_reply(
+                    worker,
+                    peer_uid=int(peer_uid),
+                    reply=reply,
+                    use_typing_neuro=use_typing_neuro,
+                    account_id=worker.account.id,
+                    client_id=client.id,
+                    before_send=lambda: _before_neuro_send(mailing.id, reservation),
+                    reservation=reservation,
+                )
+                if not ok:
+                    return
+
+            if not await _neuro_reply_allowed_now(mailing.id):
+                neuro_monitor.record_deny("neuro_outside_active_hours")
+                return
+            await process_send_link_command(
                 worker,
+                cmd_send_link=cmd_send_link,
+                link_for_send=link_for_send,
+                mailing_id=mailing.id,
+                account_id=worker.account.id,
+                client_id=client.id,
                 peer_uid=int(peer_uid),
-                reply=reply,
-                use_typing_neuro=use_typing_neuro,
+                before_send=lambda: _before_neuro_send(mailing.id, reservation),
+                reservation=reservation,
+            )
+            await process_stop_command(
+                cmd_stop=cmd_stop,
+                mailing_id=mailing.id,
                 account_id=worker.account.id,
                 client_id=client.id,
             )
-            if not ok:
-                return
-
-        await process_send_link_command(
-            worker,
-            cmd_send_link=cmd_send_link,
-            link_for_send=link_for_send,
-            mailing_id=mailing.id,
-            account_id=worker.account.id,
-            client_id=client.id,
-            peer_uid=int(peer_uid),
-        )
-        await process_stop_command(
-            cmd_stop=cmd_stop,
-            mailing_id=mailing.id,
-            account_id=worker.account.id,
-            client_id=client.id,
-        )
 

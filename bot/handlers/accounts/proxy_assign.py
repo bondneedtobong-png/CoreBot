@@ -2,7 +2,7 @@
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
-from bot.config import OWNER_ID
+from bot.config import is_authorized_user
 from bot.handlers.accounts.common import safe_edit_message
 from bot.keyboards.main import get_context_back_keyboard, get_proxy_group_assign_keyboard
 from database.models import AccountStatus
@@ -20,7 +20,7 @@ router = Router()
 
 @router.callback_query(F.data.startswith("account_change_proxy_"))
 async def cb_account_change_proxy(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
@@ -75,7 +75,7 @@ async def cb_account_change_proxy(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("proxy_group_assign_"))
 async def cb_proxy_assign(callback: CallbackQuery):
-    if callback.from_user.id != OWNER_ID:
+    if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 

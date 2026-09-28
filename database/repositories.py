@@ -2,6 +2,7 @@
 Репозитории для CRUD операций с базой данных.
 """
 import json
+import hashlib
 from datetime import datetime, timedelta
 from utils.time import utcnow_naive
 from typing import Any, Dict, Optional, List
@@ -12,7 +13,7 @@ from bot.config import (
     OPENROUTER_API_KEY as ENV_OPENROUTER_API_KEY,
 )
 from utils.crypto_openrouter import decrypt_openrouter_key, encrypt_openrouter_key
-from sqlalchemy import select, update, delete, func, or_
+from sqlalchemy import select, update, delete, insert, func, or_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,11 +26,11 @@ from database.sqlite_pragmas import (
 )
 
 from database.models import (
-    Account, AccountStatus,
-    Client, ClientClassCounter, ClientStatus,
+    Account, AccountImportEvent, AccountStatus,
+    Client, ClientClassCounter, ClientContactPermission, ClientStatus,
     Group,
     InstanceSettings,
-    Mailing, MailingAccountState, MailingStatus,
+    Mailing, MailingAccountState, MailingRun, MailingRunRecipient, MailingStatus,
     MailingLog,
     MailingTestRecipient,
     NeuroActionLog,
@@ -356,6 +357,17 @@ class InstanceSettingsRepository:
         row.neurochat_enabled = None
         await session.commit()
 
+    @staticmethod
+    async def get_mailing_neurochat_default(session: AsyncSession) -> bool:
+        row = await InstanceSettingsRepository.get_row(session)
+        return bool(row.mailing_neurochat_default)
+
+    @staticmethod
+    async def set_mailing_neurochat_default(session: AsyncSession, enabled: bool) -> None:
+        row = await InstanceSettingsRepository.get_row(session)
+        row.mailing_neurochat_default = bool(enabled)
+        await session.commit()
+
 
 # ==================== Account Repository ====================
 
@@ -376,6 +388,7 @@ class AccountRepository:
         membership: "Membership" = None,
         status: AccountStatus = AccountStatus.INACTIVE,
         list_label: Optional[str] = None,
+        import_source: Optional[str] = None,
         **kwargs
     ) -> Account:
         """Создание нового аккаунта."""
@@ -395,6 +408,8 @@ class AccountRepository:
             list_label=list_label,
         )
         session.add(account)
+        if import_source:
+            session.add(AccountImportEvent(account=account, source_kind=import_source))
         try:
             await commit_with_busy_retry(session, op_name="account-create")
         except IntegrityError:
@@ -1302,6 +1317,10 @@ class WarmupProfileRepository:
         jitter_sec: Optional[float] = None,
         daily_action_limit: Optional[int] = None,
         target_chats_text: Optional[str] = None,
+        time_zone: Optional[str] = None,
+        work_start_hour: Optional[int] = None,
+        work_end_hour: Optional[int] = None,
+        allowed_actions: Optional[str] = None,
     ) -> bool:
         row = await WarmupProfileRepository.get_by_name(session, name)
         if not row:
@@ -1315,9 +1334,21 @@ class WarmupProfileRepository:
             data["daily_action_limit"] = int(daily_action_limit)
         if target_chats_text is not None:
             data["target_chats_text"] = target_chats_text
+        if time_zone is not None:
+            data["time_zone"] = time_zone
+        if work_start_hour is not None:
+            data["work_start_hour"] = work_start_hour
+        if work_end_hour is not None:
+            data["work_end_hour"] = work_end_hour
+        if allowed_actions is not None:
+            data["allowed_actions"] = allowed_actions
         await session.execute(
             update(WarmupProfile).where(WarmupProfile.name == name).values(**data)
         )
+        if time_zone is not None or work_start_hour is not None or work_end_hour is not None:
+            await session.execute(
+                update(Account).where(Account.warmup_profile == name).values(warmup_next_run_at=None)
+            )
         await session.commit()
         return True
 
@@ -1352,6 +1383,10 @@ class WarmupProfileRepository:
             jitter_sec=src.jitter_sec,
             daily_action_limit=src.daily_action_limit,
             target_chats_text=src.target_chats_text,
+            time_zone=src.time_zone,
+            work_start_hour=src.work_start_hour,
+            work_end_hour=src.work_end_hour,
+            allowed_actions=src.allowed_actions,
             enabled=src.enabled,
         )
         session.add(row)
@@ -1382,6 +1417,10 @@ class WarmupProfileRepository:
                 jitter_sec=src.jitter_sec,
                 daily_action_limit=src.daily_action_limit,
                 target_chats_text=src.target_chats_text,
+                time_zone=src.time_zone,
+                work_start_hour=src.work_start_hour,
+                work_end_hour=src.work_end_hour,
+                allowed_actions=src.allowed_actions,
                 enabled=src.enabled,
                 updated_at=utcnow_naive(),
             )
@@ -1474,12 +1513,11 @@ class ClientRepository:
         return base
 
     @staticmethod
-    async def get_clients_for_mailing(
-        session: AsyncSession,
+    def mailing_audience_query(
         audience: Dict[str, Any],
         *,
         mailing_id: Optional[int] = None,
-    ) -> List[Client]:
+    ):
         """
         Очередь клиентов для рассылки.
         client_status: new — только NEW; open — NEW и CONTACTED.
@@ -1495,7 +1533,10 @@ class ClientRepository:
         else:
             exc = [str(x).strip().lower() for x in exc_raw if str(x).strip()]
 
-        q = select(Client)
+        q = select(Client).join(
+            ClientContactPermission,
+            ClientContactPermission.client_id == Client.id,
+        ).where(ClientContactPermission.state == "opt_in")
         if st == "new":
             q = q.where(Client.status == ClientStatus.NEW)
         elif st == "open":
@@ -1506,10 +1547,11 @@ class ClientRepository:
             mailed = select(MailingLog.client_id).where(
                 MailingLog.mailing_id == mailing_id,
                 MailingLog.success == True,
+                MailingLog.client_id.is_not(None),
             )
             q = q.where(~Client.id.in_(mailed))
 
-        for key in exc:
+        for key in set(exc) | {"bl", "stop"}:
             bad = select(ClientClassCounter.client_id).where(
                 ClientClassCounter.class_key == key,
                 ClientClassCounter.count > 0,
@@ -1524,8 +1566,47 @@ class ClientRepository:
             q = q.where(Client.id.in_(ok))
 
         q = q.order_by(Client.id)
+        return q
+
+    @staticmethod
+    async def get_clients_for_mailing(
+        session: AsyncSession,
+        audience: Dict[str, Any],
+        *,
+        mailing_id: Optional[int] = None,
+    ) -> List[Client]:
+        q = ClientRepository.mailing_audience_query(audience, mailing_id=mailing_id)
         result = await session.execute(q)
         return list(result.scalars().all())
+
+    @staticmethod
+    def test_audience_query(
+        mailing_id: int, *, run_started: datetime | None = None,
+        exclude_sent: bool = False,
+    ):
+        """Test recipients still require a recorded right to contact."""
+        q = (
+            select(Client)
+            .join(MailingTestRecipient, MailingTestRecipient.client_id == Client.id)
+            .join(ClientContactPermission, ClientContactPermission.client_id == Client.id)
+            .where(MailingTestRecipient.mailing_id == mailing_id)
+            .where(ClientContactPermission.state == "opt_in")
+            .where(~Client.status.in_([ClientStatus.INVALID, ClientStatus.BLOCKED]))
+        )
+        for key in ("bl", "stop"):
+            denied = select(ClientClassCounter.client_id).where(
+                ClientClassCounter.class_key == key, ClientClassCounter.count > 0,
+            )
+            q = q.where(~Client.id.in_(denied))
+        if exclude_sent:
+            sent = select(MailingLog.client_id).where(
+                MailingLog.mailing_id == mailing_id, MailingLog.success.is_(True),
+                MailingLog.client_id.is_not(None),
+            )
+            if run_started is not None:
+                sent = sent.where(MailingLog.sent_at >= run_started)
+            q = q.where(~Client.id.in_(sent))
+        return q.order_by(MailingTestRecipient.id)
 
     @staticmethod
     async def _get_test_queue_clients(
@@ -1543,47 +1624,55 @@ class ClientRepository:
         Между запусками started_at обновляется (см. update_status(RUNNING)),
         поэтому вся тест-аудитория автоматически снова становится eligible.
         """
-        run_started = getattr(mailing, "started_at", None)
-        sent_in_run = select(MailingLog.client_id).where(
-            MailingLog.mailing_id == mailing.id,
-            MailingLog.success.is_(True),
-        )
-        if run_started is not None:
-            sent_in_run = sent_in_run.where(MailingLog.sent_at >= run_started)
-
-        q = (
-            select(Client)
-            .join(MailingTestRecipient, MailingTestRecipient.client_id == Client.id)
-            .where(MailingTestRecipient.mailing_id == mailing.id)
-            .where(~Client.id.in_(sent_in_run))
-            .where(~Client.status.in_([ClientStatus.INVALID, ClientStatus.BLOCKED]))
-            .order_by(MailingTestRecipient.id)
+        q = ClientRepository.test_audience_query(
+            mailing.id, run_started=getattr(mailing, "started_at", None),
+            exclude_sent=True,
         )
         result = await session.execute(q)
         return list(result.scalars().all())
 
     @staticmethod
     async def get_test_recipients_all(
-        session: AsyncSession, mailing_id: int
+        session: AsyncSession, mailing_id: int, *, run_id: Optional[int] = None,
     ) -> List[Client]:
         """
         Все тестовые получатели рассылки (без исключения уже отправленных) —
         для тестового режима, где КАЖДЫЙ аккаунт пишет КАЖДОМУ получателю.
         Невалидные/заблокированные исключаются.
         """
-        q = (
-            select(Client)
-            .join(MailingTestRecipient, MailingTestRecipient.client_id == Client.id)
-            .where(MailingTestRecipient.mailing_id == mailing_id)
-            .where(~Client.status.in_([ClientStatus.INVALID, ClientStatus.BLOCKED]))
-            .order_by(MailingTestRecipient.id)
-        )
+        q = ClientRepository.test_audience_query(mailing_id)
+        if run_id is not None:
+            q = q.join(
+                MailingRunRecipient,
+                MailingRunRecipient.client_id == Client.id,
+            ).where(MailingRunRecipient.run_id == run_id)
         result = await session.execute(q)
         return list(result.scalars().all())
 
     @staticmethod
-    async def get_mailing_queue(session: AsyncSession, mailing: Mailing) -> List[Client]:
+    async def get_mailing_queue(
+        session: AsyncSession, mailing: Mailing, *, run_id: Optional[int] = None,
+    ) -> List[Client]:
         """Очередь по audience_mode рассылки."""
+        if run_id is not None:
+            run = await session.get(MailingRun, run_id)
+            if run is None or run.mailing_id != mailing.id:
+                raise ValueError("mailing run not found for this mailing")
+            if run.audience_mode == "test":
+                q = ClientRepository.test_audience_query(
+                    mailing.id, run_started=run.created_at, exclude_sent=True,
+                )
+            else:
+                frozen = json.loads(run.config_json)
+                q = ClientRepository.mailing_audience_query(
+                    frozen["audience"], mailing_id=mailing.id,
+                )
+            q = q.join(
+                MailingRunRecipient,
+                MailingRunRecipient.client_id == Client.id,
+            ).where(MailingRunRecipient.run_id == run_id)
+            result = await session.execute(q)
+            return list(result.scalars().all())
         mode = (getattr(mailing, "audience_mode", None) or "classes").strip().lower()
         if mode == "test":
             return await ClientRepository._get_test_queue_clients(session, mailing)
@@ -1893,6 +1982,79 @@ class MailingAccountStateRepository:
 
 class MailingRepository:
     """Репозиторий для работы с рассылками."""
+
+    @staticmethod
+    def run_config(mailing: Mailing) -> dict:
+        """Canonical settings checked again before a queued run starts."""
+        mode = (mailing.audience_mode or "classes").strip().lower()
+        audience = ClientRepository.parse_mailing_audience(mailing)
+        if mode == "new":
+            audience["client_status"] = "new"
+            audience["include_classes"] = []
+        fields = (
+            "name", "target_group_id", "message_text", "message_variants_json",
+            "variant_mode", "use_typing", "smart_delay", "delay_between_messages",
+            "delay_between_accounts", "messages_per_batch", "batch_delay",
+            "auto_stop_hours", "daily_limit", "max_recipients",
+            "mailing_cooldown_hours", "community_link", "neurochat_enabled",
+            "neuro_model", "neuro_sampling_json",
+        )
+        return {"audience_mode": mode, "audience": audience, **{
+            field: getattr(mailing, field, None) for field in fields
+        }}
+
+    @staticmethod
+    def run_config_json(mailing: Mailing) -> str:
+        return json.dumps(MailingRepository.run_config(mailing), ensure_ascii=False, sort_keys=True)
+
+    @staticmethod
+    async def create_run(session: AsyncSession, mailing: Mailing) -> MailingRun:
+        """Freeze the eligible audience at execution start, before any delivery."""
+        config = MailingRepository.run_config(mailing)
+        mode = config["audience_mode"]
+        audience = config["audience"]
+        clients = (
+            await ClientRepository.get_test_recipients_all(session, mailing.id)
+            if mode == "test"
+            else await ClientRepository.get_clients_for_mailing(
+                session, audience, mailing_id=mailing.id,
+            )
+        )
+        config_json = MailingRepository.run_config_json(mailing)
+        run = MailingRun(
+            mailing_id=mailing.id,
+            audience_mode=mode,
+            config_json=config_json,
+            config_sha256=hashlib.sha256(config_json.encode("utf-8")).hexdigest(),
+            audience_count=len(clients),
+        )
+        session.add(run)
+        await session.flush()
+        if clients:
+            await session.execute(insert(MailingRunRecipient), [
+                {"run_id": run.id, "client_id": client.id} for client in clients
+            ])
+        await commit_with_busy_retry(session, op_name="mailing-run-create")
+        return run
+
+    @staticmethod
+    async def finish_run(session: AsyncSession, run_id: int, status: str) -> None:
+        await session.execute(
+            update(MailingRun).where(MailingRun.id == run_id).values(
+                status=status, finished_at=utcnow_naive(),
+            )
+        )
+        await commit_with_busy_retry(session, op_name="mailing-run-finish")
+
+    @staticmethod
+    async def record_run_result(
+        session: AsyncSession, run_id: int, *, success: bool,
+    ) -> None:
+        column = MailingRun.messages_sent if success else MailingRun.messages_failed
+        await session.execute(
+            update(MailingRun).where(MailingRun.id == run_id).values({column.key: column + 1})
+        )
+        await commit_with_busy_retry(session, op_name="mailing-run-result")
     
     @staticmethod
     async def create(
@@ -1905,14 +2067,22 @@ class MailingRepository:
         typing_delay: float = 3.0,
     ) -> Mailing:
         """Создание новой рассылки."""
+        default_provider_id = await session.scalar(
+            select(InstanceSettings.default_ai_provider_id).where(InstanceSettings.id == 1)
+        )
         mailing = Mailing(
             name=name,
             message_text=message_text,
             delay_between_messages=delay_between_messages,
             delay_between_accounts=delay_between_accounts,
             status=MailingStatus.DRAFT,
+            neuro_provider_id=default_provider_id,
         )
         session.add(mailing)
+        await session.flush()
+        from utils.neuro_prompts import archive_orphan_prompt
+
+        archive_orphan_prompt(mailing.id, database_url=str(session.bind.url))
         await session.commit()
         await session.refresh(mailing)
         return mailing
@@ -2436,15 +2606,54 @@ class OutboundQueueRepository:
         return list(result.scalars().all())
 
     @staticmethod
+    async def claim_pending(session: AsyncSession, queue_id: int) -> bool:
+        """Atomically reserve a due row before invoking Telegram.
+
+        `next_attempt_at` records claim time while sending. A competing consumer
+        (or a cancellation) wins or loses the conditional UPDATE, never both.
+        """
+        now = utcnow_naive()
+        result = await execute_with_busy_retry(
+            session,
+            update(OutboundQueue)
+            .where(
+                OutboundQueue.id == int(queue_id),
+                OutboundQueue.status == "pending",
+                or_(OutboundQueue.next_attempt_at.is_(None), OutboundQueue.next_attempt_at <= now),
+            )
+            .values(status="sending", attempts=OutboundQueue.attempts + 1,
+                    next_attempt_at=now, error=None),
+            op_name="outbound-claim",
+        )
+        await commit_with_busy_retry(session, op_name="outbound-claim")
+        return (result.rowcount or 0) == 1
+
+    @staticmethod
+    async def recover_stale_sending(session: AsyncSession, *, older_than_sec: float = 3600) -> int:
+        """Park abandoned sends for manual review, without another Telegram call."""
+        threshold = utcnow_naive() - timedelta(seconds=max(0, older_than_sec))
+        result = await execute_with_busy_retry(
+            session,
+            update(OutboundQueue)
+            .where(OutboundQueue.status == "sending",
+                   or_(OutboundQueue.next_attempt_at.is_(None), OutboundQueue.next_attempt_at <= threshold))
+            .values(status="uncertain", error="Прежняя отправка прервалась: проверьте диалог в Telegram перед повтором.",
+                    next_attempt_at=None),
+            op_name="outbound-recover",
+        )
+        await commit_with_busy_retry(session, op_name="outbound-recover")
+        return result.rowcount or 0
+
+    @staticmethod
     async def mark_sent(
         session: AsyncSession,
         queue_id: int,
         telegram_message_id: Optional[int],
-    ) -> None:
-        await execute_with_busy_retry(
+    ) -> bool:
+        result = await execute_with_busy_retry(
             session,
             update(OutboundQueue)
-            .where(OutboundQueue.id == int(queue_id))
+            .where(OutboundQueue.id == int(queue_id), OutboundQueue.status == "sending")
             .values(
                 status="sent",
                 telegram_message_id=int(telegram_message_id) if telegram_message_id else None,
@@ -2455,6 +2664,33 @@ class OutboundQueueRepository:
             op_name="outbound-sent",
         )
         await commit_with_busy_retry(session, op_name="outbound-sent")
+        return (result.rowcount or 0) == 1
+
+    @staticmethod
+    async def mark_uncertain(session: AsyncSession, queue_id: int, error: str) -> bool:
+        result = await execute_with_busy_retry(
+            session,
+            update(OutboundQueue)
+            .where(OutboundQueue.id == int(queue_id), OutboundQueue.status == "sending")
+            .values(status="uncertain", error=(error or "Исход отправки неизвестен")[:1000],
+                    next_attempt_at=None),
+            op_name="outbound-uncertain",
+        )
+        await commit_with_busy_retry(session, op_name="outbound-uncertain")
+        return (result.rowcount or 0) == 1
+
+    @staticmethod
+    async def mark_blocked_before_rpc(session: AsyncSession, queue_id: int, error: str) -> bool:
+        """Safety gate denied the send; Telegram was never called."""
+        result = await execute_with_busy_retry(
+            session,
+            update(OutboundQueue)
+            .where(OutboundQueue.id == int(queue_id), OutboundQueue.status == "sending")
+            .values(status="failed", error=(error or "safety stop")[:1000], next_attempt_at=None),
+            op_name="outbound-safety-denied",
+        )
+        await commit_with_busy_retry(session, op_name="outbound-safety-denied")
+        return (result.rowcount or 0) == 1
 
     @staticmethod
     async def mark_failed(
@@ -2465,7 +2701,7 @@ class OutboundQueueRepository:
         await execute_with_busy_retry(
             session,
             update(OutboundQueue)
-            .where(OutboundQueue.id == int(queue_id))
+            .where(OutboundQueue.id == int(queue_id), OutboundQueue.status == "pending")
             .values(
                 status="failed",
                 error=(error or "")[:1000],
@@ -2492,7 +2728,7 @@ class OutboundQueueRepository:
         await execute_with_busy_retry(
             session,
             update(OutboundQueue)
-            .where(OutboundQueue.id == int(queue_id))
+            .where(OutboundQueue.id == int(queue_id), OutboundQueue.status == "pending")
             .values(
                 status="pending",
                 error=(last_error or "")[:1000] if last_error else None,
@@ -2525,7 +2761,7 @@ class OutboundQueueRepository:
             update(OutboundQueue)
             .where(
                 OutboundQueue.id == int(queue_id),
-                OutboundQueue.status.in_(["failed", "cancelled"]),
+                OutboundQueue.status.in_(["failed", "cancelled", "uncertain"]),
             )
             .values(
                 status="pending",

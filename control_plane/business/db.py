@@ -49,8 +49,39 @@ def get_bot_db():
     db = BotSession()
     try:
         yield db
+        # Если endpoint забыл commit/rollback, откатываем висячую транзакцию.
+        try:
+            if db.in_transaction():
+                db.rollback()
+        except Exception:
+            pass
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
 
-__all__ = ["bot_engine", "BotSession", "get_bot_db"]
+def commit_sync(db, *, op_name: str = "cp-commit") -> None:
+    """commit sync-сессии с busy_retry + rollback при любой ошибке.
+
+    Покрывает ~50 мест business/*, где был голый db.commit() без retry:
+    остаточные transient-гонки трёх писателей (бот/CP/парсер) закрывает
+    busy_timeout + ограниченный retry, логические ошибки — rollback+raise.
+    """
+    from database.sqlite_pragmas import run_sync_with_busy_retry
+
+    try:
+        run_sync_with_busy_retry(lambda: db.commit(), op_name=op_name)
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+
+
+__all__ = ["bot_engine", "BotSession", "get_bot_db", "commit_sync"]
