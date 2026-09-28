@@ -18,7 +18,8 @@ from bot.handlers.accounts.profile_templates import _save_photo
 from database.profile_templates import add_pool_batch
 from database.session import session_scope
 from services.comfyui.identity import (
-    ComfyIdentityError, ComfyIdentityModelMissingError, ComfyIdentityQualityError, create_identity,
+    ComfyIdentityError, ComfyIdentityModelMissingError, ComfyIdentityQualityError,
+    ComfyIdentityTranslationError, create_identity,
     generate_identity_photo, get_identity, list_identities,
 )
 from services.comfyui.person_mask import PersonMaskError, generate_person_mask
@@ -178,6 +179,11 @@ async def receive_appearance(message: Message, state: FSMContext) -> None:
     status = await message.answer("⏳ Запускаю ComfyUI при необходимости и создаю вымышленную внешность. Это может занять несколько минут.")
     try:
         record = await create_identity(description)
+    except ComfyIdentityTranslationError:
+        await status.edit_text(
+            "❌ Локальный перевод описания недоступен. Попробуйте написать внешность по-английски."
+        )
+        return
     except ComfyIdentityError:
         await status.edit_text("❌ Не удалось создать внешность. Проверьте локальную установку ComfyUI и попробуйте ещё раз.")
         return
@@ -227,8 +233,9 @@ async def receive_scene(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(scene_prompt=scene)
     await message.answer(
-        "Выберите источник сцены. Фото-шаблон загружайте только если вправе его использовать; "
-        "бот автоматически выделит человека и покажет область замены перед генерацией.",
+        "Для новой ситуации выберите «Сцена по описанию». «По фото-шаблону» сохраняет "
+        "композицию загруженного фото; используйте только снимок, на который у вас есть право. "
+        "Бот покажет область замены перед генерацией.",
         reply_markup=_buttons(
             ("🎨 Сцена по описанию", "ai_person_generate"),
             ("🖼 По фото-шаблону", "ai_person_template"),
@@ -258,6 +265,11 @@ async def _generate(message: Message, state: FSMContext, *, template: Path | Non
             "или повторите генерацию. Испорченный результат не сохранён."
         )
         return
+    except ComfyIdentityTranslationError:
+        await status.edit_text(
+            "❌ Локальный перевод описания сцены недоступен. Попробуйте написать сцену по-английски."
+        )
+        return
     except ComfyIdentityError:
         await status.edit_text("❌ Не удалось создать сцену. Проверьте шаблон и маску или повторите без них.")
         return
@@ -265,20 +277,32 @@ async def _generate(message: Message, state: FSMContext, *, template: Path | Non
     await state.update_data(result_path=str(result.path), result_token=token)
     await state.set_state(PersonFlow.waiting_photo_approval)
     await status.edit_text("✅ Снимок готов. Проверьте лицо и сцену перед использованием в аккаунте.")
+    actions = [
+        ("✅ В набор Ж", f"ai_person_save_f_{token}"),
+        ("✅ В набор М", f"ai_person_save_m_{token}"),
+        ("✅ В набор −", f"ai_person_save_u_{token}"),
+    ]
+    if template is None:
+        actions.append(("🎲 Ещё вариант", "ai_person_reroll"))
+    actions.append(("🔄 Другая сцена", f"ai_person_pick_{identity_id}"))
     await message.answer_photo(
         FSInputFile(result.path),
         caption=f"Персонаж #{identity_id[:8]} · seed {result.seed}. Изображение создано ИИ.",
-        reply_markup=_buttons(
-            ("✅ В набор Ж", f"ai_person_save_f_{token}"),
-            ("✅ В набор М", f"ai_person_save_m_{token}"),
-            ("✅ В набор −", f"ai_person_save_u_{token}"),
-            ("🔄 Другая сцена", f"ai_person_pick_{identity_id}"),
-        ),
+        reply_markup=_buttons(*actions),
     )
 
 
 @router.callback_query(F.data == "ai_person_generate")
 async def generate_scene(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_authorized_user(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await callback.answer()
+    await _generate(callback.message, state)
+
+
+@router.callback_query(F.data == "ai_person_reroll", PersonFlow.waiting_photo_approval)
+async def reroll_scene(callback: CallbackQuery, state: FSMContext) -> None:
     if not is_authorized_user(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return

@@ -127,6 +127,12 @@ def test_variant_needs_approval_before_photo_pool(tmp_path, monkeypatch):
     asyncio.run(menu._generate(message, state))
     assert pool == []
     assert len(message.photos) == 1
+    assert "ai_person_reroll" in str(message.photos[0][1]["reply_markup"])
+
+    reroll = Callback("ai_person_reroll")
+    asyncio.run(menu.reroll_scene(reroll, state))
+    assert len(reroll.message.photos) == 1
+    assert reroll.acks
 
     invalid = Callback("ai_person_save_f_" + "f" * 12)
     asyncio.run(menu.save_person_photo(invalid, state))

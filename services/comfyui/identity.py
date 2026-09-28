@@ -22,6 +22,7 @@ from PIL import Image
 from bot.config import DATA_DIR
 from services.comfyui import preview
 from services.comfyui import lifecycle
+from services.comfyui import prompt_translation
 from services.comfyui import scene_quality
 from services.comfyui.lifecycle import DEFAULT_INSTALL_DIR
 
@@ -42,6 +43,10 @@ class ComfyIdentityModelMissingError(ComfyIdentityError):
 
 class ComfyIdentityQualityError(ComfyIdentityError):
     """The scene was generated but failed a conservative composition check."""
+
+
+class ComfyIdentityTranslationError(ComfyIdentityError):
+    """A non-English scene prompt could not be translated locally."""
 
 
 @dataclass(frozen=True)
@@ -206,13 +211,13 @@ def build_identity_workflow(
         "3": {"class_type": "KSampler", "inputs": {
             "seed": seed, "steps": 28, "cfg": 7.0,
             "sampler_name": "dpmpp_2m", "scheduler": "karras",
-            "denoise": 0.55 if template_name is not None else 0.7,
+            "denoise": 0.55 if template_name is not None else 1.0,
             "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0],
             "latent_image": ["5", 0],
         }},
         "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": model}},
-        "5": {"class_type": "VAEEncode", "inputs": {
-            "pixels": ["11", 0], "vae": ["4", 2],
+        "5": {"class_type": "EmptyLatentImage", "inputs": {
+            "width": width, "height": height, "batch_size": 1,
         }},
         "6": {"class_type": "PhotoMakerEncode", "inputs": {
             "photomaker": ["10", 0], "image": ["11", 0],
@@ -263,7 +268,11 @@ class ComfyIdentityClient:
         """Generate and save a new adult person's portrait and metadata."""
         if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 1300:
             raise ValueError("prompt must contain 1–1300 characters")
-        full_prompt = "photorealistic head and shoulders portrait of an adult person, " + prompt.strip()
+        try:
+            english_prompt = await prompt_translation.translate_if_needed(prompt)
+        except prompt_translation.PromptTranslationError as exc:
+            raise ComfyIdentityTranslationError("Cannot translate the appearance description") from exc
+        full_prompt = "photorealistic head and shoulders portrait of an adult person, " + english_prompt
         request = preview.PreviewRequest(
             prompt=full_prompt, seed=seed,
             model="Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
@@ -300,6 +309,10 @@ class ComfyIdentityClient:
             )
         record, png = await asyncio.to_thread(_read_identity, identity_id)
         try:
+            english_scene = await prompt_translation.translate_if_needed(scene_prompt)
+        except prompt_translation.PromptTranslationError as exc:
+            raise ComfyIdentityTranslationError("Cannot translate the scene description") from exc
+        try:
             template_png = (
                 await asyncio.to_thread(_read_scene_png, scene_template_path)
                 if scene_template_path is not None else None
@@ -317,7 +330,7 @@ class ComfyIdentityClient:
         template_name = f"corebot_identity_{uuid.uuid4().hex[:24]}.png" if template_png is not None else None
         mask_name = f"corebot_identity_{uuid.uuid4().hex[:24]}.png" if mask_png is not None else None
         graph = build_identity_workflow(
-            scene_prompt=scene_prompt, model=record.model, seed=actual_seed,
+            scene_prompt=english_scene, model=record.model, seed=actual_seed,
             upload_name=upload_name, filename_prefix=prefix,
             template_name=template_name, mask_name=mask_name,
             identity_description=record.prompt,
